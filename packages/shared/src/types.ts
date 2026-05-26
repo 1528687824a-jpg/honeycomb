@@ -20,12 +20,15 @@ export const ROUTING_MODES = [
 export type RoutingMode = (typeof ROUTING_MODES)[number];
 
 export const DEFAULT_ROUTING_MODE: RoutingMode = "supervisor_pipeline";
+export const DEFAULT_MAX_MODEL_CALLS = 20;
 
 export type JobRecord = {
   id: string;
   sessionId: string;
   rawPrompt: string;
   routingMode: RoutingMode;
+  maxModelCalls: number;
+  classicFinalGateEnabled: boolean;
   status: JobStatus;
   workflowId: string | null;
   finalOutput: string | null;
@@ -45,6 +48,8 @@ export type JobRecord = {
 export type CreateJobInput = {
   rawPrompt: string;
   routingMode?: RoutingMode;
+  maxModelCalls?: number;
+  classicFinalGateEnabled?: boolean;
   requesterId?: string;
   feishuChatId?: string;
   feishuMessageId?: string;
@@ -129,6 +134,8 @@ export type GroupMessageType =
   | "pipeline_handoff"
   | "main_dispatch"
   | "discussion_handoff"
+  | "final_test_pass"
+  | "final_test_failed_waiting_for_user"
   | "final_output";
 
 export type GroupMessageRecord = {
@@ -169,6 +176,16 @@ export type StageRunResult = {
 };
 
 export type TestReviewResult = {
+  reviewId: string;
+  testAgentSessionId: string;
+  verdict: TestVerdict;
+  issueCount: number;
+  reportArtifactId: string;
+  reportPath: string;
+  groupMessageId: string;
+};
+
+export type FinalQualityGateResult = {
   reviewId: string;
   testAgentSessionId: string;
   verdict: TestVerdict;

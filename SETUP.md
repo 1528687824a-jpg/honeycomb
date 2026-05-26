@@ -92,6 +92,8 @@ Create a local job:
 $body = @{
   rawPrompt = 'research current AI trends, write a short article, and create an image poster brief'
   routingMode = 'supervisor_pipeline'
+  maxModelCalls = 20
+  classicFinalGateEnabled = $false
   requesterId = 'local-test-user'
 } | ConvertTo-Json
 
@@ -136,42 +138,33 @@ supervisor_pipeline:
 
 pipeline:
   Sequential child-agent stages without the test-agent gate. Each completed
-  stage output becomes the next stage input.
+  stage output becomes the next stage input. M2.5 adds one final-only
+  test-agent quality gate before finalizeJob.
 
 classic_master_slave:
   main-agent dispatches each child stage independently and collects outputs.
-  There is no peer-to-peer handoff and no test-agent gate in M2.
+  There is no peer-to-peer handoff. M2.5 supports an optional final test-agent
+  gate through the persisted classicFinalGateEnabled job flag. It defaults to
+  false.
 
 master_slave_discussion:
   Child agents run in a fixed two-round discussion loop, with visible
   discussion_handoff messages and discussion.round_completed events.
   After the rounds finish, main-agent runs a dedicated
   mainAgentSynthesizeDiscussion step over the agent_events ledger and stage
-  output artifacts. finalizeJob then includes that synthesis artifact in the
-  final output.
+  output artifacts. M2.5 then runs one final test-agent gate over the synthesis
+  artifact before finalizeJob includes it in the final output.
 ```
 
-Current quality-gate decision for the next milestone:
+Additional job controls:
 
 ```text
-supervisor_pipeline:
-  Keep the existing per-stage test-agent gate and 3-FAIL safety behavior.
+maxModelCalls:
+  Persisted model-call budget. Default: 20. The workflow checks this before
+  each OpenClaw-backed call. If exhausted, the job enters waiting_for_human.
 
-pipeline:
-  Add a final-only test-agent gate later. Do not test every stage, otherwise it
-  collapses back into supervisor_pipeline.
-
-classic_master_slave:
-  Keep main-agent as the primary synthesizer. Add an optional final test-agent
-  gate later, controlled by persisted job config.
-
-master_slave_discussion:
-  Keep main-agent synthesis mandatory. Add one test-agent final gate after the
-  synthesis later.
-
-all modes:
-  Add a persisted budget ceiling later, such as max total attempts or max model
-  calls, before enabling expensive real providers broadly.
+classicFinalGateEnabled:
+  Optional final test-agent gate for classic_master_slave. Default: false.
 ```
 
 ## M2 Recovery Smoke Checks
@@ -197,6 +190,7 @@ stageAgentRequested=3
 stageAgentCompleted=3
 stageAgentReused=0
 stage2OutputMessages=1
+finalTestEvents=1
 ```
 
 Discussion recovery check:
@@ -215,6 +209,7 @@ discussionRounds=2
 discussionMessages=4
 synthesisEvents=1
 synthesisArtifacts=1
+finalTestEvents=1
 ```
 
 Repeat both recovery checks with:
@@ -226,6 +221,16 @@ npm run smoke:m2-recovery
 The script restarts the local dev API with the crash hook enabled, creates one
 `pipeline` job and one `master_slave_discussion` job, verifies that the API
 actually crashed, restarts without the hook, then asserts the recovered counts.
+
+M2.5 local quality/budget checks:
+
+```text
+pipeline_final_gate        JOB-20260526-C3ACA6A8 succeeded modelCallRows=4 finalTestEvents=1
+discussion_final_gate      JOB-20260526-C42B17BD succeeded modelCallRows=6 finalTestEvents=1 synthesisArtifacts=1
+classic_default_no_gate    JOB-20260526-22329D8E succeeded modelCallRows=3 finalTestEvents=0
+classic_enabled_gate       JOB-20260526-FA995683 succeeded modelCallRows=4 finalTestEvents=1
+budget_waiting             JOB-20260526-0EB0A046 waiting_for_human maxModelCalls=1 budgetEvents=1
+```
 
 ## DBOS Checkpoints
 

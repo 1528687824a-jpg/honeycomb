@@ -48,6 +48,14 @@ export async function getModelCallByKey(idempotencyKey: string): Promise<ModelCa
   return result.rows[0] ? toModelCallRecord(result.rows[0]) : null;
 }
 
+export async function countModelCallsForJob(jobId: string): Promise<number> {
+  const result = await pool.query(`select count(*)::int as count from agent.model_calls where job_id = $1`, [
+    jobId
+  ]);
+
+  return Number(result.rows[0]?.count ?? 0);
+}
+
 export async function markModelCallStarted(input: {
   idempotencyKey: string;
   jobId: string;

@@ -55,7 +55,8 @@ function Invoke-RecoverySmoke {
     [int]$ExpectedReviews,
     [int]$ExpectedDiscussionRounds,
     [int]$ExpectedDiscussionMessages,
-    [int]$ExpectedSynthesisArtifacts
+    [int]$ExpectedSynthesisArtifacts,
+    [int]$ExpectedFinalTestEvents
   )
 
   Start-DevWithCrashHook -Hook $crashHook
@@ -99,6 +100,9 @@ function Invoke-RecoverySmoke {
   $synthesisArtifacts = @(
     $details.artifacts | Where-Object { $_.type -eq "discussion_synthesis" }
   ).Count
+  $finalTestEvents = @(
+    $details.events | Where-Object { $_.event_type -eq "final.test_completed" }
+  ).Count
 
   $result = [pscustomobject]@{
     mode = $Mode
@@ -114,6 +118,7 @@ function Invoke-RecoverySmoke {
     discussionRounds = $discussionRounds
     discussionMessages = $discussionMessages
     synthesisArtifacts = $synthesisArtifacts
+    finalTestEvents = $finalTestEvents
   }
 
   if ($result.apiAliveAfterCrash) { throw "$Mode did not crash at expected hook" }
@@ -127,6 +132,7 @@ function Invoke-RecoverySmoke {
   if ($result.discussionRounds -ne $ExpectedDiscussionRounds) { throw "$Mode discussion round count was $($result.discussionRounds)" }
   if ($result.discussionMessages -ne $ExpectedDiscussionMessages) { throw "$Mode discussion message count was $($result.discussionMessages)" }
   if ($result.synthesisArtifacts -ne $ExpectedSynthesisArtifacts) { throw "$Mode synthesis artifact count was $($result.synthesisArtifacts)" }
+  if ($result.finalTestEvents -ne $ExpectedFinalTestEvents) { throw "$Mode final test event count was $($result.finalTestEvents)" }
 
   return $result
 }
@@ -140,7 +146,8 @@ $results += Invoke-RecoverySmoke `
   -ExpectedReviews 0 `
   -ExpectedDiscussionRounds 0 `
   -ExpectedDiscussionMessages 0 `
-  -ExpectedSynthesisArtifacts 0
+  -ExpectedSynthesisArtifacts 0 `
+  -ExpectedFinalTestEvents 1
 
 $results += Invoke-RecoverySmoke `
   -Mode "master_slave_discussion" `
@@ -150,6 +157,7 @@ $results += Invoke-RecoverySmoke `
   -ExpectedReviews 0 `
   -ExpectedDiscussionRounds 2 `
   -ExpectedDiscussionMessages 4 `
-  -ExpectedSynthesisArtifacts 1
+  -ExpectedSynthesisArtifacts 1 `
+  -ExpectedFinalTestEvents 1
 
 $results | ConvertTo-Json -Depth 3

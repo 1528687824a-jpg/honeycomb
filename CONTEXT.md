@@ -1,5 +1,85 @@
 # Agent OpenClaw Context Checkpoint
 
+## 2026-05-26 M2.5 Quality Gates And Budget Checkpoint
+
+已完成非监督模式质量门和通用 model-call 预算上限：
+
+```text
+1. agent.jobs 新增 max_model_calls，默认 20。
+2. agent.jobs 新增 classic_final_gate_enabled，默认 false。
+3. POST /jobs 支持 maxModelCalls 和 classicFinalGateEnabled。
+4. workflow 在每次 OpenClaw-backed 调用前运行 enforceModelCallBudget。
+5. 预算耗尽时写 budget.model_calls_exhausted，job 进入 waiting_for_human。
+6. pipeline 在所有 stage 完成后跑一次 final test-agent gate。
+7. master_slave_discussion 在 main-agent synthesis 后跑一次 final test-agent gate。
+8. classic_master_slave 默认不跑 final gate；classicFinalGateEnabled=true 时跑。
+9. final gate 生成 test_report artifact，并写 final.test_completed 事件。
+10. smoke:m2-recovery 已更新，恢复后也断言 finalTestEvents=1。
+```
+
+M2.5 本地验证结果：
+
+```text
+pipeline_final_gate:
+  job=JOB-20260526-C3ACA6A8
+  result=succeeded
+  stages=3
+  attempts=3
+  modelCallRows=4
+  finalTestEvents=1
+
+discussion_final_gate:
+  job=JOB-20260526-C42B17BD
+  result=succeeded
+  stages=2
+  attempts=4
+  modelCallRows=6
+  synthesisArtifacts=1
+  finalTestEvents=1
+
+classic_default_no_gate:
+  job=JOB-20260526-22329D8E
+  result=succeeded
+  modelCallRows=3
+  finalTestEvents=0
+
+classic_enabled_gate:
+  job=JOB-20260526-FA995683
+  result=succeeded
+  modelCallRows=4
+  finalTestEvents=1
+
+budget_waiting:
+  job=JOB-20260526-0EB0A046
+  result=waiting_for_human
+  maxModelCalls=1
+  attempts=1
+  modelCallRows=1
+  budgetEvents=1
+```
+
+更新后的恢复脚本结果：
+
+```text
+npm run smoke:m2-recovery
+
+pipeline:
+  job=JOB-20260526-7045BD80
+  result=succeeded
+  attempts=3
+  finalTestEvents=1
+
+master_slave_discussion:
+  job=JOB-20260526-0FC11103
+  result=succeeded
+  attempts=4
+  discussionRounds=2
+  synthesisArtifacts=1
+  finalTestEvents=1
+```
+
+仍未做：discussion_rounds 持久化配置。当前 discussion 轮次仍是 workflow 常量 2。
+
 ## 2026-05-26 M2 Hardening Checkpoint
 
 本轮复核结论：用户指出的主要问题是对的。M2 主体能跑，但还需要补崩溃恢复

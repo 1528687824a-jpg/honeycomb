@@ -15,6 +15,8 @@ import { launchDbos, startJobWorkflow } from "./dbos-runtime";
 const createJobSchema = z.object({
   rawPrompt: z.string().min(1),
   routingMode: z.enum(ROUTING_MODES).optional(),
+  maxModelCalls: z.number().int().min(1).max(100).optional(),
+  classicFinalGateEnabled: z.boolean().optional(),
   requesterId: z.string().optional(),
   feishuChatId: z.string().optional(),
   feishuMessageId: z.string().optional()
@@ -112,6 +114,8 @@ async function main() {
       response.status(201).json({
         jobId: job.id,
         routingMode: job.routingMode,
+        maxModelCalls: job.maxModelCalls,
+        classicFinalGateEnabled: job.classicFinalGateEnabled,
         status: "queued",
         workflowId
       });
@@ -227,6 +231,8 @@ async function main() {
         ok: true,
         jobId: job.id,
         routingMode: job.routingMode,
+        maxModelCalls: job.maxModelCalls,
+        classicFinalGateEnabled: job.classicFinalGateEnabled,
         workflowId
       });
     } catch (error) {

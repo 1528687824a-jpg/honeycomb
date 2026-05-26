@@ -27,6 +27,7 @@ import {
   startStageAttempt
 } from "../../../packages/db/src/pipeline";
 import {
+  countModelCallsForJob,
   getModelCallByKey,
   markModelCallFailed,
   markModelCallStarted,
@@ -36,6 +37,7 @@ import { getAgentEventsForJob } from "../../../packages/db/src/session";
 import type {
   AgentEventRecord,
   ArtifactRecord,
+  FinalQualityGateResult,
   GroupMessageRecord,
   GroupMessageType,
   RoutingMode,
@@ -44,12 +46,16 @@ import type {
   StageRunResult,
   TestReviewResult
 } from "../../../packages/shared/src/types";
-import { DEFAULT_ROUTING_MODE } from "../../../packages/shared/src/types";
+import { DEFAULT_MAX_MODEL_CALLS, DEFAULT_ROUTING_MODE } from "../../../packages/shared/src/types";
 import { sendFeishuTextMessage } from "./adapters/feishu";
 import { runOpenClawAgent, type OpenClawRunResult } from "./adapters/openclaw";
 import { maybeCrashOnce } from "./test-crash";
 
-type OpenClawActionType = "stage-agent" | "test-agent" | "main-agent-synthesis";
+type OpenClawActionType =
+  | "stage-agent"
+  | "test-agent"
+  | "main-agent-synthesis"
+  | "final-test-agent";
 
 function nowIso() {
   return new Date().toISOString();
@@ -306,6 +312,86 @@ export async function getJobRoutingMode(jobId: string): Promise<RoutingMode> {
   const routingMode = job.routingMode ?? DEFAULT_ROUTING_MODE;
   await appendJobEvent(jobId, "main.routing_mode_selected", { routingMode });
   return routingMode;
+}
+
+export async function enforceModelCallBudget(input: {
+  jobId: string;
+  nextActionType: OpenClawActionType;
+  nextAgentId: string;
+}) {
+  const job = await getJob(input.jobId);
+  if (!job) {
+    throw new Error(`Job not found: ${input.jobId}`);
+  }
+
+  const currentModelCalls = await countModelCallsForJob(input.jobId);
+  const maxModelCalls = job.maxModelCalls ?? DEFAULT_MAX_MODEL_CALLS;
+  const allowed = currentModelCalls < maxModelCalls;
+
+  if (!allowed) {
+    const reason = `Model-call budget exhausted before ${input.nextActionType}`;
+    await setJobStatus(input.jobId, "waiting_for_human", {
+      reason,
+      currentModelCalls,
+      maxModelCalls,
+      nextActionType: input.nextActionType,
+      nextAgentId: input.nextAgentId
+    });
+    await appendJobEvent(input.jobId, "budget.model_calls_exhausted", {
+      currentModelCalls,
+      maxModelCalls,
+      nextActionType: input.nextActionType,
+      nextAgentId: input.nextAgentId
+    });
+  }
+
+  return {
+    allowed,
+    currentModelCalls,
+    maxModelCalls,
+    nextActionType: input.nextActionType,
+    nextAgentId: input.nextAgentId
+  };
+}
+
+export async function shouldRunFinalQualityGate(input: {
+  jobId: string;
+  routingMode: RoutingMode;
+}) {
+  const job = await getJob(input.jobId);
+  if (!job) {
+    throw new Error(`Job not found: ${input.jobId}`);
+  }
+
+  const enabled =
+    input.routingMode === "pipeline" ||
+    input.routingMode === "master_slave_discussion" ||
+    (input.routingMode === "classic_master_slave" && job.classicFinalGateEnabled);
+
+  await appendJobEvent(input.jobId, "final.quality_gate_decision", {
+    routingMode: input.routingMode,
+    enabled,
+    classicFinalGateEnabled: job.classicFinalGateEnabled
+  });
+
+  return {
+    enabled,
+    routingMode: input.routingMode,
+    source: input.routingMode === "classic_master_slave" ? "job.classicFinalGateEnabled" : "routingMode"
+  };
+}
+
+export async function getLatestStageOutputArtifactId(jobId: string) {
+  const stages = await getStagesForJob(jobId);
+  const latestStageWithOutput = [...stages]
+    .reverse()
+    .find((stage) => typeof stage.outputArtifactId === "string" && stage.outputArtifactId);
+
+  if (!latestStageWithOutput?.outputArtifactId) {
+    throw new Error(`No stage output artifact found for job: ${jobId}`);
+  }
+
+  return latestStageWithOutput.outputArtifactId;
 }
 
 export async function markJobPlanning(jobId: string) {
@@ -976,6 +1062,182 @@ export async function runTestAgent(input: {
     reportArtifactId: reportArtifact.id,
     reportPath,
     groupMessageId: groupMessage?.id ?? ""
+  };
+}
+
+export async function runFinalTestAgent(input: {
+  jobId: string;
+  sourceArtifactId: string;
+  routingMode: RoutingMode;
+}): Promise<FinalQualityGateResult> {
+  const [job, sourceArtifact] = await Promise.all([
+    getJob(input.jobId),
+    getArtifact(input.sourceArtifactId)
+  ]);
+  if (!job) {
+    throw new Error(`Job not found: ${input.jobId}`);
+  }
+
+  const workdir = job.workdir ?? path.resolve(process.env.JOB_DATA_DIR ?? "data/jobs", input.jobId);
+  const finalDir = path.join(workdir, "final");
+  const stateDir = path.join(workdir, "state");
+  await mkdir(finalDir, { recursive: true });
+  await mkdir(stateDir, { recursive: true });
+
+  const testAgentId = "test-agent";
+  const testAgentSessionId = `${job.sessionId}:${testAgentId}:final-${input.routingMode}`;
+  const finalTestPrompt = [
+    "Final quality gate.",
+    `Job: ${input.jobId}`,
+    `Routing mode: ${input.routingMode}`,
+    `Source artifact: ${input.sourceArtifactId}`,
+    `Source artifact path: ${sourceArtifact.uri ?? "none"}`,
+    "",
+    "Review the final candidate for correctness, completeness, safety, and usefulness.",
+    "Return PASS if it is acceptable. Return FAIL with required fixes if it should not be delivered.",
+    "",
+    "Source artifact content:",
+    compactMultiline(sourceArtifact.content ?? "", 6000)
+  ].join("\n");
+
+  const openClawTestResult = await runOpenClawAgentIdempotent({
+    jobId: input.jobId,
+    stageId: null,
+    stageIndex: 0,
+    attemptNo: 1,
+    actionType: "final-test-agent",
+    agentId: testAgentId,
+    sessionId: testAgentSessionId,
+    message: finalTestPrompt,
+    timeoutSeconds: Number(process.env.OPENCLAW_AGENT_TIMEOUT_SECONDS ?? 600)
+  });
+
+  const parsedRealVerdict = openClawTestResult?.text.match(/(?:final verdict|verdict|判定|测试结果)[:：]\s*(PASS|FAIL)/i);
+  const shouldForceFinalFailure = /force final fail|final quality fail|终检失败/i.test(job.rawPrompt);
+  const verdict =
+    parsedRealVerdict?.[1]?.toUpperCase() === "PASS"
+      ? "PASS"
+      : parsedRealVerdict?.[1]?.toUpperCase() === "FAIL" || shouldForceFinalFailure
+        ? "FAIL_RETRYABLE"
+        : "PASS";
+  const issueCount = verdict === "PASS" ? 0 : 1;
+  const requiredFixes =
+    verdict === "PASS"
+      ? []
+      : openClawTestResult
+        ? ["Final test-agent rejected the candidate. Inspect the final test report."]
+        : ["Final quality gate was forced to fail by the request prompt."];
+
+  const reportPath = path.join(finalDir, "final-test-report.md");
+  const stateJsonPath = path.join(stateDir, "final-test-state.json");
+  const reportLines = [
+    `# Final Quality Gate`,
+    "",
+    `Verdict: ${verdict === "PASS" ? "PASS" : "FAIL"}`,
+    `Job: ${input.jobId}`,
+    `Routing mode: ${input.routingMode}`,
+    `Source artifact: ${input.sourceArtifactId}`,
+    `Issue count: ${issueCount}`,
+    "",
+    verdict === "PASS"
+      ? "The final candidate passed the final quality gate."
+      : [
+          "Required fixes:",
+          ...requiredFixes.map((fix) => `- ${fix}`),
+          openClawTestResult ? `\nRaw test-agent output:\n${openClawTestResult.text}` : ""
+        ].join("\n"),
+    ""
+  ];
+  const stateJson = {
+    task_id: input.jobId,
+    routing_mode: input.routingMode,
+    verdict: verdict === "PASS" ? "PASS" : "FAIL",
+    issue_count: issueCount,
+    source_artifact_id: input.sourceArtifactId,
+    report_path: reportPath,
+    next_action: verdict === "PASS" ? "finalize_job" : "wait_for_human_decision",
+    created_at: nowIso()
+  };
+
+  await writeFile(reportPath, reportLines.join("\n"), "utf8");
+  await writeFile(stateJsonPath, `${JSON.stringify(stateJson, null, 2)}\n`, "utf8");
+
+  const reportArtifact = await createArtifact({
+    id: `${input.jobId}-ART-FINAL-TEST-01`,
+    jobId: input.jobId,
+    type: "test_report",
+    title: "Final quality gate report",
+    content: reportLines.join("\n"),
+    uri: reportPath,
+    metadata: {
+      routingMode: input.routingMode,
+      verdict,
+      issueCount,
+      requiredFixes,
+      sourceArtifactId: input.sourceArtifactId,
+      testAgentSessionId,
+      stateJsonPath
+    }
+  });
+
+  await createArtifact({
+    id: `${input.jobId}-ART-FINAL-TEST-STATE-01`,
+    jobId: input.jobId,
+    type: "state_json",
+    title: "Final quality gate state",
+    content: JSON.stringify(stateJson, null, 2),
+    uri: stateJsonPath,
+    metadata: {
+      reportArtifactId: reportArtifact.id
+    }
+  });
+
+  await appendJobEvent(
+    input.jobId,
+    "final.test_completed",
+    {
+      routingMode: input.routingMode,
+      sourceArtifactId: input.sourceArtifactId,
+      verdict,
+      issueCount,
+      reportArtifactId: reportArtifact.id
+    },
+    {
+      actor: testAgentId,
+      artifactId: reportArtifact.id
+    }
+  );
+
+  const groupMessage = await postGroupMessage({
+    id: `${input.jobId}-MSG-FINAL-TEST-01`,
+    jobId: input.jobId,
+    senderAgentId: testAgentId,
+    mentionAgentId: "main-agent",
+    messageType: verdict === "PASS" ? "final_test_pass" : "final_test_failed_waiting_for_user",
+    artifactId: reportArtifact.id,
+    content: [
+      `@main-agent final quality gate ${verdict === "PASS" ? "passed" : "failed"}`,
+      displayOnlyHandoffLine("main-agent", `mode=${input.routingMode}`),
+      "",
+      `Job: ${input.jobId}`,
+      `Routing mode: ${input.routingMode}`,
+      `Source artifact: ${input.sourceArtifactId}`,
+      `Report artifact: ${reportArtifact.id}`,
+      `Report path: ${reportPath}`,
+      `Issue count: ${issueCount}`,
+      "",
+      ...requiredFixes.map((fix) => `- ${fix}`)
+    ].join("\n")
+  });
+
+  return {
+    reviewId: `${input.jobId}-FINAL-REVIEW-01`,
+    testAgentSessionId,
+    verdict,
+    issueCount,
+    reportArtifactId: reportArtifact.id,
+    reportPath,
+    groupMessageId: groupMessage.id
   };
 }
 

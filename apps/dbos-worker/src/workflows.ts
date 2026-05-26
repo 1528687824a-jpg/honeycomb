@@ -20,8 +20,16 @@ const completeStageWithoutReview = DBOS.registerStep(activities.completeStageWit
   name: "completeStageWithoutReview",
   ...retryingStepConfig
 });
+const enforceModelCallBudget = DBOS.registerStep(activities.enforceModelCallBudget, {
+  name: "enforceModelCallBudget",
+  ...retryingStepConfig
+});
 const finalizeJob = DBOS.registerStep(activities.finalizeJob, {
   name: "finalizeJob",
+  ...retryingStepConfig
+});
+const getLatestStageOutputArtifactId = DBOS.registerStep(activities.getLatestStageOutputArtifactId, {
+  name: "getLatestStageOutputArtifactId",
   ...retryingStepConfig
 });
 const createPipelinePlan = DBOS.registerStep(activities.createPipelinePlan, {
@@ -68,6 +76,14 @@ const runTestAgent = DBOS.registerStep(activities.runTestAgent, {
   name: "runTestAgent",
   ...retryingStepConfig
 });
+const runFinalTestAgent = DBOS.registerStep(activities.runFinalTestAgent, {
+  name: "runFinalTestAgent",
+  ...retryingStepConfig
+});
+const shouldRunFinalQualityGate = DBOS.registerStep(activities.shouldRunFinalQualityGate, {
+  name: "shouldRunFinalQualityGate",
+  ...retryingStepConfig
+});
 const stopAfterConsecutiveFailures = DBOS.registerStep(activities.stopAfterConsecutiveFailures, {
   name: "stopAfterConsecutiveFailures",
   ...retryingStepConfig
@@ -82,11 +98,28 @@ function crashAfterStageAgent(jobId: string, stage: StageRecord, attemptNo: numb
   );
 }
 
+async function hasModelCallBudget(
+  jobId: string,
+  nextActionType: "stage-agent" | "test-agent" | "main-agent-synthesis" | "final-test-agent",
+  nextAgentId: string
+) {
+  const budget = await enforceModelCallBudget({
+    jobId,
+    nextActionType,
+    nextAgentId
+  });
+  return budget.allowed;
+}
+
 async function runSupervisorPipeline(jobId: string, stages: StageRecord[]) {
   for (const stage of stages) {
     let passed = false;
 
     for (let attemptNo = 1; attemptNo <= stage.maxRetries; attemptNo++) {
+      if (!(await hasModelCallBudget(jobId, "stage-agent", stage.agentId))) {
+        return "waiting_for_human";
+      }
+
       const run = await runStageAgent({
         jobId,
         stageId: stage.id,
@@ -96,6 +129,10 @@ async function runSupervisorPipeline(jobId: string, stages: StageRecord[]) {
         outputMessageType: "stage_output_to_test"
       });
       crashAfterStageAgent(jobId, stage, attemptNo);
+
+      if (!(await hasModelCallBudget(jobId, "test-agent", "test-agent"))) {
+        return "waiting_for_human";
+      }
 
       const review = await runTestAgent({
         jobId,
@@ -149,6 +186,10 @@ async function runSupervisorPipeline(jobId: string, stages: StageRecord[]) {
 async function runSequentialPipeline(jobId: string, stages: StageRecord[]) {
   for (const [index, stage] of stages.entries()) {
     const nextStage = stages[index + 1] ?? null;
+    if (!(await hasModelCallBudget(jobId, "stage-agent", stage.agentId))) {
+      return "waiting_for_human";
+    }
+
     const run = await runStageAgent({
       jobId,
       stageId: stage.id,
@@ -167,10 +208,16 @@ async function runSequentialPipeline(jobId: string, stages: StageRecord[]) {
       linkNextStage: true
     });
   }
+
+  return "succeeded";
 }
 
 async function runClassicMasterSlave(jobId: string, stages: StageRecord[]) {
   for (const stage of stages) {
+    if (!(await hasModelCallBudget(jobId, "stage-agent", stage.agentId))) {
+      return "waiting_for_human";
+    }
+
     const run = await runStageAgent({
       jobId,
       stageId: stage.id,
@@ -188,12 +235,18 @@ async function runClassicMasterSlave(jobId: string, stages: StageRecord[]) {
       routingMode: "classic_master_slave"
     });
   }
+
+  return "succeeded";
 }
 
 async function runMasterSlaveDiscussion(jobId: string, stages: StageRecord[]) {
   for (let roundNo = 1; roundNo <= DISCUSSION_ROUND_COUNT; roundNo++) {
     for (const [index, stage] of stages.entries()) {
       const nextStage = stages.length > 1 ? stages[(index + 1) % stages.length] : null;
+      if (!(await hasModelCallBudget(jobId, "stage-agent", stage.agentId))) {
+        return "waiting_for_human";
+      }
+
       const run = await runStageAgent({
         jobId,
         stageId: stage.id,
@@ -219,6 +272,8 @@ async function runMasterSlaveDiscussion(jobId: string, stages: StageRecord[]) {
       stageIds: stages.map((stage) => stage.id)
     });
   }
+
+  return "succeeded";
 }
 
 async function runRoutingMode(jobId: string, routingMode: RoutingMode, stages: StageRecord[]) {
@@ -226,14 +281,11 @@ async function runRoutingMode(jobId: string, routingMode: RoutingMode, stages: S
     case "supervisor_pipeline":
       return runSupervisorPipeline(jobId, stages);
     case "pipeline":
-      await runSequentialPipeline(jobId, stages);
-      return "succeeded";
+      return runSequentialPipeline(jobId, stages);
     case "classic_master_slave":
-      await runClassicMasterSlave(jobId, stages);
-      return "succeeded";
+      return runClassicMasterSlave(jobId, stages);
     case "master_slave_discussion":
-      await runMasterSlaveDiscussion(jobId, stages);
-      return "succeeded";
+      return runMasterSlaveDiscussion(jobId, stages);
     default:
       throw new Error(`Unsupported routing mode: ${routingMode}`);
   }
@@ -256,8 +308,51 @@ async function jobPipelineWorkflow(input: JobWorkflowInput) {
     };
   }
 
+  let finalQualitySourceArtifactId: string | null = null;
   if (routingMode === "master_slave_discussion") {
-    await mainAgentSynthesizeDiscussion(input.jobId);
+    if (!(await hasModelCallBudget(input.jobId, "main-agent-synthesis", "main-agent"))) {
+      return {
+        jobId: input.jobId,
+        status: "waiting_for_human"
+      };
+    }
+
+    const synthesis = await mainAgentSynthesizeDiscussion(input.jobId);
+    finalQualitySourceArtifactId = synthesis.artifactId;
+  }
+
+  const finalGate = await shouldRunFinalQualityGate({
+    jobId: input.jobId,
+    routingMode
+  });
+  if (finalGate.enabled) {
+    if (!finalQualitySourceArtifactId) {
+      finalQualitySourceArtifactId = await getLatestStageOutputArtifactId(input.jobId);
+    }
+
+    if (!(await hasModelCallBudget(input.jobId, "final-test-agent", "test-agent"))) {
+      return {
+        jobId: input.jobId,
+        status: "waiting_for_human"
+      };
+    }
+
+    const review = await runFinalTestAgent({
+      jobId: input.jobId,
+      sourceArtifactId: finalQualitySourceArtifactId,
+      routingMode
+    });
+
+    if (review.verdict !== "PASS") {
+      await markJobWaitingForHuman(
+        input.jobId,
+        `Final quality gate failed for ${routingMode}: ${review.reportArtifactId}`
+      );
+      return {
+        jobId: input.jobId,
+        status: "waiting_for_human"
+      };
+    }
   }
 
   await finalizeJob(input.jobId);
