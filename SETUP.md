@@ -91,6 +91,7 @@ Create a local job:
 ```powershell
 $body = @{
   rawPrompt = 'research current AI trends, write a short article, and create an image poster brief'
+  routingMode = 'supervisor_pipeline'
   requesterId = 'local-test-user'
 } | ConvertTo-Json
 
@@ -111,6 +112,39 @@ POST /jobs
   -> test-agent PASS advances to the next stage
   -> test-agent FAIL routes back to the previous child agent
   -> after 3 consecutive FAILs, the job enters waiting_for_human
+```
+
+## Routing Modes
+
+`POST /jobs` accepts an optional `routingMode`. If omitted, the default is
+`supervisor_pipeline`.
+
+```text
+pipeline
+supervisor_pipeline
+classic_master_slave
+master_slave_discussion
+```
+
+Current M2 semantics:
+
+```text
+supervisor_pipeline:
+  Existing behavior. Each stage runs, test-agent reviews it, PASS hands off to
+  the next stage, retryable FAIL goes back to the same child agent, and 3 FAILs
+  enters waiting_for_human.
+
+pipeline:
+  Sequential child-agent stages without the test-agent gate. Each completed
+  stage output becomes the next stage input.
+
+classic_master_slave:
+  main-agent dispatches each child stage independently and collects outputs.
+  There is no peer-to-peer handoff and no test-agent gate in M2.
+
+master_slave_discussion:
+  Child agents run in a fixed two-round discussion loop, with visible
+  discussion_handoff messages and discussion.round_completed events.
 ```
 
 ## DBOS Checkpoints

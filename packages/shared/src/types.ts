@@ -10,10 +10,22 @@ export type JobStatus =
   | "failed"
   | "cancelled";
 
+export const ROUTING_MODES = [
+  "pipeline",
+  "supervisor_pipeline",
+  "classic_master_slave",
+  "master_slave_discussion"
+] as const;
+
+export type RoutingMode = (typeof ROUTING_MODES)[number];
+
+export const DEFAULT_ROUTING_MODE: RoutingMode = "supervisor_pipeline";
+
 export type JobRecord = {
   id: string;
   sessionId: string;
   rawPrompt: string;
+  routingMode: RoutingMode;
   status: JobStatus;
   workflowId: string | null;
   finalOutput: string | null;
@@ -32,6 +44,7 @@ export type JobRecord = {
 
 export type CreateJobInput = {
   rawPrompt: string;
+  routingMode?: RoutingMode;
   requesterId?: string;
   feishuChatId?: string;
   feishuMessageId?: string;
@@ -112,6 +125,9 @@ export type GroupMessageType =
   | "test_pass_to_next_agent"
   | "test_fail_to_previous_agent"
   | "test_failed_waiting_for_user"
+  | "pipeline_handoff"
+  | "main_dispatch"
+  | "discussion_handoff"
   | "final_output";
 
 export type GroupMessageRecord = {

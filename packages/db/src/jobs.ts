@@ -1,13 +1,27 @@
 import { randomUUID } from "node:crypto";
-import type { CreateJobInput, JobRecord, JobStatus } from "../../shared/src/types";
+import {
+  DEFAULT_ROUTING_MODE,
+  ROUTING_MODES,
+  type CreateJobInput,
+  type JobRecord,
+  type RoutingMode,
+  type JobStatus
+} from "../../shared/src/types";
 import { pool } from "./pool";
 import { appendAgentEvent } from "./session";
+
+function normalizeRoutingMode(value: unknown): RoutingMode {
+  return typeof value === "string" && (ROUTING_MODES as readonly string[]).includes(value)
+    ? (value as RoutingMode)
+    : DEFAULT_ROUTING_MODE;
+}
 
 function toJobRecord(row: any): JobRecord {
   return {
     id: row.id,
     sessionId: row.session_id ?? row.id,
     rawPrompt: row.raw_prompt,
+    routingMode: normalizeRoutingMode(row.routing_mode),
     status: row.status,
     workflowId: row.workflow_id,
     finalOutput: row.final_output,
@@ -38,8 +52,9 @@ export async function createJob(input: CreateJobInput): Promise<JobRecord> {
       feishu_message_id,
       requester_id,
       raw_prompt,
+      routing_mode,
       status
-    ) values ($1, $2, $3, $4, $5, $6, 'created')
+    ) values ($1, $2, $3, $4, $5, $6, $7, 'created')
     returning *`,
     [
       id,
@@ -47,11 +62,15 @@ export async function createJob(input: CreateJobInput): Promise<JobRecord> {
       input.feishuChatId ?? null,
       input.feishuMessageId ?? null,
       input.requesterId ?? null,
-      input.rawPrompt
+      input.rawPrompt,
+      input.routingMode ?? DEFAULT_ROUTING_MODE
     ]
   );
 
-  await appendJobEvent(id, "job.created", { requesterId: input.requesterId ?? null });
+  await appendJobEvent(id, "job.created", {
+    requesterId: input.requesterId ?? null,
+    routingMode: input.routingMode ?? DEFAULT_ROUTING_MODE
+  });
 
   return toJobRecord(result.rows[0]);
 }

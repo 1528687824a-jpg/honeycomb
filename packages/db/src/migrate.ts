@@ -16,6 +16,7 @@ const statements = [
   )`,
   `alter table agent.jobs add column if not exists workdir text`,
   `alter table agent.jobs add column if not exists session_id text`,
+  `alter table agent.jobs add column if not exists routing_mode text not null default 'supervisor_pipeline'`,
   `alter table agent.jobs add column if not exists completed_at timestamptz`,
   `alter table agent.jobs add column if not exists archived_at timestamptz`,
   `alter table agent.jobs add column if not exists retention_until timestamptz`,

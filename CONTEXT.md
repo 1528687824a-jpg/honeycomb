@@ -1,5 +1,43 @@
 # Agent OpenClaw Context Checkpoint
 
+## 2026-05-26 M2 Routing Modes Checkpoint
+
+已完成 DBOS 编排内核的四种 routing mode 策略层：
+
+```text
+pipeline
+supervisor_pipeline
+classic_master_slave
+master_slave_discussion
+```
+
+默认模式是 `supervisor_pipeline`，也就是迁移前已经验证过的现行行为：
+stage-agent 产出 -> test-agent 质量闸门 -> PASS 交给下一阶段 -> FAIL 回到原
+stage-agent 修复 -> 连续 3 次失败进入 waiting_for_human。
+
+M2 新增内容：
+
+```text
+1. agent.jobs 新增 routing_mode 字段。
+2. POST /jobs 支持 routingMode 入参。
+3. pipeline：顺序流水线，无 test-agent，每个阶段输出直接作为下一阶段输入。
+4. classic_master_slave：main-agent 独立分发给各子 agent，子 agent 输出回 main-agent 汇总。
+5. master_slave_discussion：固定 2 轮讨论，每轮所有子 agent 跑一次，写 discussion.round_completed。
+6. group_messages/messageType 和 agent_events payload 会记录 routingMode、handoff target、message type。
+```
+
+本地四模式验证已通过，均使用 `FEISHU_DRY_RUN=true` 和 `OPENCLAW_AGENT_MODE=mock`：
+
+```text
+supervisor_pipeline     JOB-20260526-0BC974B1 succeeded stages=2 attempts=2 reviews=2 discussionRounds=0
+pipeline                JOB-20260526-0848E07B succeeded stages=3 attempts=3 reviews=0 discussionRounds=0
+classic_master_slave    JOB-20260526-7F4DB40F succeeded stages=3 attempts=3 reviews=0 discussionRounds=0
+master_slave_discussion JOB-20260526-284C033C succeeded stages=2 attempts=4 reviews=0 discussionRounds=2
+```
+
+当前边界：M2 只落最小可运行策略。pipeline/classic/discussion 还没有质量闸门；
+后续如果要把质量控制也加进去，需要明确每种模式下 test-agent 的位置和是否允许返工。
+
 ## 2026-05-25 DBOS Migration Checkpoint
 
 当前编排内核已从 Temporal 切换到 DBOS：

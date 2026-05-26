@@ -3,10 +3,12 @@ import express from "express";
 import { z } from "zod";
 import { createJob, getJob, getJobByFeishuMessageId } from "../../../packages/db/src/jobs";
 import { getJobDetails } from "../../../packages/db/src/pipeline";
+import { ROUTING_MODES } from "../../../packages/shared/src/types";
 import { launchDbos, startJobWorkflow } from "./dbos-runtime";
 
 const createJobSchema = z.object({
   rawPrompt: z.string().min(1),
+  routingMode: z.enum(ROUTING_MODES).optional(),
   requesterId: z.string().optional(),
   feishuChatId: z.string().optional(),
   feishuMessageId: z.string().optional()
@@ -80,6 +82,7 @@ async function main() {
 
       response.status(201).json({
         jobId: job.id,
+        routingMode: job.routingMode,
         status: "queued",
         workflowId
       });
@@ -143,6 +146,7 @@ async function main() {
       response.status(201).json({
         ok: true,
         jobId: job.id,
+        routingMode: job.routingMode,
         workflowId
       });
     } catch (error) {

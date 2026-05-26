@@ -35,11 +35,13 @@ import {
 import type {
   GroupMessageRecord,
   GroupMessageType,
+  RoutingMode,
   StageDefinition,
   StageRecord,
   StageRunResult,
   TestReviewResult
 } from "../../../packages/shared/src/types";
+import { DEFAULT_ROUTING_MODE } from "../../../packages/shared/src/types";
 import { sendFeishuTextMessage } from "./adapters/feishu";
 import { runOpenClawAgent, type OpenClawRunResult } from "./adapters/openclaw";
 import { maybeCrashOnce } from "./test-crash";
@@ -290,6 +292,17 @@ export async function markJobRunning(jobId: string) {
   await setJobStatus(jobId, "running");
 }
 
+export async function getJobRoutingMode(jobId: string): Promise<RoutingMode> {
+  const job = await getJob(jobId);
+  if (!job) {
+    throw new Error(`Job not found: ${jobId}`);
+  }
+
+  const routingMode = job.routingMode ?? DEFAULT_ROUTING_MODE;
+  await appendJobEvent(jobId, "main.routing_mode_selected", { routingMode });
+  return routingMode;
+}
+
 export async function markJobPlanning(jobId: string) {
   await setJobStatus(jobId, "planning");
 }
@@ -459,7 +472,7 @@ export async function createPipelinePlan(input: {
     jobId: input.jobId,
     sourceArtifactId: input.userRequestArtifactId,
     planningAgentId: "main-agent",
-    routingMode: "orchestrator_controlled_feishu_display",
+    routingMode: job.routingMode ?? DEFAULT_ROUTING_MODE,
     stages
   };
 
@@ -476,6 +489,7 @@ export async function createPipelinePlan(input: {
 
   await appendJobEvent(input.jobId, "main.pipeline_planned", {
     planPath,
+    routingMode: plan.routingMode,
     stageCount: plan.stages.length
   });
 
@@ -486,12 +500,19 @@ export async function runStageAgent(input: {
   jobId: string;
   stageId: string;
   attemptNo: number;
+  routingMode?: RoutingMode;
+  handoffTargetAgentId?: string | null;
+  outputMessageType?: GroupMessageType;
 }): Promise<StageRunResult> {
   const [job, stage] = await Promise.all([getJob(input.jobId), getStage(input.stageId)]);
   if (!job) {
     throw new Error(`Job not found: ${input.jobId}`);
   }
 
+  const routingMode = input.routingMode ?? job.routingMode ?? DEFAULT_ROUTING_MODE;
+  const handoffTargetAgentId =
+    input.handoffTargetAgentId === undefined ? "test-agent" : input.handoffTargetAgentId;
+  const outputMessageType = input.outputMessageType ?? "stage_output_to_test";
   const workdir = job.workdir ?? path.resolve(process.env.JOB_DATA_DIR ?? "data/jobs", input.jobId);
   const stageDir = path.join(
     workdir,
@@ -521,7 +542,10 @@ export async function runStageAgent(input: {
       stageId: stage.id,
       agentId: stage.agentId,
       attemptNo: input.attemptNo,
-      agentSessionId
+      agentSessionId,
+      routingMode,
+      handoffTargetAgentId,
+      outputMessageType
     },
     {
             actor: "dbos-harness",
@@ -584,6 +608,8 @@ export async function runStageAgent(input: {
     stageName: stage.name,
     agentId: stage.agentId,
     attemptNo: input.attemptNo,
+    routingMode,
+    handoffTargetAgentId,
     quality,
     summary:
       openClawResult?.text ??
@@ -662,6 +688,8 @@ export async function runStageAgent(input: {
       stateJsonPath,
       agentSessionId,
       attemptNo: input.attemptNo,
+      routingMode,
+      handoffTargetAgentId,
       quality
     }
   });
@@ -691,6 +719,9 @@ export async function runStageAgent(input: {
     stageId: stage.id,
     agentId: stage.agentId,
     attemptNo: input.attemptNo,
+    routingMode,
+    handoffTargetAgentId,
+    outputMessageType,
     outputArtifactId: artifact.id
   });
 
@@ -699,22 +730,25 @@ export async function runStageAgent(input: {
     jobId: input.jobId,
     stageId: stage.id,
     senderAgentId: stage.agentId,
-    mentionAgentId: "test-agent",
-    messageType: "stage_output_to_test",
+    mentionAgentId: handoffTargetAgentId,
+    messageType: outputMessageType,
     artifactId: artifact.id,
     content: [
-      `@test-agent 请测试 ${stage.name}`,
-      displayOnlyHandoffLine("test-agent", "质量闸门"),
+      handoffTargetAgentId
+        ? `@${handoffTargetAgentId} stage output is ready: ${stage.name}`
+        : `Stage output is ready for main-agent: ${stage.name}`,
+      displayOnlyHandoffLine(handoffTargetAgentId, `mode=${routingMode}`),
       "",
-      `Job：${input.jobId}`,
-      `阶段：${stage.stageIndex} / ${stage.stageType}`,
-      `执行 Agent：${stage.agentId}`,
-      `尝试次数：${input.attemptNo}`,
-      `输出 artifact：${artifact.id}`,
-      `输出路径：${stateJsonPath}`,
-      `工作日志：${workLogPath}`,
+      `Job: ${input.jobId}`,
+      `Routing mode: ${routingMode}`,
+      `Stage: ${stage.stageIndex} / ${stage.stageType}`,
+      `Agent: ${stage.agentId}`,
+      `Attempt: ${input.attemptNo}`,
+      `Output artifact: ${artifact.id}`,
+      `Output path: ${stateJsonPath}`,
+      `Work log: ${workLogPath}`,
       "",
-      `摘要：${output.summary}`
+      `Summary: ${output.summary}`
     ].join("\n")
   });
 
@@ -987,6 +1021,39 @@ export async function passStageAndHandoff(input: {
   });
 }
 
+export async function completeStageWithoutReview(input: {
+  jobId: string;
+  stageId: string;
+  outputArtifactId: string;
+  routingMode: RoutingMode;
+  linkNextStage?: boolean;
+  roundNo?: number;
+}) {
+  await markStageCompleted(input.stageId);
+  if (input.linkNextStage) {
+    await setNextStageInput(input.stageId, input.outputArtifactId);
+  }
+
+  await appendJobEvent(input.jobId, "stage.completed_without_review", {
+    stageId: input.stageId,
+    outputArtifactId: input.outputArtifactId,
+    routingMode: input.routingMode,
+    linkNextStage: input.linkNextStage ?? false,
+    roundNo: input.roundNo ?? null
+  });
+}
+
+export async function recordDiscussionRound(input: {
+  jobId: string;
+  roundNo: number;
+  stageIds: string[];
+}) {
+  await appendJobEvent(input.jobId, "discussion.round_completed", {
+    roundNo: input.roundNo,
+    stageIds: input.stageIds
+  });
+}
+
 export async function requestStageFix(input: {
   jobId: string;
   stageId: string;
@@ -1047,10 +1114,12 @@ export async function finalizeJob(jobId: string) {
     "",
     "Mock pipeline completed successfully.",
     "",
-    "Passed stages:",
+    `Routing mode: ${job.routingMode ?? DEFAULT_ROUTING_MODE}`,
+    "",
+    "Completed stages:",
     ...stages.map((stage) => `- ${stage.stageIndex}. ${stage.name} (${stage.agentId})`),
     "",
-    "Final owner: main-agent summarized the tested stage outputs.",
+    "Final owner: main-agent summarized the completed stage outputs.",
     "Next milestone: replace mock activities with real OpenClaw agent calls.",
     ""
   ].join("\n");
@@ -1077,7 +1146,8 @@ export async function finalizeJob(jobId: string) {
       `任务完成：${jobId}`,
       displayOnlyHandoffLine(null),
       "",
-      "所有阶段已通过测试，最终结果已生成。",
+      `Routing mode: ${job.routingMode ?? DEFAULT_ROUTING_MODE}`,
+      "All configured stages completed and the final result has been generated.",
       `最终 artifact：${artifact.id}`,
       `最终路径：${finalPath}`
     ].join("\n")
