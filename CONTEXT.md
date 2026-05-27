@@ -1,5 +1,48 @@
 # Agent OpenClaw Context Checkpoint
 
+## 2026-05-27 Feishu Webhook Readiness Checkpoint
+
+Added local Feishu webhook smoke coverage before public HTTPS ingress:
+
+```text
+1. package.json:
+   - npm run smoke:feishu-webhook
+2. scripts/smoke-feishu-webhook.ps1:
+   - starts dev stack with FEISHU_DRY_RUN=true and OPENCLAW_AGENT_MODE=mock
+   - overrides FEISHU_VERIFICATION_TOKEN with a local smoke token
+   - overrides FEISHU_BOT_OPEN_ID with a local bot open_id
+   - verifies challenge
+   - verifies invalid token -> 401 invalid_feishu_token
+   - verifies non-message event ignored
+   - verifies bot self-message ignored
+   - verifies normal Feishu message creates one job and starts DBOS workflow
+   - verifies duplicate message_id reuses the same job
+   - waits for the created job to reach succeeded
+3. SETUP.md:
+   - documents npm run smoke:feishu-webhook
+   - documents public ingress plan: Feishu -> VPS Nginx HTTPS -> frp -> local API
+   - warns to expose only /webhooks/feishu/events publicly
+   - notes first production pass should keep Feishu Encrypt Key disabled
+```
+
+Verification:
+
+```text
+npm run smoke:feishu-webhook
+  passed
+
+job=JOB-20260527-DD7634DD
+duplicateJobId=JOB-20260527-DD7634DD
+terminalStatus=succeeded
+routingMode=supervisor_pipeline
+maxModelCalls=20
+classicFinalGateEnabled=false
+discussionRounds=2
+checked=challenge,wrong_token,non_message_ignored,bot_message_ignored,normal_message_created_job,duplicate_message_id_reused_job
+```
+
+Current next step: after this smoke delta is committed, prepare the public Feishu HTTPS ingress when ICP/DNS is ready.
+
 ## 2026-05-27 discussionRounds Persistence Checkpoint
 
 Implemented and verified `discussionRounds` as persisted job configuration:

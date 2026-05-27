@@ -351,7 +351,63 @@ mentions.
 POST http://localhost:3000/webhooks/feishu/events
 ```
 
-Public HTTPS webhook setup is intentionally after local DBOS validation.
+Local webhook smoke:
+
+```powershell
+npm run smoke:feishu-webhook
+```
+
+The script starts the local dev stack with safe overrides:
+
+```text
+FEISHU_DRY_RUN=true
+OPENCLAW_AGENT_MODE=mock
+FEISHU_VERIFICATION_TOKEN=local-feishu-webhook-smoke-token
+FEISHU_BOT_OPEN_ID=ou_local_webhook_smoke_bot
+```
+
+It verifies:
+
+```text
+1. Feishu challenge returns the challenge value.
+2. Invalid verification token returns 401 invalid_feishu_token.
+3. Non-message events are ignored.
+4. Bot self messages are ignored.
+5. A normal message creates one job and starts the DBOS workflow.
+6. Repeating the same message_id returns duplicate=true and reuses the job.
+7. The created job reaches succeeded in mock mode.
+```
+
+Latest local smoke result:
+
+```text
+npm run smoke:feishu-webhook
+jobId=JOB-20260527-DD7634DD
+duplicateJobId=JOB-20260527-DD7634DD
+terminalStatus=succeeded
+routingMode=supervisor_pipeline
+maxModelCalls=20
+classicFinalGateEnabled=false
+discussionRounds=2
+```
+
+Public HTTPS webhook setup remains the next integration step. First production
+pass should keep Feishu event encryption disabled and rely on the verification
+token. If Encrypt Key is enabled in Feishu later, add decrypt/signature handling
+before turning it on.
+
+Recommended public ingress shape when `tomorrow123.art` is ready:
+
+```text
+Feishu
+  -> https://tomorrow123.art/webhooks/feishu/events
+  -> VPS Nginx HTTPS
+  -> frp
+  -> local Windows API localhost:3000/webhooks/feishu/events
+```
+
+Expose only the webhook path through Nginx. Do not publish `/jobs`,
+`/jobs/:jobId/details`, or `/admin/*` to the public internet.
 
 ## OpenClaw Runtime Mode
 
