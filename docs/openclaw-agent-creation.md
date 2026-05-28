@@ -83,12 +83,12 @@ test-agent      zai/glm-5.1
 把下面这些文件里的内容分别复制到对应 Agent 的系统提示词里：
 
 ```text
-openclaw/agents/main-agent.md
-openclaw/agents/research-agent.md
-openclaw/agents/writer-agent.md
-openclaw/agents/image-agent.md
-openclaw/agents/video-agent.md
-openclaw/agents/test-agent.md
+platform-assets/openclaw-agent-templates/agents/main-agent.md
+platform-assets/openclaw-agent-templates/agents/research-agent.md
+platform-assets/openclaw-agent-templates/agents/writer-agent.md
+platform-assets/openclaw-agent-templates/agents/image-agent.md
+platform-assets/openclaw-agent-templates/agents/video-agent.md
+platform-assets/openclaw-agent-templates/agents/test-agent.md
 ```
 
 ## 配置参考
@@ -96,7 +96,7 @@ openclaw/agents/test-agent.md
 多 Agent 配置参考：
 
 ```text
-openclaw/config/openclaw.multi-agent.example.json
+platform-assets/openclaw-agent-templates/config/openclaw.multi-agent.example.json
 ```
 
 这只是参考模板，不要直接覆盖 ClawPanel 当前运行配置。先在 UI 或实际配置入口里创建 Agent，确认能看到 6 个 Agent 后再接 orchestrator。
@@ -150,7 +150,7 @@ image-agent     model: deepseek-writer/deepseek-v4-pro
 Seedance 2.0 视频生成是异步任务，标准版可能超过 OpenClaw BytePlus provider 原本的 120 秒默认等待时间。本机已把 BytePlus 视频 provider 默认超时补到 600000ms；以后升级 OpenClaw 后如补丁丢失，运行：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\patch-openclaw-ark-media.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\platform-assets\vendor-workarounds\openclaw\patch-ark-media.ps1
 ```
 
 test-agent 已接入智谱 GLM-5.1：

@@ -1,5 +1,25 @@
 # Agent OpenClaw Setup Notes
 
+## Repository Structure
+
+The project is organized as a monorepo for future GitHub/open-source work:
+
+```text
+apps/              Runtime services: API and DBOS worker.
+packages/          Shared DB and type packages.
+scripts/           Local dev and smoke-test scripts.
+platform-assets/   OpenClaw agent templates and manual vendor workarounds.
+docs/              Structure, boundaries, agent setup notes, historical docs.
+```
+
+OpenClaw/ClawPanel is an external runtime. Platform code should call it through
+the adapter boundary, not by editing OpenClaw product source. See:
+
+```text
+docs/PROJECT_STRUCTURE.md
+docs/BOUNDARIES.md
+```
+
 ## Current Runtime
 
 The local orchestration kernel is now:

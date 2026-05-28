@@ -1,5 +1,7 @@
 $ErrorActionPreference = "Stop"
 
+Write-Warning "This is a manual OpenClaw vendor workaround for local development only. Do not run it as part of the default downloadable platform install."
+
 $distro = $env:OPENCLAW_WSL_DISTRO
 if (-not $distro) {
   $distro = "Ubuntu-24.04"

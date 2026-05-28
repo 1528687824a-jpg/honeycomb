@@ -1,0 +1,42 @@
+# Agent OpenClaw Orchestrator
+
+A DBOS/Postgres-based multi-agent orchestration platform built around OpenClaw.
+
+OpenClaw and ClawPanel are external products. This repository contains the
+platform code, templates, docs, and local verification scripts that orchestrate
+OpenClaw agents through a CLI adapter.
+
+## Repository Layout
+
+```text
+apps/                  API and DBOS worker code.
+packages/              Shared DB and type packages.
+scripts/               Dev/start/smoke/maintenance scripts.
+platform-assets/       Agent templates and clearly marked vendor workarounds.
+docs/                  Project structure, boundaries, setup notes, history.
+CONTEXT.md             Current agent-facing project checkpoint.
+SETUP.md               Local setup and smoke-test guide.
+```
+
+For details, read:
+
+```text
+docs/PROJECT_STRUCTURE.md
+docs/BOUNDARIES.md
+SETUP.md
+```
+
+## Local Checks
+
+```powershell
+npm run check
+npm run smoke:feishu-webhook
+npm run smoke:m2-recovery
+```
+
+## Boundary Rule
+
+Do not modify OpenClaw or ClawPanel source code as part of normal platform
+development. Use `apps/dbos-worker/src/adapters/openclaw.ts` as the runtime
+boundary, and keep prompt/config assets under
+`platform-assets/openclaw-agent-templates/`.

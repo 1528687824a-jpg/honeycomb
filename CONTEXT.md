@@ -444,14 +444,14 @@ packages/db/src/migrate.ts
 packages/db/src/jobs.ts
 packages/db/src/pipeline.ts
 packages/shared/src/types.ts
-openclaw/agents/main-agent.md
-openclaw/agents/research-agent.md
-openclaw/agents/writer-agent.md
-openclaw/agents/image-agent.md
-openclaw/agents/video-agent.md
-openclaw/agents/test-agent.md
-openclaw/config/openclaw.multi-agent.example.json
-OPENCLAW_AGENT_CREATION.md
+platform-assets/openclaw-agent-templates/agents/main-agent.md
+platform-assets/openclaw-agent-templates/agents/research-agent.md
+platform-assets/openclaw-agent-templates/agents/writer-agent.md
+platform-assets/openclaw-agent-templates/agents/image-agent.md
+platform-assets/openclaw-agent-templates/agents/video-agent.md
+platform-assets/openclaw-agent-templates/agents/test-agent.md
+platform-assets/openclaw-agent-templates/config/openclaw.multi-agent.example.json
+docs/openclaw-agent-creation.md
 ```
 
 ## OpenClaw Agent 状态
@@ -505,7 +505,7 @@ image-agent 的思考/调度模型：deepseek-writer/deepseek-v4-pro
 Seedance 2.0 视频生成是火山方舟的异步任务流程，标准版经常超过 OpenClaw BytePlus provider 原本硬编码的 120 秒默认超时。本机已把 BytePlus 视频 provider 默认超时补到 600000ms，并保留 `byteplus/doubao-seedance-2-0-fast-260128` 作为 fallback。以后升级 OpenClaw 后如补丁丢失，运行：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\patch-openclaw-ark-media.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\platform-assets\vendor-workarounds\openclaw\patch-ark-media.ps1
 ```
 
 test-agent 已接入智谱 GLM-5.1：
