@@ -39,6 +39,10 @@ function toModelCallRecord(row: any): ModelCallRecord {
   };
 }
 
+function sanitizePostgresText(value: string) {
+  return value.replace(/\u0000/g, "");
+}
+
 export async function getModelCallByKey(idempotencyKey: string): Promise<ModelCallRecord | null> {
   const result = await pool.query(
     `select * from agent.model_calls where idempotency_key = $1`,
@@ -139,7 +143,7 @@ export async function markModelCallFailed(input: {
          updated_at = now()
      where idempotency_key = $1
      returning *`,
-    [input.idempotencyKey, input.error]
+    [input.idempotencyKey, sanitizePostgresText(input.error)]
   );
 
   return result.rows[0] ? toModelCallRecord(result.rows[0]) : null;
@@ -157,7 +161,7 @@ export async function markModelCallFailedUnknownOutcome(input: {
      where idempotency_key = $1
        and status = 'started'
      returning *`,
-    [input.idempotencyKey, input.error]
+    [input.idempotencyKey, sanitizePostgresText(input.error)]
   );
 
   return result.rows[0] ? toModelCallRecord(result.rows[0]) : null;

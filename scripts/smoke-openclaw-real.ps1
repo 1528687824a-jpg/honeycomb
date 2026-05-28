@@ -1,0 +1,102 @@
+$ErrorActionPreference = "Stop"
+
+$root = Split-Path -Parent $PSScriptRoot
+$openClawCli = "/home/administrator/.npm-global/bin/openclaw"
+$wslDistro = "Ubuntu-24.04"
+
+function Assert-Equal {
+  param(
+    [object]$Actual,
+    [object]$Expected,
+    [string]$Message
+  )
+
+  if ($Actual -ne $Expected) {
+    throw "$Message. Expected '$Expected', got '$Actual'"
+  }
+}
+
+function Assert-True {
+  param(
+    [bool]$Condition,
+    [string]$Message
+  )
+
+  if (-not $Condition) {
+    throw $Message
+  }
+}
+
+function Wait-ForTerminalStatus {
+  param(
+    [string]$JobId
+  )
+
+  for ($i = 0; $i -lt 180; $i++) {
+    Start-Sleep -Seconds 1
+    $job = Invoke-RestMethod -Uri "http://localhost:3000/jobs/$JobId"
+    if (@("succeeded", "failed", "waiting_for_human", "cancelled") -contains $job.status) {
+      return $job
+    }
+  }
+
+  throw "Timed out waiting for $JobId"
+}
+
+Set-Location $root
+
+$version = wsl -d $wslDistro -- $openClawCli --version
+Assert-True -Condition ($LASTEXITCODE -eq 0) -Message "OpenClaw CLI version check failed"
+
+$env:OPENCLAW_AGENT_MODE = "real"
+$env:OPENCLAW_WSL_DISTRO = $wslDistro
+$env:OPENCLAW_CLI = $openClawCli
+$env:OPENCLAW_AGENT_TIMEOUT_SECONDS = "180"
+$env:FEISHU_ADAPTER_ENABLED = "false"
+$env:FEISHU_DRY_RUN = "true"
+Remove-Item Env:\AGENT_CLUSTER_CONFIG_PATH -ErrorAction SilentlyContinue
+Remove-Item Env:\DBOS_TEST_CRASH_ONCE_AFTER -ErrorAction SilentlyContinue
+
+npm run dev:stop | Out-Host
+npm run dev:start | Out-Host
+
+$body = @{
+  prompt = "Write one short sentence confirming the real OpenClaw orchestration path works."
+  requesterId = "openclaw-real-smoke"
+  routingMode = "classic_master_slave"
+  maxModelCalls = 3
+  classicFinalGateEnabled = $false
+} | ConvertTo-Json
+
+$created = Invoke-RestMethod -Uri "http://localhost:3000/jobs" -Method Post -ContentType "application/json" -Body $body
+$job = Wait-ForTerminalStatus -JobId $created.jobId
+Assert-Equal -Actual $job.status -Expected "succeeded" -Message "job terminal status"
+
+$details = Invoke-RestMethod -Uri "http://localhost:3000/jobs/$($created.jobId)/details"
+$realCompletions = @(
+  $details.events | Where-Object {
+    $_.event_type -eq "tool.openclaw_agent_completed" -and $_.payload.mode -eq "real"
+  }
+)
+Assert-True -Condition ($realCompletions.Count -gt 0) -Message "real OpenClaw completion event missing"
+
+$stageOutputs = @(
+  $details.artifacts | Where-Object { $_.type -eq "stage_output" }
+)
+Assert-True -Condition ($stageOutputs.Count -gt 0) -Message "real mode stage output missing"
+
+[pscustomobject]@{
+  ok = $true
+  openClawVersion = $version
+  jobId = $created.jobId
+  terminalStatus = $job.status
+  routingMode = $job.routingMode
+  realCompletionEvents = $realCompletions.Count
+  stageOutputArtifacts = $stageOutputs.Count
+  checked = @(
+    "openclaw_cli_available",
+    "orchestrator_real_mode_job",
+    "real_openclaw_completion_event",
+    "stage_output_artifact"
+  )
+} | ConvertTo-Json -Depth 4

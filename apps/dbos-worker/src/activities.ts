@@ -73,6 +73,10 @@ function sha256(input: string) {
   return createHash("sha256").update(input).digest("hex");
 }
 
+function toSafeErrorMessage(error: unknown) {
+  return (error instanceof Error ? error.message : String(error)).replace(/\u0000/g, "");
+}
+
 function getModelCallResult(payload: Record<string, unknown> | null): OpenClawRunResult | null {
   if (!payload || !("result" in payload)) {
     return null;
@@ -178,6 +182,7 @@ async function runOpenClawAgentIdempotent(input: {
         attemptNo: input.attemptNo,
         actionType: input.actionType,
         idempotencyKey,
+        mode: result?.mode ?? null,
         sessionId: result?.sessionId ?? input.sessionId
       },
       {
@@ -197,9 +202,9 @@ async function runOpenClawAgentIdempotent(input: {
   } catch (error) {
     await markModelCallFailed({
       idempotencyKey,
-      error: error instanceof Error ? error.message : String(error)
+      error: toSafeErrorMessage(error)
     });
-    throw error;
+    throw new Error(toSafeErrorMessage(error));
   }
 }
 

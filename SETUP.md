@@ -134,6 +134,41 @@ The smoke generates a content-studio cluster, starts the API with
 `AGENT_CLUSTER_CONFIG_PATH`, posts a demo job, and verifies the DBOS planning
 step uses the generated `research-agent -> writer-agent -> image-agent` stages.
 
+## OpenClaw Real Mode Smoke
+
+Run a minimal real OpenClaw job through the orchestrator:
+
+```powershell
+npm run smoke:openclaw-real
+```
+
+The smoke uses WSL `Ubuntu-24.04`, the configured OpenClaw CLI, HTTP-only
+egress, and `classic_master_slave` without final test gate so the proof has one
+real writer-agent call.
+
+## Tauri Desktop Shell
+
+The first desktop shell lives in:
+
+```text
+apps/desktop-app
+```
+
+It is a thin React/TypeScript client for the local HTTP API. Validate the shell
+structure and local Rust toolchain status with:
+
+```powershell
+npm run smoke:tauri-shell
+```
+
+Full Tauri builds require Rust/Cargo on the host:
+
+```powershell
+docker compose up --build
+npm install --prefix apps/desktop-app
+npm --prefix apps/desktop-app run tauri:dev
+```
+
 ## Local Development Services
 
 Start Postgres, run migrations, and launch the API:

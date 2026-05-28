@@ -55,6 +55,13 @@ npm run smoke:http-only
 npm run smoke:feishu-webhook
 npm run smoke:m2-recovery
 npm run smoke:m3-config
+npm run smoke:tauri-shell
+```
+
+Optional real OpenClaw check, requiring a configured WSL OpenClaw runtime:
+
+```powershell
+npm run smoke:openclaw-real
 ```
 
 Private/reference Feishu public ingress helpers:

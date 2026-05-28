@@ -22,6 +22,10 @@ function getWslDistro() {
   return process.env.OPENCLAW_WSL_DISTRO ?? "Ubuntu-24.04";
 }
 
+function toOpenClawSessionId(sessionId: string) {
+  return sessionId.replace(/[^A-Za-z0-9._-]/g, "-");
+}
+
 function extractText(raw: unknown): string {
   if (typeof raw === "string") {
     return raw;
@@ -33,6 +37,22 @@ function extractText(raw: unknown): string {
       if (typeof value[key] === "string") {
         return value[key] as string;
       }
+    }
+
+    if (Array.isArray(value.payloads)) {
+      for (const payload of value.payloads) {
+        if (payload && typeof payload === "object" && typeof (payload as Record<string, unknown>).text === "string") {
+          return (payload as Record<string, string>).text;
+        }
+      }
+    }
+
+    if (typeof value.finalAssistantVisibleText === "string") {
+      return value.finalAssistantVisibleText;
+    }
+
+    if (typeof value.finalAssistantRawText === "string") {
+      return value.finalAssistantRawText;
     }
   }
 
@@ -58,7 +78,7 @@ export async function runOpenClawAgent(input: {
     "--agent",
     input.agentId,
     "--session-id",
-    input.sessionId,
+    toOpenClawSessionId(input.sessionId),
     "--message",
     input.message,
     "--json",
@@ -83,9 +103,8 @@ export async function runOpenClawAgent(input: {
 
   return {
     mode: "real",
-    sessionId: input.sessionId,
+    sessionId: toOpenClawSessionId(input.sessionId),
     text: extractText(raw),
     raw
   };
 }
-

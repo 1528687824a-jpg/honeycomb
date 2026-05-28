@@ -250,9 +250,96 @@ Next ordered tasks:
 ```text
 1. Completed: Stage 1.1 committed as c30f4d6.
 2. Completed: Stage 1.2 / smoke:docker-compose committed as c5fee50.
-3. Completed: M3 config generation vertical slice.
+3. Completed: M3 config generation vertical slice, committed as 4838a1f.
 4. Current: OpenClaw real-mode E2E proof.
 5. Then: Tauri shell initial proof.
+```
+
+## 2026-05-28 OpenClaw Real Mode And Tauri Shell Checkpoint
+
+Task 5 is implemented to the current environment boundary.
+
+OpenClaw real-mode changes:
+
+```text
+Added scripts/smoke-openclaw-real.ps1.
+Added npm script: npm run smoke:openclaw-real.
+Updated apps/dbos-worker/src/adapters/openclaw.ts:
+  - OpenClaw external session ids are sanitized because OpenClaw rejects colons.
+  - OpenClaw JSON extraction now reads payloads[0].text and finalAssistant* fields.
+Updated packages/db/src/model-calls.ts and activities error handling:
+  - model-call error text strips NUL bytes before PostgreSQL writes.
+Updated tool.openclaw_agent_completed event payload to include mode.
+```
+
+Real-mode validation:
+
+```text
+Direct OpenClaw CLI probe:
+  OpenClaw 2026.5.7 (eeef486)
+  writer-agent direct call returned JSON.
+
+First orchestrator real-mode attempt:
+  job=JOB-20260528-2B3CB19D
+  exposed two real bugs:
+    1. OpenClaw rejects colon-containing session ids.
+    2. WSL/OpenClaw error text can include NUL bytes that PostgreSQL rejects.
+  Both bugs were fixed.
+
+npm run smoke:openclaw-real -> passed
+  job=JOB-20260528-C809526F
+  terminalStatus=succeeded
+  routingMode=classic_master_slave
+  realCompletionEvents=1
+  stageOutputArtifacts=1
+```
+
+Tauri shell changes:
+
+```text
+Added apps/desktop-app:
+  package.json
+  index.html
+  tsconfig.json
+  vite.config.ts
+  src/api.ts
+  src/main.tsx
+  src/styles.css
+  src-tauri/Cargo.toml
+  src-tauri/build.rs
+  src-tauri/src/main.rs
+  src-tauri/tauri.conf.json
+  README.md
+Added scripts/smoke-tauri-shell.ps1.
+Added npm script: npm run smoke:tauri-shell.
+Updated README.md and SETUP.md with real-mode and Tauri shell instructions.
+```
+
+Tauri validation:
+
+```text
+npm run smoke:tauri-shell -> passed
+  shell files present
+  API client present
+  Tauri config present
+  Cargo manifest present
+  rustToolchain=missing
+  buildRunnable=false
+
+Interpretation:
+  Tauri shell scaffold is present and structurally valid. Full Tauri build was
+  not run because this Windows host currently has no cargo/rustc installed.
+```
+
+Next ordered tasks after Task 5:
+
+```text
+1. Commit Task 5 changes.
+2. Add CI: npm run check + smoke:http-only + smoke:m3-config + smoke:tauri-shell.
+3. Add INSTALL.md / SECURITY.md / LICENSE.
+4. Add job timeline/inspect endpoint or CLI.
+5. Add cancel job API.
+6. Install Rust toolchain and run a real Tauri build.
 ```
 
 ## 2026-05-28 Product Direction Correction
