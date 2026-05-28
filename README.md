@@ -6,6 +6,24 @@ OpenClaw and ClawPanel are external products. This repository contains the
 platform code, templates, docs, and local verification scripts that orchestrate
 OpenClaw agents through a CLI adapter.
 
+## Quickstart
+
+```powershell
+docker compose up --build
+```
+
+In another terminal:
+
+```powershell
+$body = @{ prompt = 'demo multi-agent job'; requesterId = 'quickstart' } | ConvertTo-Json
+$job = Invoke-RestMethod -Uri 'http://localhost:3000/jobs' -Method Post -ContentType 'application/json' -Body $body
+Invoke-RestMethod -Uri "http://localhost:3000/jobs/$($job.jobId)"
+Invoke-RestMethod -Uri "http://localhost:3000/jobs/$($job.jobId)/messages"
+```
+
+The default Docker Compose path is HTTP-only and mock-mode. Feishu and real
+OpenClaw are optional adapters/modes configured after the core stack is running.
+
 ## Repository Layout
 
 ```text
@@ -31,6 +49,8 @@ SETUP.md
 
 ```powershell
 npm run check
+npm run build
+npm run smoke:docker-compose
 npm run smoke:http-only
 npm run smoke:feishu-webhook
 npm run smoke:m2-recovery

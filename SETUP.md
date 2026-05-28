@@ -39,6 +39,58 @@ Business state still lives in the `agent` schema.
 
 ## Local Services
 
+For the open-source quickstart path, start the full HTTP-only stack:
+
+```powershell
+docker compose up --build
+```
+
+This starts:
+
+```text
+postgres
+orchestrator-api  http://localhost:3000
+dbos-worker       optional recovery worker
+```
+
+Default Docker Compose mode:
+
+```text
+FEISHU_ADAPTER_ENABLED=false
+FEISHU_DRY_RUN=true
+OPENCLAW_AGENT_MODE=mock
+```
+
+Create a demo job:
+
+```powershell
+$body = @{ prompt = 'demo multi-agent job'; requesterId = 'quickstart' } | ConvertTo-Json
+$job = Invoke-RestMethod -Uri 'http://localhost:3000/jobs' -Method Post -ContentType 'application/json' -Body $body
+Invoke-RestMethod -Uri "http://localhost:3000/jobs/$($job.jobId)"
+Invoke-RestMethod -Uri "http://localhost:3000/jobs/$($job.jobId)/messages"
+```
+
+Stop the quickstart stack:
+
+```powershell
+docker compose down
+```
+
+The Postgres and job-data volumes are persistent. Use `docker compose down -v`
+only when you intentionally want to delete local state.
+
+Repeatable Docker quickstart smoke:
+
+```powershell
+npm run smoke:docker-compose
+```
+
+The smoke starts the full Compose stack, creates a job through `POST /jobs`,
+polls it to `succeeded`, reads `GET /jobs/:jobId/messages`, restarts the stack,
+and verifies the job is still present.
+
+## Local Development Services
+
 Start Postgres, run migrations, and launch the API:
 
 ```powershell

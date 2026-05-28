@@ -2,7 +2,7 @@ name: agent-openclaw
 
 services:
   postgres:
-    image: postgres:16
+    image: postgres:17-alpine
     container_name: agent-openclaw-postgres
     environment:
       POSTGRES_USER: temporal
@@ -18,5 +18,56 @@ services:
       timeout: 5s
       retries: 20
 
+  orchestrator-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: agent-openclaw-orchestrator-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://temporal:temporal@postgres:5432/temporal
+      DBOS_SYSTEM_DATABASE_URL: postgresql://temporal:temporal@postgres:5432/temporal
+      DBOS_SYSTEM_DATABASE_SCHEMA: dbos
+      ORCHESTRATOR_PORT: "3000"
+      JOB_DATA_DIR: /app/data/jobs
+      FEISHU_ADAPTER_ENABLED: "false"
+      FEISHU_DRY_RUN: "true"
+      OPENCLAW_AGENT_MODE: mock
+    ports:
+      - "3000:3000"
+    volumes:
+      - job-data:/app/data/jobs
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"fetch('http://localhost:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  dbos-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: agent-openclaw-dbos-worker
+    depends_on:
+      orchestrator-api:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://temporal:temporal@postgres:5432/temporal
+      DBOS_SYSTEM_DATABASE_URL: postgresql://temporal:temporal@postgres:5432/temporal
+      DBOS_SYSTEM_DATABASE_SCHEMA: dbos
+      JOB_DATA_DIR: /app/data/jobs
+      FEISHU_ADAPTER_ENABLED: "false"
+      FEISHU_DRY_RUN: "true"
+      OPENCLAW_AGENT_MODE: mock
+    volumes:
+      - job-data:/app/data/jobs
+
 volumes:
+  job-data:
   postgres-data:

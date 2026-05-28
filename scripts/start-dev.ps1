@@ -40,7 +40,7 @@ if (-not (Test-DockerReady)) {
 }
 
 Set-Location $root
-& $dockerCli compose up -d --remove-orphans
+& $dockerCli compose up -d --remove-orphans postgres
 if ($LASTEXITCODE -ne 0) {
   throw "docker compose up failed"
 }

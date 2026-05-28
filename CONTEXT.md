@@ -84,10 +84,108 @@ fail until VPS Nginx/frp routing is configured.
 Next ordered tasks:
 
 ```text
-1. Review/stabilize Stage 1.1 diff and commit it when approved.
+1. Completed: Stage 1.1 committed as c30f4d6 Add adapter-based ingress and egress.
 2. Stage 1.2: Docker Compose one-command quickstart, default HTTP-only.
 3. Add smoke:docker-compose on a clean runner path.
 4. After Docker quickstart, start M3 config generation vertical slice.
+5. Later: OpenClaw real-mode E2E proof and Tauri shell.
+```
+
+## 2026-05-28 Stage 1.2 Docker Compose Quickstart Checkpoint
+
+Task 2 is implemented: Docker Compose now describes the default open-source
+quickstart stack.
+
+Code changes:
+
+```text
+Added .dockerignore.
+Added Dockerfile.api.
+Added Dockerfile.worker.
+Added packages/db/src/wait-for-postgres.ts.
+Updated docker-compose.yml:
+  postgres: postgres:17-alpine with persistent postgres-data volume.
+  orchestrator-api: HTTP API on port 3000, runs wait -> migrate -> server.
+  dbos-worker: optional recovery worker, starts after API is healthy.
+  job-data volume persists generated job files.
+  default env is HTTP-only + mock:
+    FEISHU_ADAPTER_ENABLED=false
+    FEISHU_DRY_RUN=true
+    OPENCLAW_AGENT_MODE=mock
+Updated scripts/start-dev.ps1 to start only the postgres service so local dev
+does not collide with the Docker quickstart API container.
+Updated README.md and SETUP.md so docker compose up --build is the public
+quickstart path.
+```
+
+Validation:
+
+```text
+npm run build -> passed
+npm run check -> passed
+docker compose config -> passed
+```
+
+Next ordered tasks:
+
+```text
+1. Completed: Stage 1.1 committed as c30f4d6.
+2. Completed: Stage 1.2 Docker Compose quickstart files/config.
+3. Current: add and run smoke:docker-compose from up -> POST /jobs -> poll -> messages -> down.
+4. Next: M3 config generation vertical slice.
+5. Later: OpenClaw real-mode E2E proof and Tauri shell.
+```
+
+## 2026-05-28 Docker Compose Smoke Checkpoint
+
+Task 3 is implemented and verified.
+
+Code changes:
+
+```text
+Added scripts/smoke-docker-compose.ps1.
+Added npm script: npm run smoke:docker-compose.
+Updated README.md and SETUP.md to include the repeatable Docker smoke.
+```
+
+Smoke behavior:
+
+```text
+1. stops local dev stack;
+2. uses isolated compose project agent-openclaw-smoke;
+3. docker compose up -d --build;
+4. waits for /health;
+5. POST /jobs through HTTP core ingress;
+6. polls job to succeeded;
+7. reads GET /jobs/:jobId/messages;
+8. docker compose down, then up again without deleting the smoke volume;
+9. verifies the job is still present;
+10. final cleanup removes only the smoke project volumes.
+```
+
+Validation:
+
+```text
+npm run smoke:docker-compose -> passed
+  job=JOB-20260528-A047A8AC
+  terminalStatus=succeeded
+  ingressOrigin=http
+  messageCount=4
+  persistenceCheck=passed
+
+Note:
+  The first attempt exposed a local Postgres 16 volume vs Postgres 17 image
+  incompatibility. The smoke now uses an isolated compose project so it does
+  not touch or delete the user's existing default development volume.
+```
+
+Next ordered tasks:
+
+```text
+1. Completed: Stage 1.1 committed as c30f4d6.
+2. Completed: Stage 1.2 Docker Compose quickstart.
+3. Completed: smoke:docker-compose verified.
+4. Current: M3 config generation vertical slice.
 5. Later: OpenClaw real-mode E2E proof and Tauri shell.
 ```
 
