@@ -334,7 +334,7 @@ Interpretation:
 Next ordered tasks after Task 5:
 
 ```text
-1. Commit Task 5 changes.
+1. Completed: Task 5 committed as 1c1b194 Prove real mode and scaffold desktop shell.
 2. Add CI: npm run check + smoke:http-only + smoke:m3-config + smoke:tauri-shell.
 3. Add INSTALL.md / SECURITY.md / LICENSE.
 4. Add job timeline/inspect endpoint or CLI.
