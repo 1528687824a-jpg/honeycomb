@@ -275,6 +275,47 @@ Next ordered tasks:
 3. Then: cancel job API.
 ```
 
+## 2026-05-30 Tauri Build Toolchain Attempt
+
+Local Tauri real-build proof is still blocked by host toolchain installation.
+
+What happened:
+
+```text
+Initial probe:
+  cargo -> missing
+  rustc -> missing
+  rustup -> missing
+
+Attempted:
+  winget install --id Rustlang.Rustup -e --silent
+    --accept-package-agreements --accept-source-agreements
+
+Result:
+  the command timed out after 10 minutes;
+  winget.exe and rustup-init.exe continued running but sat idle;
+  both processes were stopped to avoid leaving a hung installer.
+```
+
+Interpretation:
+
+```text
+This is a host/tooling blocker, not a repo-code blocker. Do not mark Tauri real
+build proof complete yet. The current verified Tauri status remains:
+  npm run smoke:tauri-shell -> passed
+  rustToolchain=missing
+  buildRunnable=false
+```
+
+Next ordered tasks:
+
+```text
+1. Current: job timeline/inspect endpoint.
+2. Then: cancel job API.
+3. Later: retry Rust/Tauri real build after Rustup can be installed manually or
+   through a non-hanging installer path.
+```
+
 ## 2026-05-28 Stage 1.1 Adapter Abstraction Checkpoint
 
 Stage 1.1 is implemented: HTTP is now the core ingress/egress path and Feishu
