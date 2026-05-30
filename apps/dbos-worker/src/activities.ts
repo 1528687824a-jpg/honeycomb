@@ -259,6 +259,11 @@ export async function markJobRunning(jobId: string) {
   await setJobStatus(jobId, "running");
 }
 
+export async function isJobCancelled(jobId: string) {
+  const job = await getJob(jobId);
+  return job?.status === "cancelled";
+}
+
 export async function getJobRoutingMode(jobId: string): Promise<RoutingMode> {
   const job = await getJob(jobId);
   if (!job) {
@@ -1569,7 +1574,15 @@ export async function finalizeJob(jobId: string) {
     uri: finalPath
   });
 
-  await setJobFinalOutput(jobId, finalOutput);
+  const finalized = await setJobFinalOutput(jobId, finalOutput);
+  if (!finalized) {
+    return {
+      finalOutput: "",
+      finalArtifactId: artifact.id,
+      finalPath
+    };
+  }
+
   await postGroupMessage({
     id: `${jobId}-MSG-FINAL`,
     jobId,

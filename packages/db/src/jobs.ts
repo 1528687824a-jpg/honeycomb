@@ -118,14 +118,21 @@ export async function setJobStatus(
   status: JobStatus,
   payload: Record<string, unknown> = {}
 ) {
-  await pool.query(
+  const result = await pool.query(
     `update agent.jobs
      set status = $2, updated_at = now()
-     where id = $1`,
+     where id = $1
+       and (status <> 'cancelled' or $2 = 'cancelled')
+     returning id`,
     [jobId, status]
   );
 
+  if (result.rowCount === 0) {
+    return false;
+  }
+
   await appendJobEvent(jobId, `job.${status}`, payload);
+  return true;
 }
 
 export async function setJobWorkflowId(jobId: string, workflowId: string) {
@@ -151,17 +158,95 @@ export async function setJobWorkdir(jobId: string, workdir: string) {
 }
 
 export async function setJobFinalOutput(jobId: string, finalOutput: string) {
-  await pool.query(
+  const result = await pool.query(
     `update agent.jobs
      set final_output = $2,
          status = 'succeeded',
          completed_at = coalesce(completed_at, now()),
          updated_at = now()
-     where id = $1`,
+     where id = $1
+       and status <> 'cancelled'
+     returning id`,
     [jobId, finalOutput]
   );
 
+  if (result.rowCount === 0) {
+    return false;
+  }
+
   await appendJobEvent(jobId, "job.succeeded", { finalOutput });
+  return true;
+}
+
+export async function cancelJob(input: {
+  jobId: string;
+  reason?: string;
+  requesterId?: string;
+}) {
+  const job = await getJob(input.jobId);
+  if (!job) {
+    return {
+      job: null,
+      changed: false,
+      reason: "job_not_found"
+    } as const;
+  }
+
+  if (job.status === "succeeded" || job.status === "failed") {
+    return {
+      job,
+      changed: false,
+      reason: "already_terminal"
+    } as const;
+  }
+
+  if (job.status === "cancelled") {
+    return {
+      job,
+      changed: false,
+      reason: "already_cancelled"
+    } as const;
+  }
+
+  const result = await pool.query(
+    `update agent.jobs
+     set status = 'cancelled',
+         completed_at = coalesce(completed_at, now()),
+         updated_at = now()
+     where id = $1
+       and status not in ('succeeded', 'failed', 'cancelled')
+     returning *`,
+    [input.jobId]
+  );
+
+  if (!result.rows[0]) {
+    const latest = await getJob(input.jobId);
+    return {
+      job: latest,
+      changed: false,
+      reason: "not_cancelled"
+    } as const;
+  }
+
+  const cancelled = toJobRecord(result.rows[0]);
+  await appendJobEvent(
+    input.jobId,
+    "job.cancelled",
+    {
+      reason: input.reason ?? null,
+      requesterId: input.requesterId ?? null,
+      previousStatus: job.status
+    },
+    {
+      actor: "user"
+    }
+  );
+
+  return {
+    job: cancelled,
+    changed: true,
+    reason: "cancelled"
+  } as const;
 }
 
 export async function archiveJobSession(input: {

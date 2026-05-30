@@ -65,6 +65,7 @@ npm run smoke:feishu-webhook
 npm run smoke:m2-recovery
 npm run smoke:m3-config
 npm run smoke:m3-real-planner
+npm run smoke:cancel-job
 npm run smoke:tauri-shell
 ```
 

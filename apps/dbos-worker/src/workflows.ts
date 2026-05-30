@@ -46,6 +46,10 @@ const markJobRunning = DBOS.registerStep(activities.markJobRunning, {
   name: "markJobRunning",
   ...retryingStepConfig
 });
+const isJobCancelled = DBOS.registerStep(activities.isJobCancelled, {
+  name: "isJobCancelled",
+  ...retryingStepConfig
+});
 const markJobWaitingForHuman = DBOS.registerStep(activities.markJobWaitingForHuman, {
   name: "markJobWaitingForHuman",
   ...retryingStepConfig
@@ -115,9 +119,17 @@ async function hasModelCallBudget(
 
 async function runSupervisorPipeline(jobId: string, stages: StageRecord[]) {
   for (const stage of stages) {
+    if (await isJobCancelled(jobId)) {
+      return "cancelled";
+    }
+
     let passed = false;
 
     for (let attemptNo = 1; attemptNo <= stage.maxRetries; attemptNo++) {
+      if (await isJobCancelled(jobId)) {
+        return "cancelled";
+      }
+
       if (!(await hasModelCallBudget(jobId, "stage-agent", stage.agentId))) {
         return "waiting_for_human";
       }
@@ -131,6 +143,10 @@ async function runSupervisorPipeline(jobId: string, stages: StageRecord[]) {
         outputMessageType: "stage_output_to_test"
       });
       crashAfterStageAgent(jobId, stage, attemptNo);
+
+      if (await isJobCancelled(jobId)) {
+        return "cancelled";
+      }
 
       if (!(await hasModelCallBudget(jobId, "test-agent", "test-agent"))) {
         return "waiting_for_human";
@@ -187,6 +203,10 @@ async function runSupervisorPipeline(jobId: string, stages: StageRecord[]) {
 
 async function runSequentialPipeline(jobId: string, stages: StageRecord[]) {
   for (const [index, stage] of stages.entries()) {
+    if (await isJobCancelled(jobId)) {
+      return "cancelled";
+    }
+
     const nextStage = stages[index + 1] ?? null;
     if (!(await hasModelCallBudget(jobId, "stage-agent", stage.agentId))) {
       return "waiting_for_human";
@@ -216,6 +236,10 @@ async function runSequentialPipeline(jobId: string, stages: StageRecord[]) {
 
 async function runClassicMasterSlave(jobId: string, stages: StageRecord[]) {
   for (const stage of stages) {
+    if (await isJobCancelled(jobId)) {
+      return "cancelled";
+    }
+
     if (!(await hasModelCallBudget(jobId, "stage-agent", stage.agentId))) {
       return "waiting_for_human";
     }
@@ -243,7 +267,15 @@ async function runClassicMasterSlave(jobId: string, stages: StageRecord[]) {
 
 async function runMasterSlaveDiscussion(jobId: string, stages: StageRecord[], discussionRounds: number) {
   for (let roundNo = 1; roundNo <= discussionRounds; roundNo++) {
+    if (await isJobCancelled(jobId)) {
+      return "cancelled";
+    }
+
     for (const [index, stage] of stages.entries()) {
+      if (await isJobCancelled(jobId)) {
+        return "cancelled";
+      }
+
       const nextStage = stages.length > 1 ? stages[(index + 1) % stages.length] : null;
       if (!(await hasModelCallBudget(jobId, "stage-agent", stage.agentId))) {
         return "waiting_for_human";
@@ -294,8 +326,29 @@ async function runRoutingMode(jobId: string, routingMode: RoutingMode, stages: S
 }
 
 async function jobPipelineWorkflow(input: JobWorkflowInput) {
+  if (await isJobCancelled(input.jobId)) {
+    return {
+      jobId: input.jobId,
+      status: "cancelled"
+    };
+  }
+
   await markJobRunning(input.jobId);
+  if (await isJobCancelled(input.jobId)) {
+    return {
+      jobId: input.jobId,
+      status: "cancelled"
+    };
+  }
+
   const prepared = await prepareJobWorkspace(input.jobId);
+  if (await isJobCancelled(input.jobId)) {
+    return {
+      jobId: input.jobId,
+      status: "cancelled"
+    };
+  }
+
   const stages = await createPipelinePlan({
     jobId: input.jobId,
     userRequestArtifactId: prepared.userRequestArtifactId
@@ -303,7 +356,7 @@ async function jobPipelineWorkflow(input: JobWorkflowInput) {
   const routingMode = await getJobRoutingMode(input.jobId);
   const status = await runRoutingMode(input.jobId, routingMode, stages);
 
-  if (status === "waiting_for_human") {
+  if (status === "waiting_for_human" || status === "cancelled") {
     return {
       jobId: input.jobId,
       status
@@ -312,6 +365,13 @@ async function jobPipelineWorkflow(input: JobWorkflowInput) {
 
   let finalQualitySourceArtifactId: string | null = null;
   if (routingMode === "master_slave_discussion") {
+    if (await isJobCancelled(input.jobId)) {
+      return {
+        jobId: input.jobId,
+        status: "cancelled"
+      };
+    }
+
     if (!(await hasModelCallBudget(input.jobId, "main-agent-synthesis", "main-agent"))) {
       return {
         jobId: input.jobId,
@@ -328,6 +388,13 @@ async function jobPipelineWorkflow(input: JobWorkflowInput) {
     routingMode
   });
   if (finalGate.enabled) {
+    if (await isJobCancelled(input.jobId)) {
+      return {
+        jobId: input.jobId,
+        status: "cancelled"
+      };
+    }
+
     if (!finalQualitySourceArtifactId) {
       finalQualitySourceArtifactId = await getLatestStageOutputArtifactId(input.jobId);
     }
@@ -355,6 +422,13 @@ async function jobPipelineWorkflow(input: JobWorkflowInput) {
         status: "waiting_for_human"
       };
     }
+  }
+
+  if (await isJobCancelled(input.jobId)) {
+    return {
+      jobId: input.jobId,
+      status: "cancelled"
+    };
   }
 
   await finalizeJob(input.jobId);

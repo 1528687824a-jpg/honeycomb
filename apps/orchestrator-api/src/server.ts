@@ -3,6 +3,7 @@ import express from "express";
 import { z } from "zod";
 import {
   appendJobEvent,
+  cancelJob,
   createJob,
   getJob,
   getJobByFeishuMessageId
@@ -21,6 +22,11 @@ const unstickModelCallSchema = z.object({
 
 const timelineQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(1000).optional()
+});
+
+const cancelJobSchema = z.object({
+  reason: z.string().max(500).optional(),
+  requesterId: z.string().max(200).optional()
 });
 
 function requireAdminToken(request: express.Request, response: express.Response) {
@@ -140,6 +146,41 @@ async function main() {
         jobId: job.id,
         ingressOrigin: job.ingressOrigin,
         messages
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/jobs/:jobId/cancel", async (request, response, next) => {
+    try {
+      const input = cancelJobSchema.parse(request.body ?? {});
+      const result = await cancelJob({
+        jobId: request.params.jobId,
+        reason: input.reason,
+        requesterId: input.requesterId
+      });
+
+      if (!result.job) {
+        response.status(404).json({ error: "job_not_found" });
+        return;
+      }
+
+      if (result.reason === "already_terminal") {
+        response.status(409).json({
+          error: "job_already_terminal",
+          jobId: result.job.id,
+          status: result.job.status
+        });
+        return;
+      }
+
+      response.json({
+        ok: true,
+        changed: result.changed,
+        reason: result.reason,
+        jobId: result.job.id,
+        status: result.job.status
       });
     } catch (error) {
       next(error);

@@ -369,6 +369,69 @@ Next ordered tasks:
    through a non-hanging installer path.
 ```
 
+## 2026-05-30 Cancel Job API Checkpoint
+
+Implemented cooperative job cancellation.
+
+Code changes:
+
+```text
+Added POST /jobs/:jobId/cancel.
+Request body:
+  reason?: string
+  requesterId?: string
+
+API behavior:
+  - 404 for missing job;
+  - 409 for succeeded/failed jobs;
+  - idempotent success for already-cancelled jobs;
+  - non-terminal jobs become cancelled and emit job.cancelled.
+
+packages/db/src/jobs.ts:
+  - added cancelJob;
+  - setJobStatus no longer overwrites cancelled jobs with later non-cancel
+    statuses;
+  - setJobFinalOutput does not mark cancelled jobs succeeded.
+
+apps/dbos-worker:
+  - added isJobCancelled DBOS step;
+  - workflow checks cancellation at major step boundaries and routing loops;
+  - finalizeJob skips final message/archive if the final status update is
+    blocked by cancellation.
+
+Added scripts/smoke-cancel-job.ps1 and npm run smoke:cancel-job.
+README.md and SETUP.md now include the cancel smoke.
+```
+
+Validation:
+
+```text
+npm run smoke:cancel-job -> passed
+  job=JOB-20260530-F0E4DC1E
+  waitingStatus=waiting_for_human
+  cancelStatus=cancelled
+  secondCancelReason=already_cancelled
+  timelineCancelEvents=2
+
+npm run smoke:http-only -> passed after cancellation changes
+  job=JOB-20260530-5C02CBA4
+  terminalStatus=succeeded
+  timelineItemCount=86
+
+npm run check -> passed
+npm run check:no-secrets -> passed
+git diff --check -> passed; only Windows CRLF warnings were printed
+```
+
+Next ordered tasks:
+
+```text
+1. Retry Rust/Tauri real build after Rustup can be installed manually or through
+   a non-hanging installer path.
+2. Continue product work: desktop UI wiring can now read /jobs/:id/timeline and
+   call /jobs/:id/cancel.
+```
+
 ## 2026-05-28 Stage 1.1 Adapter Abstraction Checkpoint
 
 Stage 1.1 is implemented: HTTP is now the core ingress/egress path and Feishu

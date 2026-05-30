@@ -106,6 +106,7 @@ npm run check:no-secrets
 npm run smoke:http-only
 npm run smoke:m3-config
 npm run smoke:m3-real-planner
+npm run smoke:cancel-job
 npm run smoke:tauri-shell
 npm run smoke:m2-recovery
 ```
@@ -488,6 +489,28 @@ It verifies:
 3. GET /jobs/:jobId/messages returns the visible message chain.
 4. GET /jobs/:jobId/timeline returns a UI-friendly inspection timeline.
 5. No Feishu message id is attached to the HTTP-only job.
+```
+
+## Cancel Job Smoke
+
+Cancel a non-terminal job through the HTTP API:
+
+```powershell
+npm run smoke:cancel-job
+```
+
+The smoke creates a budget-limited job that reaches `waiting_for_human`, calls:
+
+```text
+POST /jobs/:jobId/cancel
+```
+
+and verifies:
+
+```text
+1. the job status becomes cancelled;
+2. repeating cancel is idempotent;
+3. GET /jobs/:jobId/timeline includes job.cancelled.
 ```
 
 M2.5 local quality/budget checks:
