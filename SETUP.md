@@ -89,6 +89,29 @@ The smoke starts the full Compose stack, creates a job through `POST /jobs`,
 polls it to `succeeded`, reads `GET /jobs/:jobId/messages`, restarts the stack,
 and verifies the job is still present.
 
+## Smoke Script Rules
+
+Run smoke scripts sequentially unless a script explicitly documents an isolated
+runtime. Several smokes start or stop the local dev stack through
+`npm run dev:start` / `npm run dev:stop`, share Postgres, and bind the same API
+port. Parallel runs can race migrations, kill each other's API process, or mix
+job polling across runs.
+
+Recommended order for a broad local pass:
+
+```powershell
+npm run check
+npm run smoke:http-only
+npm run smoke:m3-config
+npm run smoke:tauri-shell
+npm run smoke:m2-recovery
+```
+
+`npm run smoke:docker-compose` uses an isolated Compose project and can be run
+as a separate quickstart proof. `npm run smoke:feishu-public` is a private
+reference-deployment check for the author's public webhook path, not a product
+gate.
+
 ## M3 Config Generation Smoke
 
 M3 begins as a backend/CLI vertical slice. It does not require the Tauri UI.

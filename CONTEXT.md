@@ -58,6 +58,50 @@ Next ordered tasks:
 6. Later: job timeline/inspect endpoint and cancel job API.
 ```
 
+## 2026-05-30 Smoke Guidance And Tauri Shell Checkpoint
+
+Completed:
+
+```text
+Updated SETUP.md with Smoke Script Rules:
+  - run local smoke scripts sequentially;
+  - several scripts share npm run dev:start/dev:stop, Postgres, and port 3000;
+  - smoke:docker-compose uses an isolated Compose project and should be treated
+    as a separate quickstart proof;
+  - smoke:feishu-public remains a private/reference deployment check.
+
+Strengthened scripts/smoke-tauri-shell.ps1:
+  - asserts Vite dev server host/port/strictPort;
+  - asserts Tauri productName, identifier, devUrl, frontendDist;
+  - asserts desktop tauri:dev and tauri:build scripts;
+  - asserts Cargo package name and Tauri v2 dependency.
+```
+
+Validation:
+
+```text
+npm run smoke:tauri-shell -> passed
+  rustToolchain=missing
+  buildRunnable=false
+  checked=react_shell_files, api_client, vite_dev_server_config,
+          tauri_config, desktop_package_scripts, cargo_manifest,
+          rust_toolchain_probe
+
+npm run check -> passed
+git diff --check -> passed; only Windows CRLF warnings were printed
+```
+
+Next ordered tasks:
+
+```text
+1. Current: M3 real planner vertical slice behind explicit env/provider config.
+2. Then: CI for no-secret checks (check, http-only smoke, m3 smoke,
+   tauri-shell smoke).
+3. Then: INSTALL.md / SECURITY.md / CONTRIBUTING.md.
+4. Then: Rust toolchain + real Tauri build proof when host/tooling is ready.
+5. Later: job timeline/inspect endpoint and cancel job API.
+```
+
 ## 2026-05-28 Stage 1.1 Adapter Abstraction Checkpoint
 
 Stage 1.1 is implemented: HTTP is now the core ingress/egress path and Feishu
