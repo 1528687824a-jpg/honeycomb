@@ -11,6 +11,76 @@ This rule was confirmed by the user on 2026-05-28 and applies to subsequent
 work on this project unless the user changes it.
 ```
 
+## 2026-05-30 Desktop UI Integration Smoke Checkpoint
+
+Implemented a real browser UI smoke for the desktop MVP.
+
+Code changes:
+
+```text
+Added npm script:
+  npm run smoke:desktop-ui
+
+Added scripts/smoke-desktop-ui.ts:
+  - starts the local mock-mode API through npm run dev:start;
+  - starts or reuses the Vite desktop UI at http://127.0.0.1:5173;
+  - launches a headless Edge/Chrome browser through the DevTools protocol;
+  - records existing job IDs before submitting;
+  - fills the New Job form in the UI;
+  - clicks Start Job;
+  - waits for a newly-created job to appear in the list;
+  - selects that job;
+  - clicks Cancel;
+  - verifies cancelled state is visible;
+  - verifies timeline rows render;
+  - saves a desktop-size screenshot artifact.
+
+Updated README.md and SETUP.md with the new smoke command.
+```
+
+Validation:
+
+```text
+npm run smoke:desktop-ui -> passed
+  job=JOB-20260530-C1F9AE09
+  statusVisible=true
+  timelineItems=14
+  screenshot=.runtime/desktop-ui-smoke/desktop-ui-smoke.png
+  checked=desktop_ui_load, create_job_from_ui, job_list_selection,
+          cancel_job_from_ui, timeline_rendered
+
+Visual screenshot inspection passed:
+  shows created job, cancelled status, disabled Cancelled button, job list, and
+  timeline rows.
+
+npm run check -> passed
+npm run check:no-secrets -> passed
+git diff --check -> passed; only Windows CRLF warnings were printed
+```
+
+Known note:
+
+```text
+Node v24 on this Windows host cannot direct-spawn npm.cmd and returns EINVAL.
+The smoke therefore runs npm child commands through the Windows shell. Node
+prints a DEP0190 warning, but the commands are static and the smoke passes.
+```
+
+Next ordered tasks:
+
+```text
+1. Configure local M3 real provider variables and run npm run smoke:m3-real-provider.
+2. Try a genuinely different Rust path later, then run Tauri build proof.
+3. Current next product task: prod bundle verification for apps/desktop-app/dist.
+4. Then remote GitHub Actions run/push verification, ideally including the UI
+   smoke if the hosted browser path is available.
+5. Then smoke lock mechanism.
+6. Then cancel archival consistency.
+7. Then timeline since pagination.
+8. Then GET /jobs pagination/sort/search backlog.
+9. Then m2 recovery nightly CI.
+```
+
 ## 2026-05-30 Rust/Tauri Non-Winget Retry
 
 Tauri real build proof is still blocked by host Rust toolchain state.

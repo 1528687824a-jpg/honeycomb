@@ -108,6 +108,7 @@ npm run smoke:m3-config
 npm run smoke:m3-real-planner
 npm run smoke:m3-real-provider
 npm run smoke:cancel-job
+npm run smoke:desktop-ui
 npm run smoke:tauri-shell
 npm run smoke:m2-recovery
 ```
@@ -258,6 +259,17 @@ POST /jobs
 GET /jobs/:jobId/timeline
 POST /jobs/:jobId/cancel
 ```
+
+Browser UI integration smoke:
+
+```powershell
+npm run smoke:desktop-ui
+```
+
+This starts the local mock-mode API, starts or reuses the Vite desktop UI,
+opens it in a headless Edge/Chrome browser through DevTools, creates a job from
+the UI, cancels it from the UI, verifies the cancelled state and timeline render,
+and writes a screenshot under `.runtime/desktop-ui-smoke/`.
 
 ## Local Development Services
 
