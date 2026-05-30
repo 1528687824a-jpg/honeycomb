@@ -106,6 +106,7 @@ npm run check:no-secrets
 npm run smoke:http-only
 npm run smoke:m3-config
 npm run smoke:m3-real-planner
+npm run smoke:m3-real-provider
 npm run smoke:cancel-job
 npm run smoke:tauri-shell
 npm run smoke:m2-recovery
@@ -196,6 +197,23 @@ npm run smoke:m3-real-planner
 The smoke starts a local fake chat-completions provider and verifies that
 `m3:generate` calls it, parses the returned JSON plan, records planner metadata,
 and writes a generated stage order selected by the planner.
+
+To run a real provider end-to-end, set the M3 planner variables in the shell or
+local `.env`, then run:
+
+```powershell
+npm run smoke:m3-real-provider
+```
+
+This smoke calls the configured real planner, writes a generated
+`cluster.config.json`, starts the orchestrator with that config in mock
+OpenClaw mode, posts a demo job, and verifies DBOS executed the generated stage
+sequence. It fails fast when required provider variables are missing and does
+not print secret values. Known real-planner failure modes are tracked in:
+
+```text
+docs/m3-real-planner-known-issues.md
+```
 
 ## OpenClaw Real Mode Smoke
 

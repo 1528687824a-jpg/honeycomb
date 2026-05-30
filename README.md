@@ -69,9 +69,14 @@ npm run smoke:feishu-webhook
 npm run smoke:m2-recovery
 npm run smoke:m3-config
 npm run smoke:m3-real-planner
+npm run smoke:m3-real-provider
 npm run smoke:cancel-job
 npm run smoke:tauri-shell
 ```
+
+`smoke:m3-real-provider` is optional and requires local
+`M3_PLANNER_BASE_URL`, `M3_PLANNER_MODEL`, and `M3_PLANNER_API_KEY`
+configuration. It does not print secret values.
 
 Optional real OpenClaw check, requiring a configured WSL OpenClaw runtime:
 

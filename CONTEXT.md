@@ -11,6 +11,88 @@ This rule was confirmed by the user on 2026-05-28 and applies to subsequent
 work on this project unless the user changes it.
 ```
 
+## 2026-05-30 M3 Real Provider E2E Harness Checkpoint
+
+Claude's new review was read and compared with the existing roadmap.
+
+Judgment:
+
+```text
+Claude is right that UI integration smoke and prod-bundle verification should be
+added soon. Codex keeps M3 real provider E2E first because it is the highest
+product-value gap: M3 must prove a real planner can generate a runnable cluster.
+
+Current host limitation:
+The local .env does not currently contain M3_PLANNER_BASE_URL,
+M3_PLANNER_MODEL, or M3_PLANNER_API_KEY. Therefore a true real-provider E2E run
+cannot honestly pass on this machine yet. Do not fake this with the local fake
+provider.
+```
+
+Completed:
+
+```text
+Added npm script:
+  npm run smoke:m3-real-provider
+
+Added scripts/smoke-m3-real-provider.ps1:
+  - imports only M3 planner keys from process env or local .env;
+  - fails fast if M3_PLANNER_BASE_URL, M3_PLANNER_MODEL, or
+    M3_PLANNER_API_KEY are missing;
+  - never prints secret values;
+  - calls the configured real OpenAI-compatible planner through m3:generate;
+  - validates cluster.config.json source.planner=openai-compatible;
+  - starts the orchestrator with AGENT_CLUSTER_CONFIG_PATH;
+  - forces FEISHU_ADAPTER_ENABLED=false, FEISHU_DRY_RUN=true,
+    OPENCLAW_AGENT_MODE=mock;
+  - posts a demo job and verifies DBOS executed the real-planner-generated
+    stage sequence.
+
+Added docs/m3-real-planner-known-issues.md:
+  - real planner JSON contract;
+  - accepted roles;
+  - common failure modes such as non_json_response, unsupported_role,
+    empty_stage_list, invalid_routing_mode, over_planning, provider_timeout;
+  - secret-safe triage rule.
+
+Updated README.md and SETUP.md with the optional real-provider smoke.
+```
+
+Validation:
+
+```text
+npm run smoke:m3-real-provider -> expected safe fail on this host
+  missing: M3_PLANNER_BASE_URL, M3_PLANNER_MODEL, M3_PLANNER_API_KEY
+  secret values were not printed
+
+npm run check -> passed
+npm run smoke:m3-real-planner -> passed
+  plannerRequests=1
+  planner=openai-compatible
+  stageAgents=research-agent, writer-agent, video-agent
+npm run check:no-secrets -> passed
+git diff --check -> passed; only Windows CRLF warnings were printed
+```
+
+Next ordered tasks:
+
+```text
+1. Configure local M3 real provider variables and run:
+   npm run smoke:m3-real-provider
+   This is the remaining proof for the current M3 real-provider task.
+2. Rust/Tauri build via a non-winget path (manual rustup-init, Scoop, or another
+   non-hanging installer).
+3. UI integration smoke: create job through browser UI, inspect timeline, cancel,
+   and assert UI state changes.
+4. Prod bundle verification: serve apps/desktop-app/dist and rerun the UI smoke.
+5. Remote GitHub Actions run/push verification.
+6. Smoke lock mechanism so dev-stack smokes cannot trample each other.
+7. Cancel archival consistency check/fix.
+8. Timeline since pagination.
+9. GET /jobs pagination/sort/search backlog.
+10. m2 recovery nightly CI.
+```
+
 ## 2026-05-30 Desktop UI MVP Checkpoint
 
 Claude's latest review was re-read and combined with Codex's current judgment.
