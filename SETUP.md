@@ -101,11 +101,26 @@ Recommended order for a broad local pass:
 
 ```powershell
 npm run check
+npm run check:no-secrets
 npm run smoke:http-only
 npm run smoke:m3-config
 npm run smoke:m3-real-planner
 npm run smoke:tauri-shell
 npm run smoke:m2-recovery
+```
+
+GitHub Actions runs the CI-safe subset:
+
+```text
+Windows:
+  npm run check
+  npm run check:no-secrets
+  npm run smoke:m3-real-planner
+  npm run smoke:tauri-shell
+
+Ubuntu:
+  docker compose up -d --build
+  POST /jobs -> poll succeeded -> GET /jobs/:id/messages
 ```
 
 `npm run smoke:docker-compose` uses an isolated Compose project and can be run

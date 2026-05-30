@@ -53,6 +53,7 @@ Apache-2.0. See `LICENSE`.
 
 ```powershell
 npm run check
+npm run check:no-secrets
 npm run build
 npm run smoke:docker-compose
 npm run smoke:http-only

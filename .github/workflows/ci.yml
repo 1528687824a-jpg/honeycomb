@@ -1,0 +1,128 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  node-smokes:
+    name: Node and smoke checks
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npm run check
+
+      - name: Secret hygiene check
+        run: npm run check:no-secrets
+
+      - name: M3 real-planner smoke
+        run: npm run smoke:m3-real-planner
+
+      - name: Tauri shell smoke
+        run: npm run smoke:tauri-shell
+
+  docker-quickstart:
+    name: Docker quickstart
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Start HTTP-only stack
+        run: docker compose up -d --build
+
+      - name: Smoke HTTP job
+        run: |
+          node <<'NODE'
+          const baseUrl = "http://localhost:3000";
+
+          async function sleep(ms) {
+            return new Promise((resolve) => setTimeout(resolve, ms));
+          }
+
+          for (let attempt = 0; attempt < 60; attempt++) {
+            try {
+              const health = await fetch(`${baseUrl}/health`);
+              if (health.ok) {
+                break;
+              }
+            } catch {
+              // Keep polling until the container health endpoint is ready.
+            }
+            if (attempt === 59) {
+              throw new Error("API health check did not become ready");
+            }
+            await sleep(2000);
+          }
+
+          const createResponse = await fetch(`${baseUrl}/jobs`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              prompt: "CI Docker quickstart smoke",
+              requesterId: "ci"
+            })
+          });
+          if (!createResponse.ok) {
+            throw new Error(`POST /jobs failed: ${createResponse.status}`);
+          }
+          const created = await createResponse.json();
+
+          let job;
+          for (let attempt = 0; attempt < 120; attempt++) {
+            const response = await fetch(`${baseUrl}/jobs/${created.jobId}`);
+            if (!response.ok) {
+              throw new Error(`GET /jobs failed: ${response.status}`);
+            }
+            job = await response.json();
+            if (["succeeded", "failed", "waiting_for_human", "cancelled"].includes(job.status)) {
+              break;
+            }
+            await sleep(1000);
+          }
+
+          if (!job || job.status !== "succeeded") {
+            throw new Error(`Unexpected terminal status: ${job?.status}`);
+          }
+          if (job.ingressOrigin !== "http") {
+            throw new Error(`Expected HTTP ingress origin, got ${job.ingressOrigin}`);
+          }
+
+          const messagesResponse = await fetch(`${baseUrl}/jobs/${created.jobId}/messages`);
+          if (!messagesResponse.ok) {
+            throw new Error(`GET /jobs/:id/messages failed: ${messagesResponse.status}`);
+          }
+          const messages = await messagesResponse.json();
+          if (!Array.isArray(messages.messages) || messages.messages.length === 0) {
+            throw new Error("Expected at least one HTTP egress message");
+          }
+
+          console.log(JSON.stringify({
+            ok: true,
+            jobId: created.jobId,
+            terminalStatus: job.status,
+            ingressOrigin: job.ingressOrigin,
+            messageCount: messages.messages.length
+          }, null, 2));
+          NODE
+
+      - name: Stop HTTP-only stack
+        if: always()
+        run: docker compose down -v

@@ -171,6 +171,65 @@ Next ordered tasks:
 4. Later: job timeline/inspect endpoint and cancel job API.
 ```
 
+## 2026-05-30 CI Checkpoint
+
+CI scaffolding is added for the open-source product path.
+
+Code changes:
+
+```text
+Added .github/workflows/ci.yml with two jobs:
+  node-smokes on windows-latest:
+    npm ci
+    npm run check
+    npm run check:no-secrets
+    npm run smoke:m3-real-planner
+    npm run smoke:tauri-shell
+
+  docker-quickstart on ubuntu-latest:
+    docker compose up -d --build
+    POST /jobs
+    poll job to succeeded
+    verify ingressOrigin=http
+    GET /jobs/:id/messages
+    docker compose down -v
+
+Added scripts/check-no-secrets.ts and npm run check:no-secrets.
+The check scans tracked files for high-confidence secret-looking tokens and
+non-placeholder values for sensitive env names, while allowing documented local
+smoke placeholders and GitHub secrets references.
+
+Updated README.md and SETUP.md with the new check and CI-safe subset.
+```
+
+Local validation:
+
+```text
+npm run check -> passed
+npm run check:no-secrets -> passed
+npm run smoke:m3-real-planner -> passed
+npm run smoke:tauri-shell -> passed
+docker compose config -> passed
+git diff --check -> passed; only Windows CRLF warnings were printed
+```
+
+Notes:
+
+```text
+The full GitHub Actions workflow has not run remotely from this local session.
+The Ubuntu docker-quickstart job is designed to test the HTTP-only product path
+without relying on Windows PowerShell scripts.
+```
+
+Next ordered tasks:
+
+```text
+1. Current: INSTALL.md / SECURITY.md / CONTRIBUTING.md.
+2. Then: Rust toolchain + real Tauri build proof when host/tooling is ready.
+3. Then: job timeline/inspect endpoint.
+4. Then: cancel job API.
+```
+
 ## 2026-05-28 Stage 1.1 Adapter Abstraction Checkpoint
 
 Stage 1.1 is implemented: HTTP is now the core ingress/egress path and Feishu

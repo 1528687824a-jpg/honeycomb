@@ -22,6 +22,7 @@
     "m3:generate": "tsx scripts/generate-cluster-config.ts",
     "prepare:public-ingress": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-public-ingress-bundle.ps1",
     "maintenance:cleanup-sessions": "tsx scripts/cleanup-expired-sessions.ts",
+    "check:no-secrets": "tsx scripts/check-no-secrets.ts",
     "check": "tsc --noEmit"
   },
   "dependencies": {
