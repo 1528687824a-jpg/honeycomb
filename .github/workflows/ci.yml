@@ -45,6 +45,12 @@ jobs:
         with:
           node-version: 22
 
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Install desktop dependencies
+        run: npm ci --prefix apps/desktop-app
+
       - name: Start HTTP-only stack
         run: docker compose up -d --build
 
@@ -122,6 +128,11 @@ jobs:
             messageCount: messages.messages.length
           }, null, 2));
           NODE
+
+      - name: Desktop UI production smoke
+        env:
+          DESKTOP_UI_SMOKE_PORT: "5173"
+        run: npm run smoke:desktop-ui-prod -- --skip-api-start
 
       - name: Stop HTTP-only stack
         if: always()

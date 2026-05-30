@@ -277,6 +277,13 @@ and writes a screenshot under `.runtime/desktop-ui-smoke/`.
 `apps/desktop-app/dist` on `http://127.0.0.1:5174`, and repeats the same browser
 flow so dev-server and production-bundle behavior cannot drift silently.
 
+For CI or docker-compose environments where the API is already running:
+
+```powershell
+$env:DESKTOP_UI_SMOKE_PORT = '5173'
+npm run smoke:desktop-ui-prod -- --skip-api-start
+```
+
 ## Local Development Services
 
 Start Postgres, run migrations, and launch the API:

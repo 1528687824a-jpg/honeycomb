@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createReadStream } from "node:fs";
 import { mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
@@ -12,7 +12,8 @@ const desktopDir = path.join(root, "apps", "desktop-app");
 const runtimeDir = path.join(root, ".runtime", "desktop-ui-smoke");
 const apiUrl = "http://localhost:3000";
 const mode = process.argv.includes("--prod") ? "prod" : "dev";
-const uiPort = mode === "prod" ? 5174 : 5173;
+const skipApiStart = process.argv.includes("--skip-api-start");
+const uiPort = Number(process.env.DESKTOP_UI_SMOKE_PORT ?? (mode === "prod" ? 5174 : 5173));
 const uiUrl = `http://127.0.0.1:${uiPort}`;
 const screenshotPath = path.join(runtimeDir, `desktop-ui-${mode}-smoke.png`);
 
@@ -21,6 +22,10 @@ type CdpResponse = {
   result?: any;
   error?: { message?: string };
 };
+
+function logStep(message: string) {
+  console.log(`[desktop-ui-smoke] ${message}`);
+}
 
 function npmCommand() {
   return "npm";
@@ -69,7 +74,12 @@ async function findBrowser() {
         return candidate;
       }
     } else {
-      return candidate;
+      const probe = spawnSync(process.platform === "win32" ? "where.exe" : "which", [candidate], {
+        stdio: "ignore"
+      });
+      if (probe.status === 0) {
+        return candidate;
+      }
     }
   }
 
@@ -367,10 +377,12 @@ async function runUiFlow(page: CdpClient) {
 }
 
 async function main() {
+  logStep(`mode=${mode}; skipApiStart=${skipApiStart}; uiUrl=${uiUrl}`);
   await mkdir(runtimeDir, { recursive: true });
   await rm(screenshotPath, { force: true });
 
   if (mode === "prod") {
+    logStep("building desktop production bundle");
     await run(npmCommand(), ["run", "build"], {
       cwd: desktopDir,
       shell: process.platform === "win32",
@@ -379,30 +391,39 @@ async function main() {
         VITE_ORCHESTRATOR_URL: apiUrl
       }
     });
+    logStep("desktop production bundle built");
   }
 
-  await run(npmCommand(), ["run", "dev:start"], {
-    shell: process.platform === "win32",
-    env: {
-      ...process.env,
-      FEISHU_ADAPTER_ENABLED: "false",
-      FEISHU_DRY_RUN: "true",
-      OPENCLAW_AGENT_MODE: "mock",
-      AGENT_CLUSTER_CONFIG_PATH: "",
-      ORCHESTRATOR_CORS_ORIGINS: [
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:5174",
-        "tauri://localhost"
-      ].join(",")
-    }
-  });
+  if (skipApiStart) {
+    logStep("waiting for existing API health");
+    await waitForHttp(`${apiUrl}/health`, 60_000);
+  } else {
+    logStep("starting local API");
+    await run(npmCommand(), ["run", "dev:start"], {
+      shell: process.platform === "win32",
+      env: {
+        ...process.env,
+        FEISHU_ADAPTER_ENABLED: "false",
+        FEISHU_DRY_RUN: "true",
+        OPENCLAW_AGENT_MODE: "mock",
+        AGENT_CLUSTER_CONFIG_PATH: "",
+        ORCHESTRATOR_CORS_ORIGINS: [
+          "http://localhost:5173",
+          "http://127.0.0.1:5173",
+          "http://127.0.0.1:5174",
+          "tauri://localhost"
+        ].join(",")
+      }
+    });
+  }
 
   let vite: ChildProcess | null = null;
   let staticServer: Server | null = null;
   if (mode === "prod") {
+    logStep(`serving production bundle on ${uiUrl}`);
     staticServer = await startStaticServer(path.join(desktopDir, "dist"), uiPort);
   } else if (!(await isHttpReady(uiUrl))) {
+    logStep(`starting Vite dev server on ${uiUrl}`);
     vite = spawnManaged(npmCommand(), ["run", "dev"], {
       cwd: desktopDir,
       shell: process.platform === "win32",
@@ -417,6 +438,7 @@ async function main() {
 
   const browserPort = await getFreePort();
   const browserPath = await findBrowser();
+  logStep(`launching browser: ${browserPath}`);
   const userDataDir = path.join(runtimeDir, "browser-profile");
   await rm(userDataDir, { recursive: true, force: true });
 
@@ -432,11 +454,14 @@ async function main() {
   ]);
 
   try {
+    logStep("waiting for browser DevTools");
     await waitForHttp(`http://127.0.0.1:${browserPort}/json/version`, 30_000);
+    logStep("waiting for UI");
     await waitForHttp(uiUrl, 60_000);
 
     const page = await openPage(browserPort, uiUrl);
     try {
+      logStep("running browser UI flow");
       const flow = await runUiFlow(page);
       const screenshot = await page.send("Page.captureScreenshot", { format: "png" });
       await writeFile(screenshotPath, Buffer.from(screenshot.data, "base64"));
@@ -446,6 +471,7 @@ async function main() {
           {
             ok: true,
             mode,
+            skipApiStart,
             url: uiUrl,
             jobId: flow.jobId,
             statusVisible: flow.statusVisible,

@@ -11,6 +11,69 @@ This rule was confirmed by the user on 2026-05-28 and applies to subsequent
 work on this project unless the user changes it.
 ```
 
+## 2026-05-30 CI Desktop Smoke Wiring Checkpoint
+
+Remote GitHub Actions verification could not be fully executed because this
+local repository currently has no configured git remote.
+
+```text
+git remote -v -> no remotes configured
+```
+
+Completed locally:
+
+```text
+Updated scripts/smoke-desktop-ui.ts:
+  - added --skip-api-start for environments where the API is already running;
+  - added DESKTOP_UI_SMOKE_PORT override;
+  - improved non-Windows browser detection through which/where probing;
+  - added step logs so future hangs reveal the active phase.
+
+Updated .github/workflows/ci.yml:
+  - docker-quickstart job now runs npm ci;
+  - installs desktop dependencies with npm ci --prefix apps/desktop-app;
+  - after docker compose HTTP smoke, runs:
+      DESKTOP_UI_SMOKE_PORT=5173
+      npm run smoke:desktop-ui-prod -- --skip-api-start
+
+Updated SETUP.md with the CI/docker-compose skip-api-start command.
+```
+
+Validation:
+
+```text
+npm run smoke:desktop-ui-prod -- --skip-api-start -> passed locally
+  mode=prod
+  skipApiStart=true
+  url=http://127.0.0.1:5174
+  job=JOB-20260530-3FD2CC65
+  timelineItems=6
+
+npm run check -> passed
+npm run check:no-secrets -> passed
+git diff --check -> passed; only Windows CRLF warnings were printed
+```
+
+Open item:
+
+```text
+Actual remote Actions run/push verification still requires adding a GitHub
+remote or moving this repo into a remote-backed checkout.
+```
+
+Next ordered tasks:
+
+```text
+1. Configure local M3 real provider variables and run npm run smoke:m3-real-provider.
+2. Configure git remote, push a branch, and watch GitHub Actions to green.
+3. Try a genuinely different Rust path later, then run Tauri build proof.
+4. Current next local product task: smoke lock mechanism.
+5. Then cancel archival consistency.
+6. Then timeline since pagination.
+7. Then GET /jobs pagination/sort/search backlog.
+8. Then m2 recovery nightly CI.
+```
+
 ## 2026-05-30 Desktop Prod Bundle Smoke Checkpoint
 
 Production desktop bundle verification is now covered by the same real browser
