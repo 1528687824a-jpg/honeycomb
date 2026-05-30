@@ -522,3 +522,202 @@ export async function getJobDetails(jobId: string) {
     agentEvents
   };
 }
+
+type TimelineItem = {
+  id: string;
+  source: "job_event" | "agent_event" | "group_message" | "stage_attempt" | "test_review" | "artifact";
+  at: string;
+  order: number;
+  eventType: string;
+  title: string;
+  actor?: string;
+  stageId?: string | null;
+  artifactId?: string | null;
+  groupMessageId?: string | null;
+  seq?: number;
+  status?: string;
+  payload?: Record<string, unknown>;
+};
+
+function iso(value: unknown): string | null {
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  if (typeof value === "string" && value.trim()) {
+    return new Date(value).toISOString();
+  }
+  return null;
+}
+
+function compactItem(item: TimelineItem): Omit<TimelineItem, "order"> {
+  const { order: _order, ...publicItem } = item;
+  return publicItem;
+}
+
+export async function getJobTimeline(jobId: string, options: { limit?: number } = {}) {
+  const details = await getJobDetails(jobId);
+  if (!details.job) {
+    return { job: null };
+  }
+
+  const timeline: TimelineItem[] = [];
+  let order = 0;
+  const push = (item: Omit<TimelineItem, "order">) => {
+    timeline.push({ ...item, order: order++ });
+  };
+
+  for (const event of details.events) {
+    const at = iso(event.created_at);
+    if (!at) {
+      continue;
+    }
+    push({
+      id: `job_event:${event.id}`,
+      source: "job_event",
+      at,
+      eventType: event.event_type,
+      title: event.event_type,
+      payload: event.payload ?? {}
+    });
+  }
+
+  for (const event of details.agentEvents) {
+    push({
+      id: `agent_event:${event.id}`,
+      source: "agent_event",
+      at: event.createdAt,
+      eventType: event.eventType,
+      title: event.eventType,
+      actor: event.actor,
+      stageId: event.stageId,
+      artifactId: event.artifactId,
+      groupMessageId: event.groupMessageId,
+      seq: event.seq,
+      payload: event.payload
+    });
+  }
+
+  for (const message of details.groupMessages) {
+    const at = iso(message.created_at);
+    if (!at) {
+      continue;
+    }
+    push({
+      id: `group_message:${message.id}`,
+      source: "group_message",
+      at,
+      eventType: `group.${message.message_type}`,
+      title: `${message.sender_agent_id}${message.mention_agent_id ? ` -> ${message.mention_agent_id}` : ""}`,
+      actor: message.sender_agent_id,
+      stageId: message.stage_id,
+      artifactId: message.artifact_id,
+      groupMessageId: message.id,
+      status: message.feishu_message_id ? "delivered" : "recorded"
+    });
+  }
+
+  for (const attempt of details.attempts) {
+    const at = iso(attempt.started_at ?? attempt.finished_at);
+    if (!at) {
+      continue;
+    }
+    push({
+      id: `stage_attempt:${attempt.id}`,
+      source: "stage_attempt",
+      at,
+      eventType: "stage.attempt",
+      title: `${attempt.agent_id} attempt ${attempt.attempt_no}`,
+      actor: attempt.agent_id,
+      stageId: attempt.stage_id,
+      artifactId: attempt.output_artifact_id,
+      status: attempt.status,
+      payload: {
+        attemptNo: attempt.attempt_no,
+        agentSessionId: attempt.agent_session_id,
+        error: attempt.error ?? null,
+        finishedAt: iso(attempt.finished_at)
+      }
+    });
+  }
+
+  for (const review of details.reviews) {
+    const at = iso(review.created_at);
+    if (!at) {
+      continue;
+    }
+    push({
+      id: `test_review:${review.id}`,
+      source: "test_review",
+      at,
+      eventType: `test.${String(review.verdict).toLowerCase()}`,
+      title: `${review.test_agent_id} ${review.verdict}`,
+      actor: review.test_agent_id,
+      stageId: review.stage_id,
+      artifactId: review.report_artifact_id,
+      status: review.verdict,
+      payload: {
+        issueCount: review.issue_count,
+        requiredFixes: review.required_fixes ?? []
+      }
+    });
+  }
+
+  for (const artifact of details.artifacts) {
+    const at = iso(artifact.created_at);
+    if (!at) {
+      continue;
+    }
+    push({
+      id: `artifact:${artifact.id}`,
+      source: "artifact",
+      at,
+      eventType: `artifact.${artifact.type}`,
+      title: artifact.title ?? artifact.type,
+      stageId: artifact.stage_id,
+      artifactId: artifact.id,
+      payload: {
+        type: artifact.type,
+        uri: artifact.uri ?? null
+      }
+    });
+  }
+
+  const sorted = timeline.sort((left, right) => {
+    const timeDiff = Date.parse(left.at) - Date.parse(right.at);
+    if (timeDiff !== 0) {
+      return timeDiff;
+    }
+    if (left.seq !== undefined && right.seq !== undefined && left.seq !== right.seq) {
+      return left.seq - right.seq;
+    }
+    return left.order - right.order;
+  });
+  const limit = Math.min(Math.max(options.limit ?? 200, 1), 1000);
+  const limited = sorted.length > limit ? sorted.slice(sorted.length - limit) : sorted;
+
+  return {
+    job: {
+      id: details.job.id,
+      status: details.job.status,
+      ingressOrigin: details.job.ingress_origin,
+      routingMode: details.job.routing_mode,
+      workflowId: details.job.workflow_id,
+      createdAt: iso(details.job.created_at),
+      updatedAt: iso(details.job.updated_at),
+      completedAt: iso(details.job.completed_at)
+    },
+    summary: {
+      stageCount: details.stages.length,
+      attemptCount: details.attempts.length,
+      reviewCount: details.reviews.length,
+      artifactCount: details.artifacts.length,
+      groupMessageCount: details.groupMessages.length,
+      jobEventCount: details.events.length,
+      agentEventCount: details.agentEvents.length,
+      totalTimelineItems: sorted.length,
+      returnedTimelineItems: limited.length,
+      truncated: sorted.length > limited.length
+    },
+    timeline: limited.map(compactItem)
+  };
+}

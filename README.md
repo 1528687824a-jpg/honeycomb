@@ -19,6 +19,7 @@ $body = @{ prompt = 'demo multi-agent job'; requesterId = 'quickstart' } | Conve
 $job = Invoke-RestMethod -Uri 'http://localhost:3000/jobs' -Method Post -ContentType 'application/json' -Body $body
 Invoke-RestMethod -Uri "http://localhost:3000/jobs/$($job.jobId)"
 Invoke-RestMethod -Uri "http://localhost:3000/jobs/$($job.jobId)/messages"
+Invoke-RestMethod -Uri "http://localhost:3000/jobs/$($job.jobId)/timeline"
 ```
 
 The default Docker Compose path is HTTP-only and mock-mode. Feishu and real

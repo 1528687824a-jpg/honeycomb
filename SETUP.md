@@ -68,6 +68,7 @@ $body = @{ prompt = 'demo multi-agent job'; requesterId = 'quickstart' } | Conve
 $job = Invoke-RestMethod -Uri 'http://localhost:3000/jobs' -Method Post -ContentType 'application/json' -Body $body
 Invoke-RestMethod -Uri "http://localhost:3000/jobs/$($job.jobId)"
 Invoke-RestMethod -Uri "http://localhost:3000/jobs/$($job.jobId)/messages"
+Invoke-RestMethod -Uri "http://localhost:3000/jobs/$($job.jobId)/timeline"
 ```
 
 Stop the quickstart stack:
@@ -485,7 +486,8 @@ It verifies:
 1. POST /jobs creates an HTTP-origin job.
 2. The job reaches succeeded in mock mode.
 3. GET /jobs/:jobId/messages returns the visible message chain.
-4. No Feishu message id is attached to the HTTP-only job.
+4. GET /jobs/:jobId/timeline returns a UI-friendly inspection timeline.
+5. No Feishu message id is attached to the HTTP-only job.
 ```
 
 M2.5 local quality/budget checks:

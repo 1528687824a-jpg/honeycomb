@@ -316,6 +316,59 @@ Next ordered tasks:
    through a non-hanging installer path.
 ```
 
+## 2026-05-30 Job Timeline Inspect Checkpoint
+
+Implemented a UI-friendly job inspection endpoint.
+
+Code changes:
+
+```text
+Added GET /jobs/:jobId/timeline?limit=200.
+
+packages/db/src/pipeline.ts:
+  - added getJobTimeline(jobId, { limit });
+  - aggregates job_events, agent_events, group_messages, stage_attempts,
+    test_reviews, and artifacts into sorted timeline items;
+  - returns a compact job summary and counts for desktop/UI inspection;
+  - caps limit to 1..1000 and returns the latest items when truncated.
+
+apps/orchestrator-api/src/server.ts:
+  - added query validation with zod;
+  - returns 404 job_not_found for missing jobs.
+
+scripts/smoke-http-only-end-to-end.ps1:
+  - now calls /jobs/:jobId/timeline;
+  - asserts job/status/ingressOrigin;
+  - asserts timeline includes all expected sources.
+
+README.md and SETUP.md now show the timeline endpoint in quickstart/use docs.
+```
+
+Validation:
+
+```text
+npm run check -> passed
+git diff --check -> passed; only Windows CRLF warnings were printed
+
+npm run smoke:http-only -> passed
+  job=JOB-20260530-CA185005
+  terminalStatus=succeeded
+  ingressOrigin=http
+  messageCount=4
+  finalMessageCount=2
+  timelineItemCount=86
+  timelineSources=job_event, agent_event, artifact, group_message,
+                  stage_attempt, test_review
+```
+
+Next ordered tasks:
+
+```text
+1. Current: cancel job API.
+2. Later: retry Rust/Tauri real build after Rustup can be installed manually or
+   through a non-hanging installer path.
+```
+
 ## 2026-05-28 Stage 1.1 Adapter Abstraction Checkpoint
 
 Stage 1.1 is implemented: HTTP is now the core ingress/egress path and Feishu

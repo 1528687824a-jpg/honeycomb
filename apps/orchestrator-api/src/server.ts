@@ -8,7 +8,7 @@ import {
   getJobByFeishuMessageId
 } from "../../../packages/db/src/jobs";
 import { markModelCallFailedUnknownOutcome } from "../../../packages/db/src/model-calls";
-import { getGroupMessagesForJob, getJobDetails } from "../../../packages/db/src/pipeline";
+import { getGroupMessagesForJob, getJobDetails, getJobTimeline } from "../../../packages/db/src/pipeline";
 import { launchDbos, startJobWorkflow } from "./dbos-runtime";
 import { ingressAdapters } from "./adapters";
 
@@ -17,6 +17,10 @@ const unstickModelCallSchema = z.object({
   idempotencyKey: z.string().min(1),
   reason: z.string().optional(),
   restartWorkflow: z.boolean().optional().default(true)
+});
+
+const timelineQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(1000).optional()
 });
 
 function requireAdminToken(request: express.Request, response: express.Response) {
@@ -152,6 +156,22 @@ async function main() {
       }
 
       response.json(details);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/jobs/:jobId/timeline", async (request, response, next) => {
+    try {
+      const query = timelineQuerySchema.parse(request.query);
+      const timeline = await getJobTimeline(request.params.jobId, { limit: query.limit });
+
+      if (!timeline.job) {
+        response.status(404).json({ error: "job_not_found" });
+        return;
+      }
+
+      response.json(timeline);
     } catch (error) {
       next(error);
     }

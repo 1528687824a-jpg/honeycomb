@@ -88,6 +88,24 @@ $finalMessages = @(
 )
 Assert-True -Condition ($finalMessages.Count -gt 0) -Message "expected final_output message"
 
+$timeline = Invoke-RestMethod -Uri "http://localhost:3000/jobs/$($created.jobId)/timeline?limit=500"
+Assert-Equal -Actual $timeline.job.id -Expected $created.jobId -Message "timeline job id"
+Assert-Equal -Actual $timeline.job.status -Expected "succeeded" -Message "timeline job status"
+Assert-Equal -Actual $timeline.job.ingressOrigin -Expected "http" -Message "timeline ingress origin"
+Assert-True -Condition ($timeline.summary.stageCount -gt 0) -Message "timeline stage count"
+Assert-True -Condition ($timeline.summary.totalTimelineItems -gt 0) -Message "timeline item count"
+
+$timelineItems = @($timeline.timeline)
+$timelineSources = @($timelineItems | ForEach-Object { $_.source })
+foreach ($expectedSource in @("job_event", "agent_event", "group_message", "stage_attempt", "test_review", "artifact")) {
+  Assert-True -Condition ($timelineSources -contains $expectedSource) -Message "timeline source missing: $expectedSource"
+}
+
+$timelineJobCreated = @(
+  $timelineItems | Where-Object { $_.eventType -eq "job.created" }
+)
+Assert-True -Condition ($timelineJobCreated.Count -gt 0) -Message "timeline missing job.created"
+
 [pscustomobject]@{
   ok = $true
   jobId = $created.jobId
@@ -95,10 +113,13 @@ Assert-True -Condition ($finalMessages.Count -gt 0) -Message "expected final_out
   ingressOrigin = $job.ingressOrigin
   messageCount = @($messages.messages).Count
   finalMessageCount = $finalMessages.Count
+  timelineItemCount = $timeline.summary.totalTimelineItems
+  timelineSources = @($timelineSources | Select-Object -Unique)
   checked = @(
     "http_create_job",
     "http_poll_terminal_status",
     "http_get_job_messages",
+    "http_get_job_timeline",
     "feishu_adapter_disabled"
   )
 } | ConvertTo-Json -Depth 4
