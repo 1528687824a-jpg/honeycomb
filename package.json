@@ -21,6 +21,7 @@
     "smoke:cancel-job": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-cancel-job.ps1",
     "smoke:openclaw-real": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-openclaw-real.ps1",
     "smoke:desktop-ui": "tsx scripts/smoke-desktop-ui.ts",
+    "smoke:desktop-ui-prod": "tsx scripts/smoke-desktop-ui.ts --prod",
     "smoke:tauri-shell": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-tauri-shell.ps1",
     "m3:generate": "tsx scripts/generate-cluster-config.ts",
     "prepare:public-ingress": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-public-ingress-bundle.ps1",

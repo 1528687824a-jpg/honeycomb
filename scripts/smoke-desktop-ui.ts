@@ -1,5 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { mkdir, rm, stat, writeFile } from "node:fs/promises";
+import { createServer, type Server } from "node:http";
 import net from "node:net";
 import path from "node:path";
 
@@ -8,9 +10,11 @@ declare const WebSocket: any;
 const root = path.resolve(__dirname, "..");
 const desktopDir = path.join(root, "apps", "desktop-app");
 const runtimeDir = path.join(root, ".runtime", "desktop-ui-smoke");
-const screenshotPath = path.join(runtimeDir, "desktop-ui-smoke.png");
-const uiUrl = "http://127.0.0.1:5173";
 const apiUrl = "http://localhost:3000";
+const mode = process.argv.includes("--prod") ? "prod" : "dev";
+const uiPort = mode === "prod" ? 5174 : 5173;
+const uiUrl = `http://127.0.0.1:${uiPort}`;
+const screenshotPath = path.join(runtimeDir, `desktop-ui-${mode}-smoke.png`);
 
 type CdpResponse = {
   id?: number;
@@ -133,6 +137,54 @@ async function isHttpReady(url: string) {
   } catch {
     return false;
   }
+}
+
+function contentTypeFor(filePath: string) {
+  if (filePath.endsWith(".html")) return "text/html; charset=utf-8";
+  if (filePath.endsWith(".js")) return "text/javascript; charset=utf-8";
+  if (filePath.endsWith(".css")) return "text/css; charset=utf-8";
+  if (filePath.endsWith(".svg")) return "image/svg+xml";
+  if (filePath.endsWith(".png")) return "image/png";
+  return "application/octet-stream";
+}
+
+async function startStaticServer(distDir: string, port: number) {
+  const indexPath = path.join(distDir, "index.html");
+  await stat(indexPath);
+
+  const server = createServer(async (request, response) => {
+    try {
+      const requestUrl = new URL(request.url ?? "/", `http://127.0.0.1:${port}`);
+      const requestedPath = decodeURIComponent(requestUrl.pathname);
+      const normalized = path.normalize(requestedPath).replace(/^(\.\.[/\\])+/, "");
+      const candidate = path.join(distDir, normalized === "/" ? "index.html" : normalized);
+      const resolvedDist = path.resolve(distDir);
+      const resolvedCandidate = path.resolve(candidate);
+
+      let finalPath = resolvedCandidate.startsWith(resolvedDist) ? resolvedCandidate : indexPath;
+      try {
+        const fileStat = await stat(finalPath);
+        if (fileStat.isDirectory()) {
+          finalPath = indexPath;
+        }
+      } catch {
+        finalPath = indexPath;
+      }
+
+      response.writeHead(200, { "content-type": contentTypeFor(finalPath) });
+      createReadStream(finalPath).pipe(response);
+    } catch (error) {
+      response.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
+      response.end(error instanceof Error ? error.message : String(error));
+    }
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, "127.0.0.1", () => resolve());
+  });
+
+  return server;
 }
 
 async function getFreePort() {
@@ -318,6 +370,17 @@ async function main() {
   await mkdir(runtimeDir, { recursive: true });
   await rm(screenshotPath, { force: true });
 
+  if (mode === "prod") {
+    await run(npmCommand(), ["run", "build"], {
+      cwd: desktopDir,
+      shell: process.platform === "win32",
+      env: {
+        ...process.env,
+        VITE_ORCHESTRATOR_URL: apiUrl
+      }
+    });
+  }
+
   await run(npmCommand(), ["run", "dev:start"], {
     shell: process.platform === "win32",
     env: {
@@ -325,12 +388,21 @@ async function main() {
       FEISHU_ADAPTER_ENABLED: "false",
       FEISHU_DRY_RUN: "true",
       OPENCLAW_AGENT_MODE: "mock",
-      AGENT_CLUSTER_CONFIG_PATH: ""
+      AGENT_CLUSTER_CONFIG_PATH: "",
+      ORCHESTRATOR_CORS_ORIGINS: [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:5174",
+        "tauri://localhost"
+      ].join(",")
     }
   });
 
   let vite: ChildProcess | null = null;
-  if (!(await isHttpReady(uiUrl))) {
+  let staticServer: Server | null = null;
+  if (mode === "prod") {
+    staticServer = await startStaticServer(path.join(desktopDir, "dist"), uiPort);
+  } else if (!(await isHttpReady(uiUrl))) {
     vite = spawnManaged(npmCommand(), ["run", "dev"], {
       cwd: desktopDir,
       shell: process.platform === "win32",
@@ -373,6 +445,7 @@ async function main() {
         JSON.stringify(
           {
             ok: true,
+            mode,
             url: uiUrl,
             jobId: flow.jobId,
             statusVisible: flow.statusVisible,
@@ -380,6 +453,7 @@ async function main() {
             screenshotPath,
             checked: [
               "desktop_ui_load",
+              mode === "prod" ? "prod_bundle_served" : "vite_dev_server",
               "create_job_from_ui",
               "job_list_selection",
               "cancel_job_from_ui",
@@ -397,6 +471,11 @@ async function main() {
     browser.kill();
     if (vite) {
       vite.kill();
+    }
+    if (staticServer) {
+      await new Promise<void>((resolve, reject) => {
+        staticServer.close((error) => (error ? reject(error) : resolve()));
+      });
     }
   }
 }

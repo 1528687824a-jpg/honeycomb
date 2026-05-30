@@ -11,6 +11,69 @@ This rule was confirmed by the user on 2026-05-28 and applies to subsequent
 work on this project unless the user changes it.
 ```
 
+## 2026-05-30 Desktop Prod Bundle Smoke Checkpoint
+
+Production desktop bundle verification is now covered by the same real browser
+UI flow as the Vite dev-server path.
+
+Code changes:
+
+```text
+Extended scripts/smoke-desktop-ui.ts:
+  - default mode still tests the Vite dev server at http://127.0.0.1:5173;
+  - --prod mode runs npm run build in apps/desktop-app;
+  - --prod mode serves apps/desktop-app/dist with a small Node static server on
+    http://127.0.0.1:5174;
+  - API startup now includes 127.0.0.1:5174 in ORCHESTRATOR_CORS_ORIGINS for
+    the prod-bundle smoke;
+  - screenshots are mode-specific:
+      .runtime/desktop-ui-smoke/desktop-ui-dev-smoke.png
+      .runtime/desktop-ui-smoke/desktop-ui-prod-smoke.png
+
+Added npm script:
+  npm run smoke:desktop-ui-prod
+
+Updated README.md and SETUP.md.
+```
+
+Validation:
+
+```text
+npm run smoke:desktop-ui -> passed
+  mode=dev
+  job=JOB-20260530-E440A92B
+  timelineItems=13
+  screenshot=.runtime/desktop-ui-smoke/desktop-ui-dev-smoke.png
+
+npm run smoke:desktop-ui-prod -> passed
+  mode=prod
+  job=JOB-20260530-0EB52A7C
+  timelineItems=6
+  screenshot=.runtime/desktop-ui-smoke/desktop-ui-prod-smoke.png
+
+Visual prod screenshot inspection passed:
+  shows created job, cancelled status, disabled Cancelled button, job list, and
+  timeline rows.
+
+npm run check -> passed
+git diff --check -> passed; only Windows CRLF warnings were printed
+```
+
+Next ordered tasks:
+
+```text
+1. Configure local M3 real provider variables and run npm run smoke:m3-real-provider.
+2. Try a genuinely different Rust path later, then run Tauri build proof.
+3. Current next product task: remote GitHub Actions run/push verification,
+   ideally including smoke:desktop-ui and smoke:desktop-ui-prod if a browser is
+   available on the runner.
+4. Then smoke lock mechanism.
+5. Then cancel archival consistency.
+6. Then timeline since pagination.
+7. Then GET /jobs pagination/sort/search backlog.
+8. Then m2 recovery nightly CI.
+```
+
 ## 2026-05-30 Desktop UI Integration Smoke Checkpoint
 
 Implemented a real browser UI smoke for the desktop MVP.

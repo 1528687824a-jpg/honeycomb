@@ -72,6 +72,7 @@ npm run smoke:m3-real-planner
 npm run smoke:m3-real-provider
 npm run smoke:cancel-job
 npm run smoke:desktop-ui
+npm run smoke:desktop-ui-prod
 npm run smoke:tauri-shell
 ```
 
