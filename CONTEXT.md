@@ -11,6 +11,72 @@ This rule was confirmed by the user on 2026-05-28 and applies to subsequent
 work on this project unless the user changes it.
 ```
 
+## 2026-05-30 Rust/Tauri Non-Winget Retry
+
+Tauri real build proof is still blocked by host Rust toolchain state.
+
+What happened:
+
+```text
+rustup is now present at:
+  C:\Users\Administrator\.cargo\bin\rustup.exe
+
+Initial state:
+  rustup 1.29.0 present
+  rustc/cargo proxies present
+  no usable default toolchain
+  stable-x86_64-pc-windows-msvc existed but had "Missing manifest"
+
+Attempts:
+  rustup default stable
+    -> set default but still reported error reading rustc version
+
+  rustup toolchain uninstall stable-x86_64-pc-windows-msvc;
+  rustup toolchain install stable --profile minimal;
+  rustup default stable
+    -> hung until timeout; rustup processes remained and were killed
+
+  manually removed the damaged stable toolchain directory after verifying the
+  resolved path stayed under C:\Users\Administrator\.rustup\toolchains
+
+  rustup toolchain install stable --profile minimal --no-self-update
+    -> hung until timeout
+
+  rustup toolchain install stable --profile minimal --no-self-update --force
+  with RUSTUP_CONCURRENT_DOWNLOADS=1 and RUSTUP_DOWNLOAD_TIMEOUT=30
+    -> still hung until timeout
+
+Network checks:
+  HEAD https://static.rust-lang.org/dist/channel-rust-stable.toml -> 200
+  HEAD https://win.rustup.rs/x86_64 -> 200
+```
+
+Interpretation:
+
+```text
+This is still a host/toolchain blocker, not a repo-code blocker. Do not mark
+Tauri real build proof complete. Avoid further rustup commands in unattended
+runs unless using a different installation strategy, because even rustup show
+can hang in the current state.
+```
+
+Next ordered tasks:
+
+```text
+1. Configure local M3 real provider variables and run:
+   npm run smoke:m3-real-provider
+2. Try a genuinely different Rust path later, such as Scoop/choco/MSI/manual
+   repair, then run npm --prefix apps/desktop-app run tauri:build.
+3. Current next product task: UI integration smoke for the browser desktop MVP.
+4. Then prod bundle verification.
+5. Then remote GitHub Actions run/push verification.
+6. Then smoke lock mechanism.
+7. Then cancel archival consistency.
+8. Then timeline since pagination.
+9. Then GET /jobs pagination/sort/search backlog.
+10. Then m2 recovery nightly CI.
+```
+
 ## 2026-05-30 M3 Real Provider E2E Harness Checkpoint
 
 Claude's new review was read and compared with the existing roadmap.
