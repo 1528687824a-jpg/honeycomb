@@ -110,6 +110,7 @@ npm run smoke:m3-real-planner
 npm run smoke:m3-real-provider
 npm run smoke:cancel-job
 npm run smoke:timeline-since
+npm run smoke:list-jobs
 npm run smoke:desktop-ui
 npm run smoke:desktop-ui-prod
 npm run smoke:tauri-shell
@@ -258,11 +259,40 @@ The current thin-client UI consumes:
 
 ```text
 GET /jobs
+GET /jobs?prompt=<text>&status=<status>&ingressOrigin=<origin>&sort=createdAt&order=desc&cursor=<cursor>
 POST /jobs
 GET /jobs/:jobId/timeline
 GET /jobs/:jobId/timeline?since=<ISO timestamp>&limit=<n>
 POST /jobs/:jobId/cancel
 ```
+
+Job listing supports cursor pagination and lightweight filters:
+
+```text
+limit         1..200
+status        created|queued|planning|running|testing|fixing|waiting_for_human|succeeded|failed|cancelled
+ingressOrigin http|feishu|slack|cli
+prompt        substring search over rawPrompt
+since/until   createdAt inclusive ISO timestamp window
+sort          createdAt|updatedAt
+order         asc|desc
+cursor        opaque page.nextCursor from the previous response
+```
+
+The response keeps the old `jobs` array and adds:
+
+```text
+page.limit
+page.returned
+page.hasMore
+page.nextCursor
+page.sort
+page.order
+page.filters
+```
+
+The cursor is a composite `(sort timestamp, job id)` key so jobs with the same
+timestamp do not fall between pages.
 
 Timeline pagination is incremental when `since` is present: the API returns
 events strictly after that ISO timestamp, in chronological order, up to `limit`.
@@ -549,6 +579,26 @@ It verifies:
 3. GET /jobs/:jobId/messages returns the visible message chain.
 4. GET /jobs/:jobId/timeline returns a UI-friendly inspection timeline.
 5. No Feishu message id is attached to the HTTP-only job.
+```
+
+## List Jobs Smoke
+
+Validate job list filters, ordering, and cursor pagination:
+
+```powershell
+npm run smoke:list-jobs
+```
+
+The smoke creates four marked HTTP-origin jobs, cancels one, then verifies:
+
+```text
+1. prompt search isolates the marked jobs;
+2. createdAt asc/desc ordering is stable;
+3. cursor page 1 and page 2 preserve order without duplicates;
+4. status=cancelled returns only the cancelled probe;
+5. ingressOrigin=http returns all marked jobs;
+6. since/until filters apply to the createdAt window;
+7. malformed cursors return 400.
 ```
 
 ## Cancel Job Smoke

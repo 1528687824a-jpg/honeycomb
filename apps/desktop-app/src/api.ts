@@ -86,6 +86,38 @@ export type CreateJobInput = {
   maxModelCalls: number;
 };
 
+export type ListJobsInput = {
+  limit?: number;
+  status?: JobStatus;
+  ingressOrigin?: string;
+  prompt?: string;
+  since?: string;
+  until?: string;
+  sort?: "createdAt" | "updatedAt";
+  order?: "asc" | "desc";
+  cursor?: string;
+};
+
+export type ListJobsResponse = {
+  jobs: JobRecord[];
+  page: {
+    limit: number;
+    returned: number;
+    hasMore: boolean;
+    nextCursor: string | null;
+    cursor: string | null;
+    sort: "createdAt" | "updatedAt";
+    order: "asc" | "desc";
+    filters: {
+      status: JobStatus | null;
+      ingressOrigin: string | null;
+      prompt: string | null;
+      since: string | null;
+      until: string | null;
+    };
+  };
+};
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
@@ -107,8 +139,15 @@ export async function getHealth() {
   return request<{ ok: boolean }>("/health");
 }
 
-export async function listJobs(limit = 50) {
-  return request<{ jobs: JobRecord[] }>(`/jobs?limit=${limit}`);
+export async function listJobs(input: number | ListJobsInput = 50) {
+  const options = typeof input === "number" ? { limit: input } : input;
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(options)) {
+    if (value !== undefined && value !== null && value !== "") {
+      params.set(key, String(value));
+    }
+  }
+  return request<ListJobsResponse>(`/jobs?${params.toString()}`);
 }
 
 export async function createJob(input: CreateJobInput) {

@@ -11,6 +11,105 @@ This rule was confirmed by the user on 2026-05-28 and applies to subsequent
 work on this project unless the user changes it.
 ```
 
+## 2026-05-31 Job List Pagination/Search Checkpoint
+
+GET /jobs now supports product-grade filtering, sorting, and cursor pagination
+while preserving the old response shape (`jobs`) for existing clients.
+
+Claude review input absorbed for this checkpoint:
+
+```text
+User-side blockers remain:
+  A. configure M3 real provider environment variables;
+  B. configure git remote and push/watch GitHub Actions;
+  C. repair/reset Rust toolchain and run a real Tauri build.
+
+Codex-side next product task remained GET /jobs pagination/sort/search.
+Claude also identified follow-up cancel-tail work:
+  - document artifact behavior after cancel;
+  - add a one-off repair path for historical cancelled-but-unarchived jobs;
+  - keep smoke lock orphan cleanup next after those tails.
+```
+
+Code changes:
+
+```text
+Updated packages/db/src/jobs.ts:
+  - listJobs returns { jobs, page };
+  - supports limit, status, ingressOrigin, prompt, since, until, sort, order, cursor;
+  - status/ingress filters are normalized;
+  - prompt search is parameterized and escapes LIKE wildcards;
+  - cursor is an opaque base64url JSON payload containing:
+      sort, order, microsecond timestamp value, job id;
+  - cursor comparison uses composite (sort timestamp, id), so equal timestamp
+    rows do not duplicate or fall between pages;
+  - malformed cursors throw InvalidJobListCursorError.
+
+Updated apps/orchestrator-api/src/server.ts:
+  - validates GET /jobs query params;
+  - returns 400 for invalid list cursors;
+  - returns the full { jobs, page } result.
+
+Updated apps/desktop-app/src/api.ts:
+  - typed ListJobsInput/ListJobsResponse;
+  - listJobs(number) remains compatible with the existing desktop UI;
+  - listJobs({ ...filters }) supports the new API.
+
+Updated packages/db/src/migrate.ts:
+  - added jobs_created_at_id_idx;
+  - added jobs_updated_at_id_idx.
+
+Added scripts/smoke-list-jobs.ps1 and npm run smoke:list-jobs.
+Updated SETUP.md with list API parameters and smoke instructions.
+```
+
+Validation:
+
+```text
+npm run check -> passed
+npm run smoke:list-jobs -> passed
+  marker=list-90ada325
+  jobIds:
+    JOB-20260531-B44D3FFA
+    JOB-20260531-1C671E02
+    JOB-20260531-2CE5A11A
+    JOB-20260531-25072D39
+  allOrder=alpha,beta,gamma,cancel-probe
+  page1=alpha,beta
+  page2=gamma,cancel-probe
+  desc=cancel-probe,gamma
+  cancelledFilter=cancel-probe
+  window=beta,gamma,cancel-probe
+  invalid cursor -> 400
+npm run check:no-secrets -> passed
+git diff --check -> passed; only Windows CRLF warnings were printed
+```
+
+Implementation note:
+
+```text
+The first smoke run revealed a real precision bug: Node Date.toISOString()
+truncated Postgres timestamptz microseconds to milliseconds, which caused page 2
+to repeat the prior page's final row. The cursor now stores a Postgres-formatted
+microsecond timestamp from to_char(...US...), while public JobRecord timestamps
+remain normal ISO strings.
+```
+
+Next ordered tasks:
+
+```text
+1. Configure local M3 real provider variables and run npm run smoke:m3-real-provider.
+2. Configure git remote, push a branch, and watch GitHub Actions to green.
+3. Try a genuinely different Rust path later, then run Tauri build proof.
+4. Current next local product task: document job cancellation artifact semantics.
+5. Then add a one-off maintenance repair for historical cancelled jobs missing archives.
+6. Then smoke lock orphan cleanup.
+7. Then Node engines/docs alignment.
+8. Then timeline cursor composite-key hardening.
+9. Then m2 recovery nightly CI.
+10. Later: design waiting_for_human resume/accept/retry API.
+```
+
 ## 2026-05-31 Timeline Since Pagination Checkpoint
 
 Timeline polling now supports incremental since-timestamp pagination while

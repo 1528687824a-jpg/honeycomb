@@ -7,10 +7,12 @@ import {
   createJob,
   getJob,
   getJobByFeishuMessageId,
+  InvalidJobListCursorError,
   listJobs
 } from "../../../packages/db/src/jobs";
 import { markModelCallFailedUnknownOutcome } from "../../../packages/db/src/model-calls";
 import { getGroupMessagesForJob, getJobDetails, getJobTimeline } from "../../../packages/db/src/pipeline";
+import { INGRESS_ORIGINS, JOB_STATUSES } from "../../../packages/shared/src/types";
 import { launchDbos, startJobWorkflow } from "./dbos-runtime";
 import { ingressAdapters } from "./adapters";
 
@@ -28,8 +30,14 @@ const timelineQuerySchema = z.object({
 
 const listJobsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).optional(),
-  status: z.string().optional(),
-  ingressOrigin: z.string().optional()
+  status: z.enum(JOB_STATUSES).optional(),
+  ingressOrigin: z.enum(INGRESS_ORIGINS).optional(),
+  prompt: z.string().trim().min(1).max(300).optional(),
+  since: z.string().datetime({ offset: true }).optional(),
+  until: z.string().datetime({ offset: true }).optional(),
+  sort: z.enum(["createdAt", "updatedAt"]).optional(),
+  order: z.enum(["asc", "desc"]).optional(),
+  cursor: z.string().min(1).max(2000).optional()
 });
 
 const cancelJobSchema = z.object({
@@ -159,11 +167,14 @@ async function main() {
   app.get("/jobs", async (request, response, next) => {
     try {
       const query = listJobsQuerySchema.parse(request.query);
-      const jobs = await listJobs(query);
-      response.json({
-        jobs
-      });
+      const result = await listJobs(query);
+      response.json(result);
     } catch (error) {
+      if (error instanceof InvalidJobListCursorError) {
+        response.status(400).json({ error: error.message });
+        return;
+      }
+
       next(error);
     }
   });

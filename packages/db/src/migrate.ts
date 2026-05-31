@@ -156,6 +156,10 @@ const statements = [
     on agent.jobs(status, created_at)`,
   `create index if not exists jobs_ingress_origin_created_at_idx
     on agent.jobs(ingress_origin, created_at)`,
+  `create index if not exists jobs_created_at_id_idx
+    on agent.jobs(created_at, id)`,
+  `create index if not exists jobs_updated_at_id_idx
+    on agent.jobs(updated_at, id)`,
   `create index if not exists jobs_retention_until_cleanup_status_idx
     on agent.jobs(retention_until, cleanup_status)
     where archived_at is not null`,

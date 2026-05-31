@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { Buffer } from "node:buffer";
 import {
   DEFAULT_DISCUSSION_ROUNDS,
   DEFAULT_MAX_MODEL_CALLS,
@@ -14,6 +15,23 @@ import {
 } from "../../shared/src/types";
 import { pool } from "./pool";
 import { appendAgentEvent } from "./session";
+
+type JobListSort = "createdAt" | "updatedAt";
+type JobListOrder = "asc" | "desc";
+
+type JobListCursor = {
+  sort: JobListSort;
+  order: JobListOrder;
+  value: string;
+  id: string;
+};
+
+export class InvalidJobListCursorError extends Error {
+  constructor(message = "invalid_job_list_cursor") {
+    super(message);
+    this.name = "InvalidJobListCursorError";
+  }
+}
 
 function normalizeRoutingMode(value: unknown): RoutingMode {
   return typeof value === "string" && (ROUTING_MODES as readonly string[]).includes(value)
@@ -37,6 +55,56 @@ function normalizeJobStatus(value: unknown): JobStatus | null {
   return typeof value === "string" && (JOB_STATUSES as readonly string[]).includes(value)
     ? (value as JobStatus)
     : null;
+}
+
+function normalizeJobListSort(value: unknown): JobListSort {
+  return value === "updatedAt" ? "updatedAt" : "createdAt";
+}
+
+function normalizeJobListOrder(value: unknown): JobListOrder {
+  return value === "asc" ? "asc" : "desc";
+}
+
+function escapeLike(value: string) {
+  return value.replace(/[\\%_]/g, "\\$&");
+}
+
+function encodeJobListCursor(cursor: JobListCursor) {
+  return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
+}
+
+function decodeJobListCursor(value: string): JobListCursor {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
+  } catch {
+    throw new InvalidJobListCursorError();
+  }
+
+  if (!parsed || typeof parsed !== "object") {
+    throw new InvalidJobListCursorError();
+  }
+
+  const cursor = parsed as Record<string, unknown>;
+  const sort = normalizeJobListSort(cursor.sort);
+  const order = normalizeJobListOrder(cursor.order);
+  if (
+    cursor.sort !== sort ||
+    cursor.order !== order ||
+    typeof cursor.value !== "string" ||
+    Number.isNaN(Date.parse(cursor.value)) ||
+    typeof cursor.id !== "string" ||
+    !cursor.id
+  ) {
+    throw new InvalidJobListCursorError();
+  }
+
+  return {
+    sort,
+    order,
+    value: cursor.value,
+    id: cursor.id
+  };
 }
 
 function toJobRecord(row: any): JobRecord {
@@ -123,11 +191,39 @@ export async function listJobs(input: {
   limit?: number;
   status?: string;
   ingressOrigin?: string;
-} = {}): Promise<JobRecord[]> {
+  prompt?: string;
+  since?: string;
+  until?: string;
+  sort?: JobListSort;
+  order?: JobListOrder;
+  cursor?: string;
+} = {}): Promise<{
+  jobs: JobRecord[];
+  page: {
+    limit: number;
+    returned: number;
+    hasMore: boolean;
+    nextCursor: string | null;
+    cursor: string | null;
+    sort: JobListSort;
+    order: JobListOrder;
+    filters: {
+      status: JobStatus | null;
+      ingressOrigin: IngressOrigin | null;
+      prompt: string | null;
+      since: string | null;
+      until: string | null;
+    };
+  };
+}> {
   const values: unknown[] = [];
   const where: string[] = [];
   const status = normalizeJobStatus(input.status);
   const ingressOrigin = normalizeIngressOriginFilter(input.ingressOrigin);
+  const prompt = input.prompt?.trim() || null;
+  const sort = normalizeJobListSort(input.sort);
+  const order = normalizeJobListOrder(input.order);
+  const sortColumn = sort === "updatedAt" ? "updated_at" : "created_at";
 
   if (status) {
     values.push(status);
@@ -139,19 +235,78 @@ export async function listJobs(input: {
     where.push(`ingress_origin = $${values.length}`);
   }
 
+  if (prompt) {
+    values.push(`%${escapeLike(prompt)}%`);
+    where.push(`raw_prompt ilike $${values.length} escape '\\'`);
+  }
+
+  if (input.since) {
+    values.push(input.since);
+    where.push(`created_at >= $${values.length}::timestamptz`);
+  }
+
+  if (input.until) {
+    values.push(input.until);
+    where.push(`created_at <= $${values.length}::timestamptz`);
+  }
+
+  if (input.cursor) {
+    const cursor = decodeJobListCursor(input.cursor);
+    if (cursor.sort !== sort || cursor.order !== order) {
+      throw new InvalidJobListCursorError("job_list_cursor_sort_mismatch");
+    }
+
+    const operator = order === "desc" ? "<" : ">";
+    values.push(cursor.value, cursor.id);
+    where.push(
+      `(${sortColumn}, id) ${operator} ($${values.length - 1}::timestamptz, $${values.length})`
+    );
+  }
+
   const limit = Math.min(Math.max(input.limit ?? 50, 1), 200);
-  values.push(limit);
+  values.push(limit + 1);
 
   const result = await pool.query(
-    `select *
+    `select *,
+        to_char(${sortColumn} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as __sort_value
      from agent.jobs
      ${where.length ? `where ${where.join(" and ")}` : ""}
-     order by created_at desc
+     order by ${sortColumn} ${order}, id ${order}
      limit $${values.length}`,
     values
   );
 
-  return result.rows.map(toJobRecord);
+  const rows = result.rows.slice(0, limit);
+  const hasMore = result.rows.length > limit;
+  const lastRow = rows[rows.length - 1] as any | undefined;
+  const nextCursor = hasMore && lastRow
+    ? encodeJobListCursor({
+        sort,
+        order,
+        value: lastRow.__sort_value,
+        id: lastRow.id
+      })
+    : null;
+
+  return {
+    jobs: rows.map(toJobRecord),
+    page: {
+      limit,
+      returned: rows.length,
+      hasMore,
+      nextCursor,
+      cursor: input.cursor ?? null,
+      sort,
+      order,
+      filters: {
+        status,
+        ingressOrigin,
+        prompt,
+        since: input.since ?? null,
+        until: input.until ?? null
+      }
+    }
+  };
 }
 
 export async function getJobByFeishuMessageId(feishuMessageId: string): Promise<JobRecord | null> {
