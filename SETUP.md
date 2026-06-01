@@ -271,8 +271,9 @@ npm run smoke:tauri-shell
 ```
 
 Full Tauri builds require Rust/Cargo plus the native desktop packaging toolchain
-on the host. On Windows that means Visual Studio Build Tools with MSVC and a
-Windows SDK:
+on the host. `smoke:tauri-shell` reports Windows, macOS, and Linux native
+packaging readiness. On Windows that means Visual Studio Build Tools with MSVC
+and a Windows SDK:
 
 ```powershell
 docker compose up --build

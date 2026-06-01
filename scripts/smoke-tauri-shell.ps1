@@ -76,6 +76,63 @@ function Test-WindowsNativePackagingToolchain {
   }
 }
 
+function Test-MacNativePackagingToolchain {
+  $hasXcodeSelect = Test-CommandExists -Command "xcode-select"
+  $xcodePath = $null
+  if ($hasXcodeSelect) {
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = "SilentlyContinue"
+    $xcodePath = (& xcode-select -p) 2>$null | Select-Object -First 1
+    $ErrorActionPreference = $previousPreference
+  }
+
+  return [pscustomobject]@{
+    available = [bool]$xcodePath
+    source = if ($xcodePath) { "xcode-select" } else { "missing" }
+    xcodeCommandLineTools = [bool]$xcodePath
+    path = $xcodePath
+  }
+}
+
+function Test-PkgConfigPackage {
+  param([string]$PackageName)
+
+  if (-not (Test-CommandExists -Command "pkg-config")) {
+    return $false
+  }
+
+  $previousPreference = $ErrorActionPreference
+  $ErrorActionPreference = "SilentlyContinue"
+  & pkg-config --exists $PackageName
+  $exitCode = $LASTEXITCODE
+  $ErrorActionPreference = $previousPreference
+  return $exitCode -eq 0
+}
+
+function Test-LinuxNativePackagingToolchain {
+  $packages = @(
+    "webkit2gtk-4.1",
+    "gtk+-3.0",
+    "ayatana-appindicator3-0.1",
+    "librsvg-2.0",
+    "openssl"
+  )
+
+  $packageResults = @{}
+  foreach ($packageName in $packages) {
+    $packageResults[$packageName] = Test-PkgConfigPackage -PackageName $packageName
+  }
+
+  $missing = @($packages | Where-Object { -not $packageResults[$_] })
+
+  return [pscustomobject]@{
+    available = $missing.Count -eq 0
+    source = if (Test-CommandExists -Command "pkg-config") { "pkg-config" } else { "missing_pkg_config" }
+    packages = $packageResults
+    missing = $missing
+  }
+}
+
 Set-Location $root
 
 Assert-Path -Path (Join-Path $appDir "package.json") -Message "desktop package.json missing"
@@ -139,14 +196,33 @@ if (-not $cargoManifest.Contains('tauri = { version = "2"')) {
 $hasCargo = Test-CommandExists -Command "cargo"
 $hasRustc = Test-CommandExists -Command "rustc"
 $isWindowsHost = $env:OS -eq "Windows_NT"
-$windowsToolchain = if ($isWindowsHost) { Test-WindowsNativePackagingToolchain } else { $null }
-$hasNativePackagingToolchain = if ($isWindowsHost) { $windowsToolchain.available } else { $true }
-$nativePackagingToolchain = if (-not $isWindowsHost) {
-  "not_required_for_this_host"
-} elseif ($hasNativePackagingToolchain) {
-  "available"
+$isMacHost = (Get-Variable -Name IsMacOS -ErrorAction SilentlyContinue) -and $IsMacOS
+$isLinuxHost = (Get-Variable -Name IsLinux -ErrorAction SilentlyContinue) -and $IsLinux
+
+$nativePackagingDetails = if ($isWindowsHost) {
+  Test-WindowsNativePackagingToolchain
+} elseif ($isMacHost) {
+  Test-MacNativePackagingToolchain
+} elseif ($isLinuxHost) {
+  Test-LinuxNativePackagingToolchain
 } else {
+  [pscustomobject]@{
+    available = $true
+    source = "unknown_host"
+  }
+}
+
+$hasNativePackagingToolchain = $nativePackagingDetails.available
+$nativePackagingToolchain = if ($hasNativePackagingToolchain) {
+  "available"
+} elseif ($isWindowsHost) {
   "missing_msvc_or_windows_sdk"
+} elseif ($isMacHost) {
+  "missing_xcode_command_line_tools"
+} elseif ($isLinuxHost) {
+  "missing_linux_native_packages"
+} else {
+  "unknown_host"
 }
 $packagingRunnable = $hasCargo -and $hasRustc -and $hasNativePackagingToolchain
 
@@ -158,7 +234,7 @@ $packagingRunnable = $hasCargo -and $hasRustc -and $hasNativePackagingToolchain
   buildRunnable = $packagingRunnable
   nativePackagingToolchain = $nativePackagingToolchain
   packagingRunnable = $packagingRunnable
-  nativePackagingDetails = if ($isWindowsHost) { $windowsToolchain } else { $null }
+  nativePackagingDetails = $nativePackagingDetails
   checked = @(
     "react_shell_files",
     "api_client",

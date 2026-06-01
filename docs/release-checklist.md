@@ -48,6 +48,10 @@ Desktop console                    done for MVP
 Windows desktop installer          done on local Windows host
   MSI/NSIS artifacts copied to D:\AgentOpenClaw\installers\2026-06-01
 
+Cross-platform installer probes    partial
+  smoke:tauri-shell reports native packaging readiness on Windows, macOS, and
+  Linux, but only Windows has a verified installer artifact so far
+
 M3 real-provider smoke             blocked on explicit operator authorization
   do not run automatically because it may spend provider quota
 

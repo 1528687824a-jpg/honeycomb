@@ -133,11 +133,49 @@ This proof was performed on Windows. For open-source contributors on other
 platforms, use the current Tauri prerequisite docs for exact package names:
 
 ```text
-macOS: Xcode Command Line Tools.
-Linux: WebKitGTK, GTK, librsvg, and standard native build packages for the
-       target distribution.
+https://v2.tauri.app/start/prerequisites/
 ```
 
-`npm run smoke:tauri-shell` currently gives actionable native packaging details
-on Windows. macOS/Linux host probes can be added when CI or contributors need
-cross-platform packaging checks.
+macOS desktop builds need Xcode or the Xcode Command Line Tools:
+
+```bash
+xcode-select --install
+```
+
+Linux package names vary by distribution. The official Debian/Ubuntu command is
+currently:
+
+```bash
+sudo apt update
+sudo apt install libwebkit2gtk-4.1-dev \
+  build-essential \
+  curl \
+  wget \
+  file \
+  libxdo-dev \
+  libssl-dev \
+  libayatana-appindicator3-dev \
+  librsvg2-dev
+```
+
+The shell smoke now gives actionable native packaging details on Windows,
+macOS, and Linux:
+
+```text
+Windows:
+  vswhere + MSVC tools + Windows SDK rc.exe
+
+macOS:
+  xcode-select -p
+
+Linux:
+  pkg-config probes for:
+    webkit2gtk-4.1
+    gtk+-3.0
+    ayatana-appindicator3-0.1
+    librsvg-2.0
+    openssl
+```
+
+The Linux probe is a readiness signal, not a replacement for the official
+distribution-specific Tauri prerequisite guide.

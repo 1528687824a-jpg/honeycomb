@@ -743,6 +743,76 @@ Next ordered tasks:
    four routing modes.
 ```
 
+## 2026-06-01 Cross-Platform Tauri Probe Checkpoint
+
+After reading Claude's latest review, Codex accepted the useful part of the
+suggestion: the next safe Codex-side task was to make desktop packaging
+readiness clearer across platforms. GIF optimization was skipped because the
+generated GIF is only about 52 KB, and icon redesign remains non-gating polish.
+
+Changes:
+
+```text
+Updated scripts/smoke-tauri-shell.ps1:
+  - Windows probe remains vswhere + MSVC + Windows SDK rc.exe;
+  - macOS probe now checks xcode-select -p;
+  - Linux probe now checks pkg-config packages:
+      webkit2gtk-4.1
+      gtk+-3.0
+      ayatana-appindicator3-0.1
+      librsvg-2.0
+      openssl
+  - nativePackagingToolchain can now report:
+      available
+      missing_msvc_or_windows_sdk
+      missing_xcode_command_line_tools
+      missing_linux_native_packages
+      unknown_host
+
+Updated docs/desktop-installer-notes.md:
+  - added the official Tauri prerequisites URL:
+      https://v2.tauri.app/start/prerequisites/
+  - added macOS xcode-select --install note;
+  - added current Debian/Ubuntu Tauri prerequisite command;
+  - documented what smoke:tauri-shell probes on Windows/macOS/Linux.
+
+Updated SETUP.md:
+  - states smoke:tauri-shell reports Windows/macOS/Linux native packaging
+    readiness.
+
+Updated docs/release-checklist.md:
+  - records cross-platform installer probes as partial:
+      smoke reports readiness on Windows/macOS/Linux, but only Windows has a
+      verified installer artifact so far.
+```
+
+Validation:
+
+```text
+npm run smoke:tauri-shell -> passed on Windows
+  rustToolchain=available
+  nativePackagingToolchain=available
+  nativePackagingDetails.source=vswhere
+  buildRunnable=true
+  packagingRunnable=true
+npm run check:no-secrets -> passed
+git diff --check -> passed; only Windows CRLF warnings were printed
+```
+
+Next ordered tasks:
+
+```text
+1. Commit cross-platform Tauri probe/docs.
+2. Remaining alpha gate A: operator explicitly authorizes real provider spend,
+   configures M3 env, then run npm run smoke:m3-real-provider.
+3. Remaining alpha gate B: configure git remote, push, and watch GitHub Actions
+   to green.
+4. Codex-safe optional follow-up without A/B: improve placeholder app icon into
+   a real multi-platform icon set, or prepare a release/tag checklist.
+5. Later with explicit authorization: OpenClaw real-mode validation across all
+   four routing modes.
+```
+
 ## 2026-05-31 Timeline Cursor Hardening Checkpoint
 
 Timeline pagination now has an opaque per-item cursor so clients can page
