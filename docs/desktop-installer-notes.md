@@ -3,76 +3,116 @@
 This page tracks the first real Tauri packaging proof for the thin desktop
 client under `apps/desktop-app`.
 
-## Status On 2026-06-01
+## Verified Windows Build On 2026-06-01
 
-The desktop shell is structurally ready, and the frontend production bundle can
-be built. The Windows installer build is blocked on the host because Visual
-Studio Build Tools with MSVC and a Windows SDK are not installed.
+The Windows packaging path is now verified on the local author machine.
 
-Observed host probes:
+Host/tooling state:
 
 ```text
-cargo 1.96.0
-rustc 1.96.0
-WebView2 148.0.3967.96
-Windows Rust target stable-x86_64-pc-windows-msvc
+Visual Studio Build Tools 2022: 17.14.37314.3
+Install path: D:\BuildTools\VS2022\BuildTools
+MSVC tools: D:\BuildTools\VS2022\BuildTools\VC\Tools\MSVC\14.44.35207
+Windows SDK: C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0
+cargo: 1.96.0
+rustc: 1.96.0
+WebView2: 148.0.3967.96
+Rust target: stable-x86_64-pc-windows-msvc
 ```
 
-Blocking probe:
+Validation:
 
-```text
+```powershell
 npm --prefix apps/desktop-app exec tauri -- info
-  MSVC + Windows SDK: missing
-
-where cl
-  not found
-```
-
-Attempted packaging command:
-
-```powershell
+npm run smoke:tauri-shell
 npm --prefix apps/desktop-app run tauri:build
 ```
 
-Result:
+`smoke:tauri-shell` result after installing Build Tools:
 
 ```text
-timed out after 304 seconds
-apps/desktop-app/dist was produced
-apps/desktop-app/src-tauri/target was not produced
-no MSI/NSIS installer artifact was produced
+rustToolchain=available
+nativePackagingToolchain=available
+nativePackagingDetails.source=vswhere
+nativePackagingDetails.msvc=true
+nativePackagingDetails.windowsSdk=true
+buildRunnable=true
+packagingRunnable=true
 ```
 
-The timed-out build also left a temporary Vite dev process running. It was
-stopped after the attempt.
-
-## Complete The Build
-
-Install Visual Studio 2022 Build Tools with the Desktop development with C++
-workload. The required pieces are:
+Installer artifacts from the successful full build:
 
 ```text
-MSVC v143 C++ build tools
-Windows 10 or Windows 11 SDK
+apps/desktop-app/src-tauri/target/release/bundle/msi/Agent OpenClaw_0.1.0_x64_en-US.msi
+  size: 2.68 MB
+
+apps/desktop-app/src-tauri/target/release/bundle/nsis/Agent OpenClaw_0.1.0_x64-setup.exe
+  size: 1.78 MB
 ```
 
-After installing those host prerequisites, open a fresh terminal and run:
+These generated artifacts are local build outputs and are not committed. Because
+the repository currently lives on C:, the generated `src-tauri/target` cache was
+deleted after verification to avoid leaving 1.3 GB of rebuildable cache on C:.
+Copies of the verified installers were retained on D::
+
+```text
+D:\AgentOpenClaw\installers\2026-06-01\Agent OpenClaw_0.1.0_x64_en-US.msi
+D:\AgentOpenClaw\installers\2026-06-01\Agent OpenClaw_0.1.0_x64-setup.exe
+```
+
+## What Changed For Packaging
+
+Visual Studio Build Tools were installed on D: with the C++ workload:
+
+```text
+D:\BuildTools\VS2022\BuildTools
+```
+
+The first successful installation used the minimal bootstrapper form:
 
 ```powershell
-npm install --prefix apps/desktop-app
-npm --prefix apps/desktop-app run tauri:build
+D:\Installers\vs_BuildTools.exe `
+  --quiet `
+  --wait `
+  --norestart `
+  --installPath D:\BuildTools\VS2022\BuildTools `
+  --add Microsoft.VisualStudio.Workload.VCTools `
+  --includeRecommended
 ```
 
-Expected installer output area:
+Earlier attempts that combined `--path install/cache/shared` and `--log`
+returned exit code `87` on this host, so keep the minimal command above unless a
+future build machine needs full cache relocation.
+
+Tauri config changes:
 
 ```text
-apps/desktop-app/src-tauri/target/release/bundle/
+bundle.icon now points at src-tauri/icons/icon.ico and icon.png.
+bundle.useLocalToolsDir=true keeps WiX/NSIS tools under src-tauri/target/.tauri.
 ```
 
-Exact artifact names depend on Tauri's selected Windows bundler target. With
-the current `bundle.targets = "all"` config, expect Windows installer artifacts
-such as MSI or NSIS under that bundle directory once the native toolchain is
-available.
+`useLocalToolsDir=true` matters on Windows because the first MSI/NSIS attempts
+timed out while downloading bundler tools into the user cache. The local tools
+cache path made the NSIS and WiX downloads complete and keeps those generated
+tools out of user AppData.
+
+## Prior Blockers Resolved
+
+The initial build proof found these issues in order:
+
+```text
+1. MSVC + Windows SDK missing.
+   Fixed by installing Visual Studio Build Tools on D:.
+
+2. src-tauri/icons/icon.ico missing.
+   Fixed by adding a minimal app icon.
+
+3. NSIS/WiX bundler downloads timed out in the default cache path.
+   Fixed by setting bundle.useLocalToolsDir=true.
+
+4. MSI bundler could not infer the icon.
+   Fixed by adding bundle.icon to tauri.conf.json.
+```
 
 ## Caveats
 
@@ -87,6 +127,17 @@ Unsigned local Windows installer builds can trigger SmartScreen warnings. Code
 signing is a release hardening task, not required for the first local packaging
 proof.
 
-`npm run smoke:tauri-shell` validates the repository shell structure and reports
-whether the host appears ready for native packaging. It does not replace a real
-`tauri:build` run.
+## Other Platforms
+
+This proof was performed on Windows. For open-source contributors on other
+platforms, use the current Tauri prerequisite docs for exact package names:
+
+```text
+macOS: Xcode Command Line Tools.
+Linux: WebKitGTK, GTK, librsvg, and standard native build packages for the
+       target distribution.
+```
+
+`npm run smoke:tauri-shell` currently gives actionable native packaging details
+on Windows. macOS/Linux host probes can be added when CI or contributors need
+cross-platform packaging checks.

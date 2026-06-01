@@ -281,8 +281,8 @@ npm --prefix apps/desktop-app run tauri:dev
 npm --prefix apps/desktop-app run tauri:build
 ```
 
-The first packaging proof on the current Windows host found Rust/WebView2 ready
-but MSVC + Windows SDK missing, so no installer artifact was produced yet. See:
+The Windows packaging proof now produces local MSI and NSIS installer artifacts
+after installing Visual Studio Build Tools with the C++ workload. See:
 
 ```text
 docs/desktop-installer-notes.md

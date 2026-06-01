@@ -28,5 +28,5 @@ the Rust/Tauri build toolchain is installed. Full Tauri packaging requires Rust
 (`cargo` and `rustc`) plus the host native packaging toolchain. On Windows that
 means Visual Studio Build Tools with MSVC and a Windows SDK.
 
-Installer build notes and the current host blocker are tracked in
+Installer build notes and the verified Windows artifact paths are tracked in
 `docs/desktop-installer-notes.md`.

@@ -509,6 +509,120 @@ Next ordered tasks:
    across all four routing modes.
 ```
 
+## 2026-06-01 Desktop Installer Build Completed
+
+User explicitly authorized Codex to install Visual Studio Build Tools on D:
+because C: was getting tight. Claude's note remained useful as reference, but
+Codex continued with independent product judgment: complete the D blocker first,
+keep paid-provider smokes gated by explicit authorization, and avoid leaving
+large rebuildable caches on C:.
+
+Host changes:
+
+```text
+Downloaded installer:
+  D:\Installers\vs_BuildTools.exe
+
+Successful Build Tools install command:
+  D:\Installers\vs_BuildTools.exe --quiet --wait --norestart
+    --installPath D:\BuildTools\VS2022\BuildTools
+    --add Microsoft.VisualStudio.Workload.VCTools
+    --includeRecommended
+
+Installed:
+  Visual Studio Build Tools 2022 17.14.37314.3
+  MSVC tools: D:\BuildTools\VS2022\BuildTools\VC\Tools\MSVC\14.44.35207
+  Windows SDK: C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0
+
+Note:
+  Earlier attempts using --path install/cache/shared plus --log returned exit
+  code 87 on this host. The minimal --installPath form succeeded.
+```
+
+Code/docs changes:
+
+```text
+Updated scripts/smoke-tauri-shell.ps1:
+  - detects Windows native packaging through vswhere and Windows SDK files;
+  - no longer requires cl.exe to be globally present on PATH;
+  - now reports buildRunnable=true / packagingRunnable=true on this host.
+
+Updated apps/desktop-app/src-tauri/tauri.conf.json:
+  - added bundle.icon for MSI/NSIS;
+  - added bundle.useLocalToolsDir=true so WiX/NSIS tools cache under
+    src-tauri/target/.tauri during builds instead of user AppData.
+
+Added apps/desktop-app/src-tauri/icons/icon.ico and icon.png:
+  - minimal placeholder app icon for Windows resource and MSI bundling.
+
+Updated .gitignore:
+  - ignores src-tauri/gen and src-tauri/target generated outputs.
+
+Updated docs/desktop-installer-notes.md, README.md, SETUP.md, and desktop README:
+  - changed the desktop packaging status from blocked to verified.
+```
+
+Build proof:
+
+```text
+npm --prefix apps/desktop-app exec tauri -- info -> MSVC detected
+npm run smoke:tauri-shell -> passed
+  rustToolchain=available
+  nativePackagingToolchain=available
+  nativePackagingDetails.source=vswhere
+  nativePackagingDetails.msvc=true
+  nativePackagingDetails.windowsSdk=true
+  buildRunnable=true
+  packagingRunnable=true
+
+npm --prefix apps/desktop-app run tauri:build -> passed
+  produced MSI and NSIS installers
+```
+
+Installer artifacts:
+
+```text
+Generated during build under:
+  apps/desktop-app/src-tauri/target/release/bundle/msi/Agent OpenClaw_0.1.0_x64_en-US.msi
+  apps/desktop-app/src-tauri/target/release/bundle/nsis/Agent OpenClaw_0.1.0_x64-setup.exe
+
+Copied to D: before C: cache cleanup:
+  D:\AgentOpenClaw\installers\2026-06-01\Agent OpenClaw_0.1.0_x64_en-US.msi
+    size: 2.68 MB
+  D:\AgentOpenClaw\installers\2026-06-01\Agent OpenClaw_0.1.0_x64-setup.exe
+    size: 1.78 MB
+
+Cleaned up:
+  apps/desktop-app/src-tauri/target was about 1.3 GB and was deleted after
+  copying artifacts to D: because it is rebuildable and the user wanted to
+  avoid filling C:.
+```
+
+Validation after docs/code updates:
+
+```text
+npm run check -> passed
+npm run check:no-secrets -> passed
+npm run smoke:tauri-shell -> passed
+git diff --check -> passed; only Windows CRLF warnings were printed
+```
+
+Next ordered tasks:
+
+```text
+1. Current Codex-safe task: create QUICKSTART recording/GIF or another compact
+   first-run demo asset from the already verified clean-copy onboarding path.
+2. Then update README/QUICKSTART to surface the demo asset in the first screen.
+3. User-side alpha gate A remains: explicitly authorize real provider spend,
+   configure M3 env, then run npm run smoke:m3-real-provider.
+4. User-side alpha gate B remains: configure git remote, push, and watch GitHub
+   Actions to green.
+5. Later with explicit authorization: OpenClaw real-mode validation across all
+   four routing modes.
+6. v1.1/backlog: waiting_for_human resume API and broader cross-platform Tauri
+   host probes.
+```
+
 ## 2026-05-31 Timeline Cursor Hardening Checkpoint
 
 Timeline pagination now has an opaque per-item cursor so clients can page

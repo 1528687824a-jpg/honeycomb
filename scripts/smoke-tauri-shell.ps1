@@ -27,6 +27,55 @@ function Test-CommandExists {
   return $null -ne $commandInfo
 }
 
+function Get-VswherePath {
+  $candidatePaths = @(
+    (Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"),
+    (Join-Path $env:ProgramFiles "Microsoft Visual Studio\Installer\vswhere.exe")
+  )
+
+  foreach ($candidatePath in $candidatePaths) {
+    if (Test-Path -LiteralPath $candidatePath) {
+      return $candidatePath
+    }
+  }
+
+  return $null
+}
+
+function Test-WindowsNativePackagingToolchain {
+  if (Test-CommandExists -Command "cl") {
+    return [pscustomobject]@{
+      available = $true
+      source = "path"
+      msvc = $true
+      windowsSdk = $true
+    }
+  }
+
+  $vswherePath = Get-VswherePath
+  $vsInstallPath = $null
+  if ($vswherePath) {
+    $vsInstallPath = & $vswherePath -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath | Select-Object -First 1
+  }
+
+  $hasMsvcTools = $false
+  if ($vsInstallPath) {
+    $clPath = Get-ChildItem -Path (Join-Path $vsInstallPath "VC\Tools\MSVC\*\bin\Hostx64\x64\cl.exe") -ErrorAction SilentlyContinue | Select-Object -First 1
+    $hasMsvcTools = $null -ne $clPath
+  }
+
+  $windowsKitsRoot = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin"
+  $rcPath = Get-ChildItem -Path (Join-Path $windowsKitsRoot "*\x64\rc.exe") -ErrorAction SilentlyContinue | Select-Object -First 1
+  $hasWindowsSdk = $null -ne $rcPath
+
+  return [pscustomobject]@{
+    available = $hasMsvcTools -and $hasWindowsSdk
+    source = if ($vsInstallPath) { "vswhere" } else { "missing" }
+    msvc = $hasMsvcTools
+    windowsSdk = $hasWindowsSdk
+  }
+}
+
 Set-Location $root
 
 Assert-Path -Path (Join-Path $appDir "package.json") -Message "desktop package.json missing"
@@ -90,15 +139,16 @@ if (-not $cargoManifest.Contains('tauri = { version = "2"')) {
 $hasCargo = Test-CommandExists -Command "cargo"
 $hasRustc = Test-CommandExists -Command "rustc"
 $isWindowsHost = $env:OS -eq "Windows_NT"
-$hasMsvcInPath = if ($isWindowsHost) { Test-CommandExists -Command "cl" } else { $true }
+$windowsToolchain = if ($isWindowsHost) { Test-WindowsNativePackagingToolchain } else { $null }
+$hasNativePackagingToolchain = if ($isWindowsHost) { $windowsToolchain.available } else { $true }
 $nativePackagingToolchain = if (-not $isWindowsHost) {
   "not_required_for_this_host"
-} elseif ($hasMsvcInPath) {
+} elseif ($hasNativePackagingToolchain) {
   "available"
 } else {
   "missing_msvc_or_windows_sdk"
 }
-$packagingRunnable = $hasCargo -and $hasRustc -and $hasMsvcInPath
+$packagingRunnable = $hasCargo -and $hasRustc -and $hasNativePackagingToolchain
 
 [pscustomobject]@{
   ok = $true
@@ -108,6 +158,7 @@ $packagingRunnable = $hasCargo -and $hasRustc -and $hasMsvcInPath
   buildRunnable = $packagingRunnable
   nativePackagingToolchain = $nativePackagingToolchain
   packagingRunnable = $packagingRunnable
+  nativePackagingDetails = if ($isWindowsHost) { $windowsToolchain } else { $null }
   checked = @(
     "react_shell_files",
     "api_client",

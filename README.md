@@ -124,7 +124,7 @@ npm --prefix apps/desktop-app run dev
 Then open `http://localhost:5173` while the API is running. Full Tauri builds
 require Rust/Cargo plus the native desktop packaging toolchain on the host. On
 Windows that means Visual Studio Build Tools with MSVC and a Windows SDK. The
-first local packaging proof and current host blocker are tracked in
+first local packaging proof and verified Windows installer artifact paths are tracked in
 `docs/desktop-installer-notes.md`.
 
 ## Local Checks

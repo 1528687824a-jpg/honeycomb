@@ -5,3 +5,5 @@ logs/
 dist/
 data/
 temporal/
+apps/desktop-app/src-tauri/gen/
+apps/desktop-app/src-tauri/target/
