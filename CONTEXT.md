@@ -11,6 +11,55 @@ This rule was confirmed by the user on 2026-05-28 and applies to subsequent
 work on this project unless the user changes it.
 ```
 
+## 2026-05-31 Job Cancellation Semantics Docs Checkpoint
+
+Documented v1 cancellation semantics so open-source users can understand why a
+cancelled job can still show prior artifacts and timeline events.
+
+Code/docs changes:
+
+```text
+Added docs/job-cancellation-semantics.md:
+  - POST /jobs/:jobId/cancel API contract;
+  - idempotency behavior;
+  - 409 behavior for succeeded/failed terminal jobs;
+  - cooperative stop semantics;
+  - already-persisted artifacts are preserved as append-only audit records;
+  - cancel does not mark artifacts stale or roll them back;
+  - cancelled jobs do not create a new final output;
+  - cancelled jobs are archived with retentionPolicy.archiveReason=job_cancelled;
+  - cleanup is retention-gated and separate from cancel.
+
+Updated SETUP.md:
+  - linked docs/job-cancellation-semantics.md from the Cancel Job Smoke section.
+
+Updated README.md:
+  - desktop MVP description now mentions filter/search;
+  - added the cancellation semantics doc to the details list.
+```
+
+Validation:
+
+```text
+npm run check:no-secrets -> passed
+git diff --check -> passed; only Windows CRLF warnings were printed
+```
+
+Next ordered tasks:
+
+```text
+1. Configure local M3 real provider variables and run npm run smoke:m3-real-provider.
+2. Configure git remote, push a branch, and watch GitHub Actions to green.
+3. Try a genuinely different Rust path later, then run Tauri build proof.
+4. Current next local product task: one-off maintenance repair for historical cancelled jobs missing archives.
+5. Then add prompt-search boundary checks for case-insensitive and Chinese input.
+6. Then smoke lock orphan cleanup.
+7. Then Node engines/docs alignment.
+8. Then timeline cursor composite-key hardening.
+9. Then m2 recovery nightly CI.
+10. Later: design waiting_for_human resume/accept/retry API.
+```
+
 ## 2026-05-31 Desktop Job List Filters Checkpoint
 
 Independent direction check:

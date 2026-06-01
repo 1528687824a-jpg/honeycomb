@@ -26,8 +26,8 @@ The default Docker Compose path is HTTP-only and mock-mode. Feishu and real
 OpenClaw are optional adapters/modes configured after the core stack is running.
 
 The desktop shell under `apps/desktop-app` is a thin React/Tauri client for the
-same HTTP API. Its current MVP can create jobs, list recent jobs, inspect
-timelines, and cancel non-terminal jobs.
+same HTTP API. Its current MVP can create jobs, filter/search recent jobs,
+inspect timelines, and cancel non-terminal jobs.
 
 ## Repository Layout
 
@@ -46,6 +46,7 @@ For details, read:
 ```text
 docs/PROJECT_STRUCTURE.md
 docs/BOUNDARIES.md
+docs/job-cancellation-semantics.md
 docs/feishu-public-ingress.md
 SETUP.md
 INSTALL.md

@@ -607,6 +607,12 @@ The smoke creates four marked HTTP-origin jobs, cancels one, then verifies:
 
 ## Cancel Job Smoke
 
+Cancellation semantics are documented in:
+
+```text
+docs/job-cancellation-semantics.md
+```
+
 Cancel a non-terminal job through the HTTP API:
 
 ```powershell
