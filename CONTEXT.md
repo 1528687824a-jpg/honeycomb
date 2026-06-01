@@ -11,6 +11,79 @@ This rule was confirmed by the user on 2026-05-28 and applies to subsequent
 work on this project unless the user changes it.
 ```
 
+## 2026-06-01 GitHub CI Desktop Smoke Fix Checkpoint
+
+Observed hosted CI state after pushing GitHub remote setup:
+
+```text
+Run #1, commit 5beef51 Merge GitHub repository bootstrap:
+  success
+
+Run #2, commit 21a3cbe Opt GitHub Actions into Node 24 runtime:
+  failure
+
+Run #3, commit 38d3f75 Record GitHub remote and CI status:
+  failure
+
+Common failure location:
+  Docker quickstart -> Desktop UI production smoke
+
+Already-green in failed run #3:
+  Start HTTP-only stack
+  Smoke HTTP job
+```
+
+Fix:
+
+```text
+Updated scripts/smoke-desktop-ui.ts:
+  - Linux / CI browser launch now includes --no-sandbox and
+    --disable-dev-shm-usage.
+  - Browser candidates now include google-chrome-stable.
+  - CDP send() now accepts a per-command timeout.
+  - Runtime.evaluate for the long browser UI flow now gets 125000ms instead of
+    the default 20000ms.
+
+Reason:
+  The UI flow itself allows up to 120 seconds, but the Chrome DevTools Protocol
+  wrapper previously timed out Runtime.evaluate after 20 seconds. On slower
+  hosted runners this can fail even when the browser UI flow is still healthy.
+  The CI/Linux browser flags also make the smoke more reliable on GitHub
+  ubuntu-latest.
+```
+
+Local validation:
+
+```text
+docker compose up -d --build -> passed
+$env:DESKTOP_UI_SMOKE_PORT='5173';
+  npm run smoke:desktop-ui-prod -- --skip-api-start -> first rerun exposed the
+  20s CDP timeout, second rerun after the timeout fix passed
+    jobId=JOB-20260601-7FC371AE
+    filteredJobVisible=true
+    timeFilterVisible=true
+    customSinceVisible=true
+    timelineCursorRequests=6
+    timelineItems=76
+npm run check -> passed
+npm run check:no-secrets -> passed
+git diff --check -> passed; only Windows CRLF warnings were printed
+docker compose down -v -> completed
+```
+
+Next ordered tasks:
+
+```text
+1. Commit and push the CI desktop smoke fix.
+2. Watch the new GitHub Actions run for the current main HEAD until it is
+   green or gives a new concrete failure.
+3. If CI is green, remaining alpha gate A is M3 real provider smoke, which
+   still requires explicit operator authorization because it can spend quota.
+4. Later with explicit authorization: OpenClaw real-mode validation across all
+   four routing modes.
+5. Optional polish after gates: app icon/signing/release tag notes.
+```
+
 ## 2026-06-01 GitHub Remote And CI Checkpoint
 
 GitHub remote setup:

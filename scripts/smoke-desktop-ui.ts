@@ -66,7 +66,7 @@ function browserCandidates() {
     ];
   }
 
-  return ["google-chrome", "chromium", "chromium-browser", "microsoft-edge"];
+  return ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "microsoft-edge"];
 }
 
 async function pathExists(candidate: string) {
@@ -335,16 +335,16 @@ class CdpClient {
     });
   }
 
-  send(method: string, params: Record<string, unknown> = {}) {
+  send(method: string, params: Record<string, unknown> = {}, timeoutMs = 20_000) {
     const id = this.nextId++;
     this.ws.send(JSON.stringify({ id, method, params }));
     return new Promise<any>((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
       setTimeout(() => {
         if (this.pending.delete(id)) {
-          reject(new Error(`Timed out waiting for CDP method ${method}`));
+          reject(new Error(`Timed out waiting for CDP method ${method} after ${timeoutMs}ms`));
         }
-      }, 20_000);
+      }, timeoutMs);
     });
   }
 
@@ -523,7 +523,7 @@ async function runUiFlow(page: CdpClient) {
     expression,
     awaitPromise: true,
     returnByValue: true
-  });
+  }, 125_000);
 
   if (result.exceptionDetails) {
     throw new Error(result.exceptionDetails.text ?? "UI flow failed");
@@ -628,18 +628,24 @@ async function main() {
     const userDataDir = path.join(runtimeDir, "browser-profile");
     await rm(userDataDir, { recursive: true, force: true });
 
+    const browserArgs = [
+      "--headless=new",
+      "--disable-gpu",
+      "--window-size=1440,980",
+      "--no-first-run",
+      "--no-default-browser-check",
+      `--remote-debugging-port=${browserPort}`,
+      `--user-data-dir=${userDataDir}`,
+      "about:blank"
+    ];
+
+    if (process.env.CI === "true" || process.platform === "linux") {
+      browserArgs.splice(2, 0, "--no-sandbox", "--disable-dev-shm-usage");
+    }
+
     browser = spawnManaged(
       browserPath,
-      [
-        "--headless=new",
-        "--disable-gpu",
-        "--window-size=1440,980",
-        "--no-first-run",
-        "--no-default-browser-check",
-        `--remote-debugging-port=${browserPort}`,
-        `--user-data-dir=${userDataDir}`,
-        "about:blank"
-      ],
+      browserArgs,
       { stdio: "ignore" }
     );
 
