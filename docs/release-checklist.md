@@ -1,0 +1,128 @@
+# Release Checklist
+
+This checklist keeps alpha/release work pointed at the product goal: a
+downloadable OpenClaw multi-agent orchestration platform that a new user can
+start locally, inspect, and extend without depending on the author's private
+Feishu/domain setup.
+
+## Alpha Definition
+
+Alpha is ready when a new operator can verify these paths from the public repo:
+
+```text
+1. HTTP-only Docker quickstart reaches a succeeded mock job.
+2. README and QUICKSTART explain the first run without private credentials.
+3. Desktop console is visible and usable against the local API.
+4. Windows desktop installer can be built locally.
+5. M3 real-provider config path has one explicitly authorized real-provider
+   smoke result.
+6. Git remote/CI exists and the CI-safe checks are green.
+```
+
+The first alpha does not require:
+
+```text
+Feishu public HTTPS ingress on the author's domain.
+waiting_for_human resume/accept/retry API.
+M2 recovery nightly CI.
+macOS/Linux desktop installers.
+Real media providers.
+OpenClaw real mode across all four routing modes.
+```
+
+Those remain useful follow-up work, but they should not displace first-run
+onboarding and release trust signals.
+
+## Current Gate State
+
+```text
+HTTP-only Docker quickstart        done
+  latest proof: JOB-20260601-EF874902 succeeded, persistenceCheck=passed
+
+README/QUICKSTART first run        done
+  docs/assets/quickstart-demo.gif is linked from both files
+
+Desktop console                    done for MVP
+  create/search/filter/cancel/timeline smokes pass in dev and prod UI modes
+
+Windows desktop installer          done on local Windows host
+  MSI/NSIS artifacts copied to D:\AgentOpenClaw\installers\2026-06-01
+
+M3 real-provider smoke             blocked on explicit operator authorization
+  do not run automatically because it may spend provider quota
+
+Git remote + hosted CI             blocked on repository remote setup
+```
+
+## Pre-Release Local Commands
+
+Safe commands that can run without paid providers:
+
+```powershell
+npm run check
+npm run check:no-secrets
+npm run smoke:docker-compose
+npm run smoke:http-only
+npm run smoke:m3-config
+npm run smoke:m3-real-planner
+npm run smoke:cancel-job
+npm run smoke:timeline-since
+npm run smoke:list-jobs
+npm run smoke:desktop-ui
+npm run smoke:desktop-ui-prod
+npm run smoke:tauri-shell
+npm --prefix apps/desktop-app run tauri:build
+```
+
+Run sequentially when they share the dev stack. The smoke lock protects common
+cases, but parallel smoke runs still make the operator experience worse.
+
+Checks requiring explicit operator authorization:
+
+```powershell
+npm run smoke:m3-real-provider
+npm run smoke:openclaw-real
+```
+
+Provider keys in `.env` are not permission to spend quota.
+
+## Artifact Policy
+
+Commit:
+
+```text
+source code
+docs
+small docs/assets demo media
+Tauri Cargo.lock
+Tauri icon source assets
+```
+
+Do not commit:
+
+```text
+.env
+.runtime
+node_modules
+apps/desktop-app/dist
+apps/desktop-app/src-tauri/target
+installer binaries
+job data
+logs
+```
+
+Installer artifacts should be generated per release and attached to the release
+outside Git. The current local Windows proof artifacts are intentionally kept on
+D: only.
+
+## Direction Guardrails
+
+Keep these decisions intact unless the product goal changes:
+
+```text
+Feishu is an optional adapter/display path, not the control plane.
+tomorrow123.art is a private/reference deployment detail, not a product fact.
+Postgres remains the v1 durability database; do not switch to SQLite/pglite.
+Desktop app is a thin client for v1; it does not embed the backend stack yet.
+Real provider and real OpenClaw checks require explicit operator authorization.
+```

@@ -687,6 +687,62 @@ Next ordered tasks:
 6. v1.1/backlog: waiting_for_human resume API.
 ```
 
+## 2026-06-01 Release Checklist Checkpoint
+
+Added an explicit alpha/release checklist so future work stays aligned with the
+open-source platform goal instead of drifting back into private deployment or
+internal-only polishing.
+
+Changes:
+
+```text
+Added docs/release-checklist.md:
+  - defines alpha readiness around HTTP-only Docker quickstart, first-run docs,
+    desktop console, Windows installer build, one authorized M3 real-provider
+    smoke, and hosted CI;
+  - states non-gates for alpha:
+      Feishu public ingress on author's domain
+      waiting_for_human resume API
+      M2 recovery nightly CI
+      macOS/Linux installers
+      real media providers
+      OpenClaw real mode across all four routing modes
+  - records current gate state:
+      HTTP-only Docker quickstart done
+      README/QUICKSTART demo done
+      desktop console MVP done
+      Windows installer proof done
+      M3 real-provider smoke blocked on explicit authorization
+      Git remote/hosted CI blocked on remote setup
+  - lists safe pre-release commands and explicitly authorized real-provider /
+    real-OpenClaw checks;
+  - documents artifact policy and direction guardrails.
+
+Updated README.md:
+  - Read next includes docs/release-checklist.md.
+```
+
+Validation:
+
+```text
+npm run check:no-secrets -> passed
+git diff --check -> passed; only Windows CRLF warnings were printed
+```
+
+Next ordered tasks:
+
+```text
+1. Commit the release checklist.
+2. Remaining alpha gate A: operator explicitly authorizes provider spend,
+   configures M3 env, then runs npm run smoke:m3-real-provider.
+3. Remaining alpha gate B: configure git remote, push, and watch GitHub Actions
+   to green.
+4. Codex-safe optional follow-up if continuing without A/B: add CI workflow
+   templates locally, but do not assume a remote exists.
+5. Later with explicit authorization: OpenClaw real-mode validation across all
+   four routing modes.
+```
+
 ## 2026-05-31 Timeline Cursor Hardening Checkpoint
 
 Timeline pagination now has an opaque per-item cursor so clients can page

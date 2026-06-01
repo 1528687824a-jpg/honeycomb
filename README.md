@@ -190,6 +190,7 @@ docs/BOUNDARIES.md
 docs/job-cancellation-semantics.md
 docs/m3-real-provider-operator-guide.md
 docs/desktop-installer-notes.md
+docs/release-checklist.md
 docs/reference-feishu-public-ingress.md
 SECURITY.md
 CONTRIBUTING.md
