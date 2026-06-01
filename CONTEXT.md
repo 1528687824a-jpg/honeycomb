@@ -322,6 +322,74 @@ Next ordered tasks:
 5. v1.1: waiting_for_human resume API. m2 nightly CI remains off the alpha path.
 ```
 
+## 2026-06-01 M3 Real Provider Operator Guide Checkpoint
+
+Added an operator guide to lower the remaining M3 real-provider alpha gate.
+
+Direction decision:
+
+```text
+Claude's latest review was accepted in substance: the prior five direction
+correction tasks are complete, and the next Codex-only task should make
+user-side alpha gate A easier instead of starting more internal hardening.
+```
+
+Changes:
+
+```text
+Added docs/m3-real-provider-operator-guide.md:
+  - explains what smoke:m3-real-provider proves;
+  - lists required and optional M3 planner env vars;
+  - includes provider templates for OpenAI, DeepSeek, and Volcengine Ark;
+  - explains that generate-cluster-config appends /chat/completions when needed;
+  - documents expected success output;
+  - gives error-to-fix triage for missing env, placeholder base URL, auth,
+    wrong route, model/endpoint not found, quota/rate limit, non-JSON planner
+    response, empty stages, unsupported roles, job execution failure, and timeout;
+  - documents the accepted planner JSON contract and safe/unsafe sharing rules.
+
+Updated README.md:
+  - links the operator guide near smoke:m3-real-provider.
+
+Updated SETUP.md:
+  - links the operator guide from the M3 real-provider section.
+
+Updated docs/m3-real-planner-known-issues.md:
+  - points operators to the new guide for setup and triage.
+```
+
+Validation:
+
+```text
+npm run check:no-secrets -> passed
+git diff --check -> passed; only Windows CRLF warnings were printed
+npm run smoke:m3-real-planner -> passed
+  plannerRequests=1
+  planner=openai-compatible
+  model=planner-smoke-model
+  stageAgents=research-agent,writer-agent,video-agent
+
+Not run intentionally:
+  npm run smoke:m3-real-provider
+Reason:
+  it may call a real paid provider if local .env has real M3 variables. Run it
+  only after the operator explicitly confirms the provider config.
+```
+
+Next ordered tasks:
+
+```text
+1. User-side alpha gate A: configure M3 real provider env using
+   docs/m3-real-provider-operator-guide.md, then run:
+   npm run smoke:m3-real-provider
+2. User-side alpha gate B: configure git remote, push a branch, and watch
+   GitHub Actions to green.
+3. Codex-side after A/B or if user asks to continue without them: run one real
+   Tauri build proof now that smoke:tauri-shell reports rustToolchain=available.
+4. Later: QUICKSTART recording/GIF and OpenClaw real-mode broader validation.
+5. v1.1: waiting_for_human resume API. m2 nightly CI remains off the alpha path.
+```
+
 ## 2026-05-31 Timeline Cursor Hardening Checkpoint
 
 Timeline pagination now has an opaque per-item cursor so clients can page

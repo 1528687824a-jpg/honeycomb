@@ -153,7 +153,9 @@ npm run smoke:openclaw-real
 
 `smoke:m3-real-provider` requires local `M3_PLANNER_BASE_URL`,
 `M3_PLANNER_MODEL`, and `M3_PLANNER_API_KEY` configuration. It does not print
-secret values. `smoke:openclaw-real` requires a configured WSL OpenClaw runtime.
+secret values. See `docs/m3-real-provider-operator-guide.md` for provider
+templates and failure triage. `smoke:openclaw-real` requires a configured WSL
+OpenClaw runtime.
 
 Feishu public HTTPS ingress is an optional self-hosting reference path, not a
 quickstart or product gate. See `docs/reference-feishu-public-ingress.md`; the
@@ -181,6 +183,7 @@ SETUP.md
 docs/PROJECT_STRUCTURE.md
 docs/BOUNDARIES.md
 docs/job-cancellation-semantics.md
+docs/m3-real-provider-operator-guide.md
 docs/reference-feishu-public-ingress.md
 SECURITY.md
 CONTRIBUTING.md

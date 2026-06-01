@@ -75,3 +75,9 @@ Real-provider E2E:
 If `smoke:m3-real-provider` fails, keep the provider response local and inspect
 only the structural reason. Do not paste API keys, authorization headers, or full
 provider payloads into issues or context files.
+
+For operator setup, provider URL templates, and error-to-fix mapping, see:
+
+```text
+docs/m3-real-provider-operator-guide.md
+```

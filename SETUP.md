@@ -231,7 +231,13 @@ This smoke calls the configured real planner, writes a generated
 `cluster.config.json`, starts the orchestrator with that config in mock
 OpenClaw mode, posts a demo job, and verifies DBOS executed the generated stage
 sequence. It fails fast when required provider variables are missing and does
-not print secret values. Known real-planner failure modes are tracked in:
+not print secret values. Provider setup templates and failure triage are in:
+
+```text
+docs/m3-real-provider-operator-guide.md
+```
+
+Known real-planner failure modes are tracked in:
 
 ```text
 docs/m3-real-planner-known-issues.md
