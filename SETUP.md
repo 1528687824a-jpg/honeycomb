@@ -270,12 +270,22 @@ structure and local Rust toolchain status with:
 npm run smoke:tauri-shell
 ```
 
-Full Tauri builds require Rust/Cargo on the host:
+Full Tauri builds require Rust/Cargo plus the native desktop packaging toolchain
+on the host. On Windows that means Visual Studio Build Tools with MSVC and a
+Windows SDK:
 
 ```powershell
 docker compose up --build
 npm install --prefix apps/desktop-app
 npm --prefix apps/desktop-app run tauri:dev
+npm --prefix apps/desktop-app run tauri:build
+```
+
+The first packaging proof on the current Windows host found Rust/WebView2 ready
+but MSVC + Windows SDK missing, so no installer artifact was produced yet. See:
+
+```text
+docs/desktop-installer-notes.md
 ```
 
 The current thin-client UI consumes:

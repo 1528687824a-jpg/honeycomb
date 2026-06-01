@@ -89,13 +89,25 @@ if (-not $cargoManifest.Contains('tauri = { version = "2"')) {
 
 $hasCargo = Test-CommandExists -Command "cargo"
 $hasRustc = Test-CommandExists -Command "rustc"
+$isWindowsHost = $env:OS -eq "Windows_NT"
+$hasMsvcInPath = if ($isWindowsHost) { Test-CommandExists -Command "cl" } else { $true }
+$nativePackagingToolchain = if (-not $isWindowsHost) {
+  "not_required_for_this_host"
+} elseif ($hasMsvcInPath) {
+  "available"
+} else {
+  "missing_msvc_or_windows_sdk"
+}
+$packagingRunnable = $hasCargo -and $hasRustc -and $hasMsvcInPath
 
 [pscustomobject]@{
   ok = $true
   appDir = $appDir
   tauriConfig = $tauriConfigPath
   rustToolchain = if ($hasCargo -and $hasRustc) { "available" } else { "missing" }
-  buildRunnable = $hasCargo -and $hasRustc
+  buildRunnable = $packagingRunnable
+  nativePackagingToolchain = $nativePackagingToolchain
+  packagingRunnable = $packagingRunnable
   checked = @(
     "react_shell_files",
     "api_client",
@@ -103,6 +115,7 @@ $hasRustc = Test-CommandExists -Command "rustc"
     "tauri_config",
     "desktop_package_scripts",
     "cargo_manifest",
-    "rust_toolchain_probe"
+    "rust_toolchain_probe",
+    "native_packaging_toolchain_probe"
   )
 } | ConvertTo-Json -Depth 4
