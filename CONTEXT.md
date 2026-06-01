@@ -83,13 +83,32 @@ git diff --check -> passed; only Windows CRLF warnings were printed
 docker compose down -v -> completed
 ```
 
+Hosted validation:
+
+```text
+Run #5, commit d04c892 Harden desktop UI smoke lifecycle races:
+  status: success
+  run URL: https://github.com/1528687824a-jpg/claw-Agent-Mesh/actions/runs/26765957390
+  total duration: 1m 20s
+
+Jobs:
+  Node and smoke checks: 49s
+  Docker quickstart: 1m 15s
+
+Warnings / notices:
+  - actions/checkout@v4 and actions/setup-node@v4 still target Node.js 20
+    internally, but FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true forces Node 24.
+  - windows-latest redirect notice says windows-latest requests are being
+    redirected to windows-2025-vs2026 by 2026-06-15.
+```
+
 Next ordered tasks:
 
 ```text
-1. Commit and push the CI desktop smoke fix.
-2. Watch the new GitHub Actions run for the current main HEAD until it is
-   green or gives a new concrete failure.
-3. If CI is green, remaining alpha gate A is M3 real provider smoke, which
+1. Commit and push this CI-success context update.
+2. Confirm the resulting context-only GitHub Actions run does not introduce a
+   new failure.
+3. Remaining alpha gate A is M3 real provider smoke, which
    still requires explicit operator authorization because it can spend quota.
 4. Later with explicit authorization: OpenClaw real-mode validation across all
    four routing modes.
