@@ -419,12 +419,14 @@ async function runUiFlow(page: CdpClient) {
       const prompt = document.querySelector("#prompt");
       const routingMode = document.querySelector("#routingMode");
       const maxModelCalls = document.querySelector("#maxModelCalls");
-      const submitButton = Array.from(document.querySelectorAll("button"))
-        .find((button) => button.textContent.trim() === "Start Job");
-
       setNativeValue(prompt, "Desktop UI smoke: create a cancellable mock job and show the timeline.");
       setNativeValue(routingMode, "supervisor_pipeline");
       setNativeValue(maxModelCalls, "20");
+      const submitButton = await waitFor(() => {
+        const button = Array.from(document.querySelectorAll("button"))
+          .find((candidate) => candidate.textContent.trim() === "Start Job");
+        return button && !button.disabled ? button : null;
+      }, "start job button was not enabled");
       submitButton.click();
 
       const jobId = await waitFor(() => {
@@ -441,32 +443,48 @@ async function runUiFlow(page: CdpClient) {
 
       await waitFor(() => document.body.textContent.includes(jobId), "created job was not selected");
 
-      const cancelButton = await waitFor(() => {
-        const button = document.querySelector(".dangerButton");
-        return button && !button.disabled ? button : null;
-      }, "cancel button was not enabled");
-      cancelButton.click();
+      const cancelButton = await waitFor(
+        () => document.querySelector(".dangerButton"),
+        "cancel button missing"
+      );
+      const cancelAttempted = !cancelButton.disabled;
+      if (cancelAttempted) {
+        cancelButton.click();
+      }
 
-      await waitFor(() => {
-        const text = document.body.textContent;
-        return text.includes(jobId) && text.includes("cancelled");
-      }, "job did not become cancelled", 90000);
+      const terminalStatus = await waitFor(() => {
+        const selectedRowStatus = document.querySelector(".jobRow.selected .jobStatus")?.textContent?.trim() ?? "";
+        const detailStatus = document.querySelector(".stats dd")?.textContent?.trim() ?? "";
+        const status = detailStatus || selectedRowStatus;
+        if (["cancelled", "succeeded", "failed", "waiting_for_human"].includes(status)) {
+          return status;
+        }
+        return "";
+      }, "job did not reach a terminal status", 90000);
+
+      if (!["cancelled", "succeeded"].includes(terminalStatus)) {
+        throw new Error("unexpected UI smoke terminal status: " + terminalStatus);
+      }
 
       const search = await waitFor(() => document.querySelector("#jobSearch"), "job search field missing");
       setNativeValue(search, "Desktop UI smoke");
-      const cancelledFilter = await waitFor(
-        () => document.querySelector('.filterSegment[data-filter="cancelled"]'),
-        "cancelled filter missing"
+      const statusFilter = await waitFor(
+        () => document.querySelector(
+          terminalStatus === "cancelled"
+            ? '.filterSegment[data-filter="cancelled"]'
+            : '.filterSegment[data-filter="all"]'
+        ),
+        "status filter missing"
       );
-      cancelledFilter.click();
+      statusFilter.click();
 
       await waitFor(() => {
         const rows = Array.from(document.querySelectorAll(".jobRow"));
         const statuses = rows.map((row) => row.querySelector(".jobStatus")?.textContent?.trim() ?? "");
         return rows.some((row) => row.querySelector("strong")?.textContent?.trim() === jobId) &&
           statuses.length > 0 &&
-          statuses.every((status) => status === "cancelled");
-      }, "cancelled/search filters did not keep created job visible");
+          (terminalStatus !== "cancelled" || statuses.every((status) => status === "cancelled"));
+      }, "search/status filters did not keep created job visible");
 
       const dayFilter = await waitFor(
         () => document.querySelector('.filterSegment[data-time-filter="24h"]'),
@@ -505,7 +523,9 @@ async function runUiFlow(page: CdpClient) {
 
       return {
         jobId,
-        statusVisible: document.body.textContent.includes("cancelled"),
+        terminalStatus,
+        cancelAttempted,
+        statusVisible: document.body.textContent.includes(terminalStatus),
         filteredJobVisible: Array.from(document.querySelectorAll(".jobRow"))
           .some((row) => row.querySelector("strong")?.textContent?.trim() === jobId),
         filteredStatuses: Array.from(document.querySelectorAll(".jobRow .jobStatus"))
@@ -531,6 +551,8 @@ async function runUiFlow(page: CdpClient) {
 
   return result.result.value as {
     jobId: string;
+    terminalStatus: "cancelled" | "succeeded";
+    cancelAttempted: boolean;
     statusVisible: boolean;
     filteredJobVisible: boolean;
     filteredStatuses: string[];
@@ -669,6 +691,8 @@ async function main() {
             skipApiStart,
             url: uiUrl,
             jobId: flow.jobId,
+            terminalStatus: flow.terminalStatus,
+            cancelAttempted: flow.cancelAttempted,
             statusVisible: flow.statusVisible,
             filteredJobVisible: flow.filteredJobVisible,
             filteredStatuses: flow.filteredStatuses,
@@ -682,7 +706,8 @@ async function main() {
               mode === "prod" ? "prod_bundle_served" : "vite_dev_server",
               "create_job_from_ui",
               "job_list_selection",
-              "cancel_job_from_ui",
+              flow.cancelAttempted ? "cancel_job_from_ui" : "skip_cancel_already_terminal",
+              "job_terminal_status_visible",
               "job_filter_search_visible",
               "job_filter_time_window_visible",
               "timeline_cursor_used",

@@ -25,10 +25,13 @@ Run #2, commit 21a3cbe Opt GitHub Actions into Node 24 runtime:
 Run #3, commit 38d3f75 Record GitHub remote and CI status:
   failure
 
+Run #4, commit 3b42422 Stabilize desktop UI smoke in CI:
+  failure
+
 Common failure location:
   Docker quickstart -> Desktop UI production smoke
 
-Already-green in failed run #3:
+Already-green in failed run #4:
   Start HTTP-only stack
   Smoke HTTP job
 ```
@@ -43,13 +46,19 @@ Updated scripts/smoke-desktop-ui.ts:
   - CDP send() now accepts a per-command timeout.
   - Runtime.evaluate for the long browser UI flow now gets 125000ms instead of
     the default 20000ms.
+  - The UI flow now waits until Start Job is enabled before clicking it.
+  - The UI flow now treats both cancelled and succeeded as healthy terminal
+    statuses. It still attempts cancellation when the button is enabled, but it
+    no longer fails if the mock worker wins the race and finishes first.
 
 Reason:
   The UI flow itself allows up to 120 seconds, but the Chrome DevTools Protocol
   wrapper previously timed out Runtime.evaluate after 20 seconds. On slower
   hosted runners this can fail even when the browser UI flow is still healthy.
   The CI/Linux browser flags also make the smoke more reliable on GitHub
-  ubuntu-latest.
+  ubuntu-latest. The hosted Docker job then exposed a second race: the desktop
+  smoke assumed the job would remain cancellable, but fast mock workers can
+  reach succeeded before the Cancel click is observed.
 ```
 
 Local validation:
@@ -58,13 +67,16 @@ Local validation:
 docker compose up -d --build -> passed
 $env:DESKTOP_UI_SMOKE_PORT='5173';
   npm run smoke:desktop-ui-prod -- --skip-api-start -> first rerun exposed the
-  20s CDP timeout, second rerun after the timeout fix passed
-    jobId=JOB-20260601-7FC371AE
+  20s CDP timeout; next rerun exposed the Start Job enabled-state race; final
+  rerun after both fixes passed
+    jobId=JOB-20260601-74DFB1AA
+    terminalStatus=cancelled
+    cancelAttempted=true
     filteredJobVisible=true
     timeFilterVisible=true
     customSinceVisible=true
-    timelineCursorRequests=6
-    timelineItems=76
+    timelineCursorRequests=5
+    timelineItems=54
 npm run check -> passed
 npm run check:no-secrets -> passed
 git diff --check -> passed; only Windows CRLF warnings were printed
