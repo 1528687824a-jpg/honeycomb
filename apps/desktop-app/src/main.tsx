@@ -13,12 +13,14 @@ import {
   type ListJobsResponse,
   type RoutingMode
 } from "./api";
+import { FirstRunPanel } from "./firstRun";
 import "./styles.css";
 
 type ApiState = "checking" | "online" | "offline";
 type JobStatusFilter = "all" | "running" | "waiting_for_human" | "cancelled";
 type JobTimeFilter = "all" | "24h" | "7d" | "custom";
 type Language = "en" | "zh";
+type AppView = "setup" | "console";
 
 const routingModes: RoutingMode[] = [
   "supervisor_pipeline",
@@ -64,6 +66,8 @@ const translations = {
     apiChecking: "Checking API",
     refresh: "Refresh",
     languageLabel: "Language",
+    setupTab: "First Run",
+    consoleTab: "Console",
     newJob: "New Job",
     routing: "Routing",
     budget: "Budget",
@@ -127,6 +131,8 @@ const translations = {
     apiChecking: "正在检查 API",
     refresh: "刷新",
     languageLabel: "语言",
+    setupTab: "首次启动",
+    consoleTab: "控制台",
     newJob: "新任务",
     routing: "编排模式",
     budget: "预算",
@@ -192,6 +198,8 @@ const translations = {
     apiChecking: string;
     refresh: string;
     languageLabel: string;
+    setupTab: string;
+    consoleTab: string;
     newJob: string;
     routing: string;
     budget: string;
@@ -264,6 +272,9 @@ function localDateTimeToIso(value: string) {
 
 function App() {
   const [language, setLanguage] = useState<Language>(getInitialLanguage);
+  const [activeView, setActiveView] = useState<AppView>(
+    () => (window.localStorage.getItem("agentOpenClaw.activeView") === "console" ? "console" : "setup")
+  );
   const [apiState, setApiState] = useState<ApiState>("checking");
   const [prompt, setPrompt] = useState("Draft a short launch note for a tiny multi-agent product.");
   const [routingMode, setRoutingMode] = useState<RoutingMode>("supervisor_pipeline");
@@ -300,6 +311,10 @@ function App() {
   useEffect(() => {
     window.localStorage.setItem("agentOpenClaw.language", language);
   }, [language]);
+
+  useEffect(() => {
+    window.localStorage.setItem("agentOpenClaw.activeView", activeView);
+  }, [activeView]);
 
   function getJobTimeWindow() {
     if (jobTimeFilter === "24h") {
@@ -480,6 +495,28 @@ function App() {
           <p>{copy.subtitle}</p>
         </div>
         <div className="topbarActions">
+          <div className="viewToggle" role="tablist" aria-label="Desktop view">
+            <button
+              className={activeView === "setup" ? "viewButton active" : "viewButton"}
+              data-testid="setup-view-tab"
+              type="button"
+              role="tab"
+              aria-selected={activeView === "setup"}
+              onClick={() => setActiveView("setup")}
+            >
+              {copy.setupTab}
+            </button>
+            <button
+              className={activeView === "console" ? "viewButton active" : "viewButton"}
+              data-testid="console-view-tab"
+              type="button"
+              role="tab"
+              aria-selected={activeView === "console"}
+              onClick={() => setActiveView("console")}
+            >
+              {copy.consoleTab}
+            </button>
+          </div>
           <div className="languageToggle" role="group" aria-label={copy.languageLabel}>
             {languageOptions.map((option) => (
               <button
@@ -505,14 +542,18 @@ function App() {
         </div>
       </header>
 
-      <section className="composerBand">
-        <form
-          className="composer"
-          onSubmit={(event) => {
-            event.preventDefault();
-            submitJob();
-          }}
-        >
+      {activeView === "setup" ? (
+        <FirstRunPanel language={language} />
+      ) : (
+        <>
+          <section className="composerBand">
+            <form
+              className="composer"
+              onSubmit={(event) => {
+                event.preventDefault();
+                submitJob();
+              }}
+            >
           <label htmlFor="prompt">{copy.newJob}</label>
           <textarea id="prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} />
           <div className="composerControls">
@@ -542,11 +583,11 @@ function App() {
             </button>
           </div>
           {error ? <p className="error">{error}</p> : null}
-        </form>
-      </section>
+            </form>
+          </section>
 
-      <section className="dashboard">
-        <aside className="jobList">
+          <section className="dashboard">
+            <aside className="jobList">
           <div className="sectionHeader">
             <h2>{copy.jobs}</h2>
             <span>{jobListPage?.hasMore ? `${jobs.length}+` : jobs.length}</span>
@@ -638,9 +679,9 @@ function App() {
               </button>
             </div>
           ) : null}
-        </aside>
+            </aside>
 
-        <section className="jobDetail">
+            <section className="jobDetail">
           <div className="sectionHeader detailHeader">
             <div>
               <h2>{selectedFromList?.id ?? copy.noJobSelected}</h2>
@@ -700,8 +741,10 @@ function App() {
               <li className="emptyState">{copy.noTimelineEvents}</li>
             )}
           </ol>
-        </section>
-      </section>
+            </section>
+          </section>
+        </>
+      )}
     </main>
   );
 }

@@ -4328,3 +4328,68 @@ D:\聊天记录\Codex\context-vault\agent-openclaw\20260523-084430-agent-opencla
 .env 里已有 FEISHU_APP_ID / FEISHU_APP_SECRET / FEISHU_VERIFICATION_TOKEN / FEISHU_DEFAULT_CHAT_ID / FEISHU_BOT_OPEN_ID / FEISHU_DRY_RUN=false。
 保存上下文只记录“已配置”，不得保存明文密钥。
 ```
+## 2026-06-02 Desktop First Run Checkpoint
+
+用户纠正并确认：OpenClaw real mode 四种 routing mode 端到端验证是“之后顺序任务”，不是桌面首次引导流程的一部分。桌面应用打开后应先让用户熟悉界面，再配置 provider key，之后按预设工作问题提问，生成用户职业/日常工作的画像，并据此生成可写入 agent 框架的个性化提示词。
+
+本次完成：
+
+```text
+1. apps/desktop-app 新增 First Run 视图，默认入口为首次启动，不再先进入纯控制台。
+2. 顶部新增 First Run / Console 切换；语言切换继续支持 English / 中文。
+3. First Run 包含四段：界面熟悉、provider key、工作访谈、生成 agent prompts。
+4. provider 默认 DeepSeek / https://api.deepseek.com / deepseek-v4-pro。
+5. API key 只留在当前页面内存；生成文件只记录 apiKeyConfigured=true，不写明文 key。
+6. 生成安全 desktop setup bundle：first-run-profile.json、cluster.config.json、agents/<id>/AGENTS.md。
+7. Tauri 后端新增 save_first_run_setup command，把 bundle 写到 app data 的 desktop-first-run 目录。
+8. 根脚本新增 npm run tryout:desktop，优先打开 Tauri 桌面应用；npm run tryout:start 仅作为浏览器 dev fallback。
+9. scripts/start-desktop-tryout.ps1 会清理旧 browser-dev Vite 进程，避免 5173 被占用导致 tauri dev 启动失败。
+10. API 默认 CORS 增加 5174 本地生产预览 origin，保留 tauri://localhost。
+11. smoke-desktop-ui 加固：禁用 Edge 扩展 background page 干扰，显式导航到目标 URL，并在默认 First Run 后切到 Console 执行原控制台 smoke。
+12. README、apps/desktop-app/README.md、docs/owner-tryout.md 已改为桌面应用优先体验路径。
+```
+
+本次验证：
+
+```text
+npm run check                                            passed
+npm run check:no-secrets                                 passed
+npm --prefix apps/desktop-app run build                  passed
+npm run smoke:desktop-ui -- --skip-api-start             passed, JOB-20260602-47932C28 cancelled
+npm run smoke:tauri-shell                                passed
+cargo check (apps/desktop-app/src-tauri)                 passed
+npm run smoke:desktop-ui-prod -- --skip-api-start        passed, JOB-20260602-0D282EB4 cancelled
+npm --prefix apps/desktop-app exec tauri build -- --no-bundle
+                                                          passed, built target/release/agent-openclaw.exe
+```
+
+视觉验证截图：
+
+```text
+.runtime/desktop-ui-smoke/first-run-desktop.png
+.runtime/desktop-ui-smoke/first-run-narrow.png
+```
+
+注意：
+
+```text
+完整 npm --prefix apps/desktop-app run tauri:build 超过 424 秒工具超时；
+release exe 已生成，但 installer bundle 目录未生成产物。
+因此当前已验证桌面应用 release 编译，不把 installer packaging 视为已完成。
+```
+
+当前本地栈状态：
+
+```text
+Docker Compose: postgres / orchestrator-api / dbos-worker healthy
+API: http://localhost:3000/health ok
+```
+
+下一步顺序：
+
+```text
+1. 先让用户从 npm run tryout:desktop 体验桌面 First Run：配置 key、回答工作访谈、检查生成的画像和 agent prompts。
+2. 用户确认生成内容方向后，再做“备份 + 写入真实 OpenClaw agent 框架”的显式步骤；不要在未确认前覆盖真实 AGENTS.md。
+3. 继续之前的顺序任务：在明确真实 provider 调用费用授权下，跑 OpenClaw real mode 四种 routing mode 端到端验证。
+4. 进入 alpha polish：图标、签名/installer bundle、release tag、首个公开 alpha 说明。
+```

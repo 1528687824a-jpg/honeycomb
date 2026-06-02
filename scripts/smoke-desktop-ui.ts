@@ -370,6 +370,24 @@ async function openPage(browserPort: number, targetUrl: string) {
   await page.connect();
   await page.send("Runtime.enable");
   await page.send("Page.enable");
+  await page.send("Page.navigate", { url: targetUrl });
+  await page.send(
+    "Runtime.evaluate",
+    {
+      expression: String.raw`
+        new Promise((resolve) => {
+          if (document.readyState === "complete" || document.readyState === "interactive") {
+            resolve(document.readyState);
+            return;
+          }
+          document.addEventListener("DOMContentLoaded", () => resolve(document.readyState), { once: true });
+          setTimeout(() => resolve(document.readyState), 5000);
+        })
+      `,
+      awaitPromise: true
+    },
+    10_000
+  );
   return page;
 }
 
@@ -408,11 +426,16 @@ async function runUiFlow(page: CdpClient) {
         return originalFetch(...args);
       };
 
-      await waitFor(() => document.querySelector("#prompt"), "prompt field missing");
       const englishButton = Array.from(document.querySelectorAll(".languageButton"))
         .find((candidate) => candidate.textContent.trim() === "English");
       englishButton?.click();
+      const consoleTab = await waitFor(
+        () => document.querySelector('[data-testid="console-view-tab"]'),
+        "console tab missing"
+      );
+      consoleTab.click();
       await sleep(100);
+      await waitFor(() => document.querySelector("#prompt"), "prompt field missing");
 
       const beforeJobIds = new Set(
         Array.from(document.querySelectorAll(".jobRow strong"))
@@ -659,6 +682,8 @@ async function main() {
       "--window-size=1440,980",
       "--no-first-run",
       "--no-default-browser-check",
+      "--disable-extensions",
+      "--disable-component-extensions-with-background-pages",
       `--remote-debugging-port=${browserPort}`,
       `--user-data-dir=${userDataDir}`,
       "about:blank"

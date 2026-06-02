@@ -1,12 +1,22 @@
 # Agent OpenClaw Desktop Shell
 
-This is the first Tauri delivery shell for the shared Web UI path.
+This is the first Tauri delivery shell for Agent OpenClaw.
 
-The v1 desktop app is a thin client. It expects the backend stack to be running
-locally through Docker Compose or the development scripts, then talks to
-`http://localhost:3000`.
+The v1 desktop app expects the backend stack to be running locally through
+Docker Compose or the development scripts, then talks to `http://localhost:3000`.
+It now has two top-level views:
 
-Current MVP surface:
+```text
+First Run   orient the owner, configure a provider key, answer a work interview,
+            and generate a safe desktop setup bundle
+Console     create, inspect, filter, and cancel orchestrator jobs
+```
+
+First Run keeps the provider key in memory for the current session. The
+generated setup files record only that a key was configured; they do not write
+the secret to disk.
+
+Current console surface:
 
 ```text
 job list
@@ -17,10 +27,29 @@ timeline view from GET /jobs/:id/timeline
 cancel action through POST /jobs/:id/cancel
 ```
 
+From the repo root, the product-like owner path is:
+
+```powershell
+npm run tryout:desktop
+```
+
+That starts the local backend stack and opens the Tauri desktop app.
+
+Manual development path:
+
 ```powershell
 docker compose up --build
 npm install --prefix apps/desktop-app
 npm --prefix apps/desktop-app run tauri:dev
+```
+
+The First Run save command writes the preview bundle under the app data
+directory in `desktop-first-run`:
+
+```text
+first-run-profile.json
+cluster.config.json
+agents/<agent-id>/AGENTS.md
 ```
 
 The current repository smoke validates the shell structure and records whether

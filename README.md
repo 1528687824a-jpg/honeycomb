@@ -32,7 +32,8 @@ OpenClaw-native     a platform layer around OpenClaw, not a replacement for it
 ## Choose Your Path
 
 ```text
-I want to feel the product locally     npm run tryout:start
+I want to feel the desktop product     npm run tryout:desktop
+I want the browser dev fallback        npm run tryout:start
 I want the clean public quickstart     docker compose up --build
 I want to generate a cluster           read docs/m3-real-provider-operator-guide.md
 I want to understand future memory     read docs/experience-memory.md
@@ -41,14 +42,15 @@ I want to understand future memory     read docs/experience-memory.md
 ## Owner Tryout
 
 Before cutting a public release, use the owner tryout path to feel the product
-locally from the desktop console:
+locally from the Tauri desktop app:
 
 ```powershell
-npm run tryout:start
+npm run tryout:desktop
 ```
 
-This starts the HTTP-only mock backend, starts the desktop web console, and
-opens it in a browser. Stop it with:
+This starts the HTTP-only mock backend, opens the desktop app on First Run, and
+lets you configure a provider key, answer the work interview, generate a safe
+agent setup bundle, then switch into the console. Stop it with:
 
 ```powershell
 npm run tryout:stop
@@ -156,8 +158,19 @@ through a CLI adapter instead of modifying OpenClaw source.
 
 ## Desktop Console
 
-The desktop shell lives under `apps/desktop-app`. It is a React/Tauri thin
-client for the same HTTP API. For the browser version:
+The desktop shell lives under `apps/desktop-app`. It is a React/Tauri app for
+the same HTTP API with two product views:
+
+```text
+First Run   guide, provider key, work interview, generated agent prompts
+Console     create, search/filter jobs, inspect timelines, cancel runs
+```
+
+First Run keeps the raw provider key in memory and writes only a safe setup
+bundle under the app data directory. Applying generated prompts into real
+OpenClaw agent folders is a later explicit step with backups.
+
+For the browser development fallback:
 
 ```powershell
 npm install --prefix apps/desktop-app

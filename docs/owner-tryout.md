@@ -1,8 +1,9 @@
 # Owner Tryout
 
 This is the pre-release path for trying Agent OpenClaw on your own machine
-before publishing a GitHub release. It starts the HTTP-only mock backend and the
-desktop web console together, then opens the console in your browser.
+before publishing a GitHub release. The primary path starts the HTTP-only mock
+backend and opens the Tauri desktop application, so the first thing you feel is
+the desktop product rather than a browser dashboard.
 
 Use this when the question is not "can CI pass?" but "can I sit down and use
 the product?"
@@ -12,10 +13,28 @@ the product?"
 From the repo root:
 
 ```powershell
-npm run tryout:start
+npm run tryout:desktop
 ```
 
 The script starts:
+
+```text
+Postgres + orchestrator-api + dbos-worker  http://localhost:3000
+Tauri desktop app                          apps/desktop-app
+```
+
+The desktop app opens to First Run by default. That flow orients the owner,
+collects provider settings, asks work-profile questions, and generates a safe
+setup bundle for later agent personalization. It does not write the raw provider
+key to disk.
+
+Browser development fallback:
+
+```powershell
+npm run tryout:start
+```
+
+That fallback starts:
 
 ```text
 Postgres + orchestrator-api + dbos-worker  http://localhost:3000
@@ -43,7 +62,21 @@ http://127.0.0.1:5173/?lang=zh
 
 ## What To Try
 
-In the desktop console:
+In the desktop app:
+
+```text
+1. Confirm the app opens on First Run.
+2. Switch English / 中文 from the top bar.
+3. Review the guide panel.
+4. Confirm DeepSeek and deepseek-v4-pro are prefilled.
+5. Enter a provider key for the current session.
+6. Adjust the work interview answers.
+7. Confirm the generated profile, recommended routing mode, and agent prompts.
+8. Save the setup bundle.
+9. Switch to Console and confirm the API status reads online.
+```
+
+Then in Console:
 
 ```text
 1. Confirm the API status reads online.
@@ -56,6 +89,9 @@ In the desktop console:
 
 The tryout uses mock-mode agents. It does not call real LLM/provider services
 and does not require Feishu credentials.
+
+OpenClaw real mode validation across the four routing modes is a later ordered
+engineering task. It is not part of the owner First Run flow.
 
 ## Stop
 
