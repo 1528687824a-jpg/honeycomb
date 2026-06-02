@@ -11,6 +11,45 @@ This rule was confirmed by the user on 2026-05-28 and applies to subsequent
 work on this project unless the user changes it.
 ```
 
+## 2026-06-02 Workflow Rule Reconfirmation Checkpoint
+
+User reconfirmed the standing workflow rule and made it more explicit:
+
+```text
+After every work session / final response, Codex must tell the user the next
+tasks in execution order.
+
+After every completed work item, Codex must update both context files in the
+same checkpoint style used by the existing history:
+  C:\Users\Administrator\Documents\Codex\2026-05-18\agent-openclaw\CONTEXT.md
+  C:\Users\Administrator\Desktop\新产品研发\上下文记忆\20260526-103814-agent-openclaw-dbos-m2-routing-modes.md
+```
+
+The prior completed work from this session has already been recorded in both
+files:
+
+```text
+2026-06-02 M3 Real Provider Smoke Checkpoint
+  npm run smoke:m3-real-planner -> passed
+  npm run smoke:m3-real-provider -> passed
+  provider=DeepSeek via openai-compatible planner
+  model=deepseek-v4-pro
+  jobId=JOB-20260602-A219930D
+  terminalStatus=succeeded
+```
+
+Current next ordered tasks:
+
+```text
+1. Commit and push this workflow-rule reconfirmation checkpoint.
+2. Alpha release polish: repository/product naming note, app icon/signing
+   decision, release notes, and v0.1.0-alpha tag preparation.
+3. Optional CI hardening: pin Windows runner and/or add macOS/Linux Tauri probe
+   smoke jobs.
+4. Later with explicit authorization: OpenClaw real-mode validation across all
+   four routing modes.
+```
+
 ## 2026-06-02 M3 Real Provider Smoke Checkpoint
 
 User asked where real-provider authorization happens. Codex clarified:
