@@ -1,5 +1,56 @@
 # Agent OpenClaw Context Checkpoint
 
+## 2026-06-02 Context Update Rules And Claude Review Intake Checkpoint
+
+用户新增/重申的硬规则：
+
+```text
+1. 每次完成一轮实际工作后，Codex 必须更新上下文/记忆文件；未更新视为未完成。
+2. 必须同时更新：
+   - C:\Users\Administrator\Documents\Codex\2026-05-18\agent-openclaw\CONTEXT.md
+   - C:\Users\Administrator\Desktop\新产品研发\上下文记忆\20260526-103814-agent-openclaw-dbos-m2-routing-modes.md
+3. 上下文更新必须写在文件最前面：最新 checkpoint 放在标题后方、旧 checkpoint 之前；不得追加到尾页。
+4. 每次 final 回复必须写清楚“之后顺序任务”，按实际执行顺序列出。
+5. 用户每次任务开始前可能提供 Claude 对上一轮工作的评价和下一步建议 md 文件；Codex 必须先阅读，吸收有用处，但保留独立判断，不盲信。
+6. 这些规则优先于普通工作流；如果上下文更新位置放错，需要主动修正到最前面。
+```
+
+本轮已读取 Claude 建议文件：
+
+```text
+C:\Users\Administrator\AppData\Local\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\local-agent-mode-sessions\20d984a4-bff5-4fee-8d1b-d7cb84f94ea0\9fcc6203-63e1-4bb6-98e5-063de7217ee7\local_f8d6cc4b-0943-4503-a752-3f2db911ddd6\outputs\202825~1.MD
+```
+
+可吸收的建议：
+
+```text
+1. owner tryout 仍是最高价值输入；用户需要先真实走完桌面 First Run，而不是过早发布 GitHub。
+2. installer bundle 仍未产出；当前只有 release exe 可运行，不等于可公开分发安装包。
+3. 黑色终端窗口 bug 已修，但应补一个 Windows release smoke 防回归，断言 release exe 不再挂 conhost.exe。
+4. Docker smoke 入口应补 docker info / daemon health preflight，避免 Docker Desktop 卡住时继续长时间等待。
+5. First Run 生成草稿后，产品闭环还缺“备份 + 写入真实 OpenClaw agent 框架”的显式按钮和确认流程。
+6. v0.2 可考虑 experience memory、本地 Ollama 路径、waiting_for_human resume API；这些属于 alpha 之后，不应抢当前 P0。
+```
+
+Codex 独立判断：
+
+```text
+当前 P0 不是 GitHub release polish，而是让用户能从桌面快捷方式进入真实桌面应用、走完 First Run、看到并评审生成草稿。
+installer bundle 和 README polish 可以推进，但不能替代 owner tryout。
+写入真实 OpenClaw agent 框架必须是显式、可备份、可回滚的步骤；在用户确认草稿前不得覆盖真实 AGENTS.md。
+```
+
+下一步顺序：
+
+```text
+1. 用户确认双击 C:\Users\Administrator\Desktop\Agent OpenClaw.lnk 后，只出现桌面面板，不再出现黑色终端窗口。
+2. 用户走完桌面 First Run 四段：熟悉界面、配置 provider key、回答工作访谈、生成并检查草稿。
+3. 根据用户对草稿和“写入前先检查”清单的反馈，改 First Run 文案/问题/agent prompt 生成逻辑。
+4. 实现“备份 + 写入真实 OpenClaw agent 框架”按钮和确认流程，并补 smoke。
+5. 补 Windows 黑窗防回归 smoke 和 Docker preflight。
+6. 产出 installer bundle；之后再做图标、签名、release tag、公开 alpha 说明和 GitHub README polish。
+```
+
 ## Standing User Workflow Rule
 
 ```text
