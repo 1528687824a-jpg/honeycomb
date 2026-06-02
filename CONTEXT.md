@@ -4393,3 +4393,67 @@ API: http://localhost:3000/health ok
 3. 继续之前的顺序任务：在明确真实 provider 调用费用授权下，跑 OpenClaw real mode 四种 routing mode 端到端验证。
 4. 进入 alpha polish：图标、签名/installer bundle、release tag、首个公开 alpha 说明。
 ```
+
+## 2026-06-02 Desktop Shortcut And Real Smoke Blocker Checkpoint
+
+用户指出桌面应用体验仍缺少“桌面图标/从哪里打开”的用户入口。已补齐：
+
+```text
+1. 已在 Windows 桌面创建快捷方式：
+   C:\Users\Administrator\Desktop\Agent OpenClaw.lnk
+2. 快捷方式目标：
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -NoExit -File scripts/start-desktop-tryout.ps1
+3. 新增 repo 脚本：
+   scripts/create-desktop-shortcut.ps1
+4. 新增 npm script：
+   npm run tryout:shortcut
+5. README 和 docs/owner-tryout.md 已写明：可先创建桌面图标，然后双击启动本地后端 + Tauri 桌面应用。
+```
+
+同时改进真实 OpenClaw smoke：
+
+```text
+1. scripts/smoke-openclaw-real.ps1 已从单一 classic_master_slave 改为默认验证四种 routing mode：
+   supervisor_pipeline / pipeline / classic_master_slave / master_slave_discussion
+2. 新增参数：
+   -Modes <mode...>
+   -JobTimeoutSeconds <seconds>
+3. 每个 mode 会逐步输出：Starting / Created job / Completed job。
+4. 每个 mode 检查：job succeeded、routingMode 正确、有 tool.openclaw_agent_completed 且 payload.mode=real、有 stage_output artifact。
+```
+
+本次验证与阻塞：
+
+```text
+npm run tryout:shortcut                                  passed, created desktop shortcut
+PowerShell syntax check for create-desktop-shortcut.ps1   passed
+PowerShell syntax check for smoke-openclaw-real.ps1       passed
+npm run check                                            passed
+npm run check:no-secrets                                 passed
+npm run smoke:openclaw-real                              attempted, but timed out after 30 minutes
+```
+
+真实 smoke 未完成，不可记为通过。超时后发现：
+
+```text
+1. smoke-openclaw-real / start-dev 有残留进程，已停止。
+2. stale .runtime/locks/dev-stack.lock 已删除。
+3. WSL 中未发现一次性 openclaw agent 调用残留，只剩 OpenClaw gateway/node 常驻服务。
+4. Docker Desktop daemon 状态异常：docker info 对 Linux engine API 持续 timeout/500。
+5. Postgres 5432 未监听，db:migrate ECONNREFUSED。
+6. 已尝试 Start-Service com.docker.service、重启 Docker Desktop 进程、wsl --shutdown 后重启 Docker，仍未恢复 docker info。
+7. 当前阻塞是 Docker Desktop daemon/engine，没有可靠本地 Postgres/API，因此不能继续真实四模式验证。
+```
+
+恢复后下一步：
+
+```text
+1. 先让 Docker Desktop 恢复到 docker info 正常、docker compose ps 正常。
+2. 运行 npm run tryout:desktop 或双击桌面 Agent OpenClaw.lnk，确认产品入口可打开。
+3. 重新跑 OpenClaw real mode 验证。建议先逐个 mode 跑，定位更清楚：
+   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-openclaw-real.ps1 -Modes supervisor_pipeline
+   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-openclaw-real.ps1 -Modes pipeline
+   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-openclaw-real.ps1 -Modes classic_master_slave
+   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-openclaw-real.ps1 -Modes master_slave_discussion
+4. 四个 mode 都通过后，再进入 alpha polish：图标质量、installer bundle、签名、release tag、公开 alpha 说明。
+```

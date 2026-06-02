@@ -33,6 +33,7 @@ OpenClaw-native     a platform layer around OpenClaw, not a replacement for it
 
 ```text
 I want to feel the desktop product     npm run tryout:desktop
+I want a desktop shortcut              npm run tryout:shortcut
 I want the browser dev fallback        npm run tryout:start
 I want the clean public quickstart     docker compose up --build
 I want to generate a cluster           read docs/m3-real-provider-operator-guide.md
@@ -54,6 +55,12 @@ agent setup bundle, then switch into the console. Stop it with:
 
 ```powershell
 npm run tryout:stop
+```
+
+To put a launch icon on the Windows desktop:
+
+```powershell
+npm run tryout:shortcut
 ```
 
 See `docs/owner-tryout.md` for the local experience checklist.

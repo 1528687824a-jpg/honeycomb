@@ -1,3 +1,13 @@
+param(
+  [string[]]$Modes = @(
+    "supervisor_pipeline",
+    "pipeline",
+    "classic_master_slave",
+    "master_slave_discussion"
+  ),
+  [int]$JobTimeoutSeconds = 900
+)
+
 $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $PSScriptRoot
@@ -29,10 +39,11 @@ function Assert-True {
 
 function Wait-ForTerminalStatus {
   param(
-    [string]$JobId
+    [string]$JobId,
+    [int]$TimeoutSeconds = 900
   )
 
-  for ($i = 0; $i -lt 180; $i++) {
+  for ($i = 0; $i -lt $TimeoutSeconds; $i++) {
     Start-Sleep -Seconds 1
     $job = Invoke-RestMethod -Uri "http://localhost:3000/jobs/$JobId"
     if (@("succeeded", "failed", "waiting_for_human", "cancelled") -contains $job.status) {
@@ -60,43 +71,59 @@ Remove-Item Env:\DBOS_TEST_CRASH_ONCE_AFTER -ErrorAction SilentlyContinue
 npm run dev:stop | Out-Host
 npm run dev:start | Out-Host
 
-$body = @{
-  prompt = "Write one short sentence confirming the real OpenClaw orchestration path works."
-  requesterId = "openclaw-real-smoke"
-  routingMode = "classic_master_slave"
-  maxModelCalls = 3
-  classicFinalGateEnabled = $false
-} | ConvertTo-Json
+$results = @()
 
-$created = Invoke-RestMethod -Uri "http://localhost:3000/jobs" -Method Post -ContentType "application/json" -Body $body
-$job = Wait-ForTerminalStatus -JobId $created.jobId
-Assert-Equal -Actual $job.status -Expected "succeeded" -Message "job terminal status"
+foreach ($mode in $Modes) {
+  Write-Output "Starting real OpenClaw routing mode smoke: $mode"
+  $body = @{
+    prompt = "Write one short sentence confirming the real OpenClaw $mode path works."
+    requesterId = "openclaw-real-smoke"
+    routingMode = $mode
+    maxModelCalls = 8
+    classicFinalGateEnabled = $false
+    discussionRounds = 2
+  } | ConvertTo-Json
 
-$details = Invoke-RestMethod -Uri "http://localhost:3000/jobs/$($created.jobId)/details"
-$realCompletions = @(
-  $details.events | Where-Object {
-    $_.event_type -eq "tool.openclaw_agent_completed" -and $_.payload.mode -eq "real"
+  $created = Invoke-RestMethod -Uri "http://localhost:3000/jobs" -Method Post -ContentType "application/json" -Body $body
+  Write-Output "Created $mode job: $($created.jobId)"
+  $job = Wait-ForTerminalStatus -JobId $created.jobId -TimeoutSeconds $JobTimeoutSeconds
+  Assert-Equal -Actual $job.status -Expected "succeeded" -Message "$mode job terminal status"
+  Assert-Equal -Actual $job.routingMode -Expected $mode -Message "$mode job routing mode"
+
+  $details = Invoke-RestMethod -Uri "http://localhost:3000/jobs/$($created.jobId)/details"
+  $realCompletions = @(
+    $details.events | Where-Object {
+      $_.event_type -eq "tool.openclaw_agent_completed" -and $_.payload.mode -eq "real"
+    }
+  )
+  Assert-True -Condition ($realCompletions.Count -gt 0) -Message "$mode real OpenClaw completion event missing"
+
+  $stageOutputs = @(
+    $details.artifacts | Where-Object { $_.type -eq "stage_output" }
+  )
+  Assert-True -Condition ($stageOutputs.Count -gt 0) -Message "$mode real mode stage output missing"
+
+  $results += [pscustomobject]@{
+    jobId = $created.jobId
+    terminalStatus = $job.status
+    routingMode = $job.routingMode
+    realCompletionEvents = $realCompletions.Count
+    stageOutputArtifacts = $stageOutputs.Count
   }
-)
-Assert-True -Condition ($realCompletions.Count -gt 0) -Message "real OpenClaw completion event missing"
-
-$stageOutputs = @(
-  $details.artifacts | Where-Object { $_.type -eq "stage_output" }
-)
-Assert-True -Condition ($stageOutputs.Count -gt 0) -Message "real mode stage output missing"
+  Write-Output "Completed $mode job: $($created.jobId)"
+}
 
 [pscustomobject]@{
   ok = $true
   openClawVersion = $version
-  jobId = $created.jobId
-  terminalStatus = $job.status
-  routingMode = $job.routingMode
-  realCompletionEvents = $realCompletions.Count
-  stageOutputArtifacts = $stageOutputs.Count
+  results = $results
   checked = @(
     "openclaw_cli_available",
-    "orchestrator_real_mode_job",
-    "real_openclaw_completion_event",
-    "stage_output_artifact"
+    "supervisor_pipeline_real_mode_job",
+    "pipeline_real_mode_job",
+    "classic_master_slave_real_mode_job",
+    "master_slave_discussion_real_mode_job",
+    "real_openclaw_completion_events",
+    "stage_output_artifacts"
   )
 } | ConvertTo-Json -Depth 4

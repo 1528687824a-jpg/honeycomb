@@ -16,6 +16,15 @@ From the repo root:
 npm run tryout:desktop
 ```
 
+To create a desktop launch icon first:
+
+```powershell
+npm run tryout:shortcut
+```
+
+That creates `Agent OpenClaw.lnk` on the Windows desktop. Double-clicking it
+starts the local backend and opens the Tauri desktop app.
+
 The script starts:
 
 ```text
