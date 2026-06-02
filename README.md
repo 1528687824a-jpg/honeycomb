@@ -1,19 +1,42 @@
 # Agent OpenClaw
 
 Agent OpenClaw is a local-first multi-agent orchestration platform for
-OpenClaw. It gives you a durable DBOS/Postgres control plane, four routing
-modes, HTTP and Feishu adapters, and a thin desktop control console so an agent
+OpenClaw. The GitHub repository is `claw-Agent-Mesh`; the product is Agent
+OpenClaw.
+
+Use it when a one-off bot script is too fragile, but a hosted workflow product
+is too opaque. It gives you a durable DBOS/Postgres control plane, four routing
+modes, HTTP and Feishu adapters, and a desktop control console so an agent
 cluster can be started, inspected, cancelled, and later generated from an
 interview-style config flow.
 
-Use it when a one-off bot script is too fragile, but a hosted workflow product
-is too opaque. The current default quickstart is HTTP-only and mock-mode, so
-you can run the orchestration engine without Feishu credentials or real model
-provider keys.
+## Why This Exists
+
+Most multi-agent demos are easy to start and hard to trust: no durable state,
+unclear handoffs, no replayable timeline, and no clean path from "my first
+local run" to "my own agent cluster." Agent OpenClaw starts from the opposite
+end:
+
+```text
+local first          run the stack on your machine
+durable             DBOS checkpoints + Postgres business state
+inspectable         jobs, messages, artifacts, and timeline are visible
+mode-switchable     four routing modes are first-class product behavior
+OpenClaw-native     a platform layer around OpenClaw, not a replacement for it
+```
 
 ![HTTP-only quickstart demo](docs/assets/quickstart-demo.gif)
 
 ![Agent OpenClaw desktop UI](docs/assets/desktop-ui-mvp.png)
+
+## Choose Your Path
+
+```text
+I want to feel the product locally     npm run tryout:start
+I want the clean public quickstart     docker compose up --build
+I want to generate a cluster           read docs/m3-real-provider-operator-guide.md
+I want to understand future memory     read docs/experience-memory.md
+```
 
 ## Owner Tryout
 
@@ -207,6 +230,7 @@ docs/PROJECT_STRUCTURE.md
 docs/BOUNDARIES.md
 docs/job-cancellation-semantics.md
 docs/m3-real-provider-operator-guide.md
+docs/experience-memory.md
 docs/owner-tryout.md
 docs/desktop-installer-notes.md
 docs/release-checklist.md

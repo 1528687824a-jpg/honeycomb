@@ -18,6 +18,7 @@ import "./styles.css";
 type ApiState = "checking" | "online" | "offline";
 type JobStatusFilter = "all" | "running" | "waiting_for_human" | "cancelled";
 type JobTimeFilter = "all" | "24h" | "7d" | "custom";
+type Language = "en" | "zh";
 
 const routingModes: RoutingMode[] = [
   "supervisor_pipeline",
@@ -36,23 +37,203 @@ const cancellableStatuses: JobStatus[] = [
   "waiting_for_human"
 ];
 
-const jobStatusFilters: Array<{ id: JobStatusFilter; label: string; status?: JobStatus }> = [
-  { id: "all", label: "All" },
-  { id: "running", label: "Running", status: "running" },
-  { id: "waiting_for_human", label: "Waiting", status: "waiting_for_human" },
-  { id: "cancelled", label: "Cancelled", status: "cancelled" }
+const jobStatusFilters: Array<{ id: JobStatusFilter; status?: JobStatus }> = [
+  { id: "all" },
+  { id: "running", status: "running" },
+  { id: "waiting_for_human", status: "waiting_for_human" },
+  { id: "cancelled", status: "cancelled" }
 ];
 
-const jobTimeFilters: Array<{ id: JobTimeFilter; label: string }> = [
-  { id: "all", label: "All Time" },
-  { id: "24h", label: "24h" },
-  { id: "7d", label: "7d" },
-  { id: "custom", label: "Custom" }
+const jobTimeFilters: Array<{ id: JobTimeFilter }> = [
+  { id: "all" },
+  { id: "24h" },
+  { id: "7d" },
+  { id: "custom" }
 ];
 
-function formatTime(value: string | null | undefined) {
+const languageOptions: Array<{ id: Language; label: string }> = [
+  { id: "en", label: "English" },
+  { id: "zh", label: "中文" }
+];
+
+const translations = {
+  en: {
+    subtitle: "Local multi-agent control console",
+    apiOnline: "API online",
+    apiOffline: "API offline",
+    apiChecking: "Checking API",
+    refresh: "Refresh",
+    languageLabel: "Language",
+    newJob: "New Job",
+    routing: "Routing",
+    budget: "Budget",
+    startJob: "Start Job",
+    jobs: "Jobs",
+    jobStatusFilter: "Job status filter",
+    jobTimeFilter: "Job created time filter",
+    searchPrompts: "Search prompts",
+    searchPromptsAria: "Search job prompts",
+    since: "Since",
+    until: "Until",
+    noJobsMatch: "No jobs match.",
+    loadMore: "Load More",
+    noJobSelected: "No job selected",
+    cancel: "Cancel",
+    cancelled: "Cancelled",
+    status: "Status",
+    created: "Created",
+    timeline: "Timeline",
+    noJobLoaded: "No job loaded.",
+    latestItems: "latest items",
+    complete: "complete",
+    noTimelineEvents: "No timeline events.",
+    statusFilters: {
+      all: "All",
+      running: "Running",
+      waiting_for_human: "Waiting",
+      cancelled: "Cancelled"
+    },
+    timeFilters: {
+      all: "All Time",
+      "24h": "24h",
+      "7d": "7d",
+      custom: "Custom"
+    },
+    statuses: {
+      created: "created",
+      queued: "queued",
+      planning: "planning",
+      running: "running",
+      testing: "testing",
+      fixing: "fixing",
+      waiting_for_human: "waiting",
+      succeeded: "succeeded",
+      failed: "failed",
+      cancelled: "cancelled"
+    },
+    sources: {
+      job_event: "job event",
+      agent_event: "agent event",
+      group_message: "group message",
+      stage_attempt: "stage attempt",
+      test_review: "test review",
+      artifact: "artifact"
+    }
+  },
+  zh: {
+    subtitle: "本地多 Agent 控制台",
+    apiOnline: "API 在线",
+    apiOffline: "API 离线",
+    apiChecking: "正在检查 API",
+    refresh: "刷新",
+    languageLabel: "语言",
+    newJob: "新任务",
+    routing: "编排模式",
+    budget: "预算",
+    startJob: "启动任务",
+    jobs: "任务",
+    jobStatusFilter: "任务状态筛选",
+    jobTimeFilter: "任务创建时间筛选",
+    searchPrompts: "搜索任务提示词",
+    searchPromptsAria: "搜索任务提示词",
+    since: "开始",
+    until: "结束",
+    noJobsMatch: "没有匹配的任务。",
+    loadMore: "加载更多",
+    noJobSelected: "未选择任务",
+    cancel: "取消",
+    cancelled: "已取消",
+    status: "状态",
+    created: "创建时间",
+    timeline: "时间线",
+    noJobLoaded: "没有加载任务。",
+    latestItems: "最新事件",
+    complete: "完整",
+    noTimelineEvents: "没有时间线事件。",
+    statusFilters: {
+      all: "全部",
+      running: "运行中",
+      waiting_for_human: "等待",
+      cancelled: "已取消"
+    },
+    timeFilters: {
+      all: "全部时间",
+      "24h": "24 小时",
+      "7d": "7 天",
+      custom: "自定义"
+    },
+    statuses: {
+      created: "已创建",
+      queued: "排队中",
+      planning: "规划中",
+      running: "运行中",
+      testing: "测试中",
+      fixing: "修复中",
+      waiting_for_human: "等待人工",
+      succeeded: "已成功",
+      failed: "已失败",
+      cancelled: "已取消"
+    },
+    sources: {
+      job_event: "任务事件",
+      agent_event: "Agent 事件",
+      group_message: "群消息",
+      stage_attempt: "阶段尝试",
+      test_review: "测试评审",
+      artifact: "产物"
+    }
+  }
+} satisfies Record<
+  Language,
+  {
+    subtitle: string;
+    apiOnline: string;
+    apiOffline: string;
+    apiChecking: string;
+    refresh: string;
+    languageLabel: string;
+    newJob: string;
+    routing: string;
+    budget: string;
+    startJob: string;
+    jobs: string;
+    jobStatusFilter: string;
+    jobTimeFilter: string;
+    searchPrompts: string;
+    searchPromptsAria: string;
+    since: string;
+    until: string;
+    noJobsMatch: string;
+    loadMore: string;
+    noJobSelected: string;
+    cancel: string;
+    cancelled: string;
+    status: string;
+    created: string;
+    timeline: string;
+    noJobLoaded: string;
+    latestItems: string;
+    complete: string;
+    noTimelineEvents: string;
+    statusFilters: Record<JobStatusFilter, string>;
+    timeFilters: Record<JobTimeFilter, string>;
+    statuses: Record<JobStatus, string>;
+    sources: Record<JobTimeline["timeline"][number]["source"], string>;
+  }
+>;
+
+function getInitialLanguage(): Language {
+  const queryLanguage = new URLSearchParams(window.location.search).get("lang");
+  if (queryLanguage === "zh" || queryLanguage === "en") {
+    return queryLanguage;
+  }
+  const storedLanguage = window.localStorage.getItem("agentOpenClaw.language");
+  return storedLanguage === "zh" ? "zh" : "en";
+}
+
+function formatTime(value: string | null | undefined, language: Language) {
   if (!value) return "-";
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat(language === "zh" ? "zh-CN" : undefined, {
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
@@ -82,6 +263,7 @@ function localDateTimeToIso(value: string) {
 }
 
 function App() {
+  const [language, setLanguage] = useState<Language>(getInitialLanguage);
   const [apiState, setApiState] = useState<ApiState>("checking");
   const [prompt, setPrompt] = useState("Draft a short launch note for a tiny multi-agent product.");
   const [routingMode, setRoutingMode] = useState<RoutingMode>("supervisor_pipeline");
@@ -99,12 +281,13 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const jobsRequestSeq = useRef(0);
+  const copy = translations[language];
 
   const statusText = useMemo(() => {
-    if (apiState === "online") return "API online";
-    if (apiState === "offline") return "API offline";
-    return "Checking API";
-  }, [apiState]);
+    if (apiState === "online") return copy.apiOnline;
+    if (apiState === "offline") return copy.apiOffline;
+    return copy.apiChecking;
+  }, [apiState, copy]);
 
   const selectedFromList = useMemo(
     () => jobs.find((job) => job.id === selectedJobId) ?? selectedJob,
@@ -113,6 +296,10 @@ function App() {
 
   const activeStatusFilter = jobStatusFilters.find((filter) => filter.id === jobStatusFilter);
   const trimmedJobPromptFilter = jobPromptFilter.trim();
+
+  useEffect(() => {
+    window.localStorage.setItem("agentOpenClaw.language", language);
+  }, [language]);
 
   function getJobTimeWindow() {
     if (jobTimeFilter === "24h") {
@@ -290,9 +477,22 @@ function App() {
       <header className="topbar">
         <div>
           <h1>Agent OpenClaw</h1>
-          <p>Local multi-agent control console</p>
+          <p>{copy.subtitle}</p>
         </div>
         <div className="topbarActions">
+          <div className="languageToggle" role="group" aria-label={copy.languageLabel}>
+            {languageOptions.map((option) => (
+              <button
+                key={option.id}
+                className={option.id === language ? "languageButton active" : "languageButton"}
+                type="button"
+                onClick={() => setLanguage(option.id)}
+                aria-pressed={option.id === language}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
           <span className={`status ${apiState}`}>{statusText}</span>
           <button
             className="secondaryButton"
@@ -300,7 +500,7 @@ function App() {
             onClick={() => refreshAll().catch((caught) => setError(caught instanceof Error ? caught.message : String(caught)))}
             disabled={apiState !== "online" || busy}
           >
-            Refresh
+            {copy.refresh}
           </button>
         </div>
       </header>
@@ -313,10 +513,10 @@ function App() {
             submitJob();
           }}
         >
-          <label htmlFor="prompt">New Job</label>
+          <label htmlFor="prompt">{copy.newJob}</label>
           <textarea id="prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} />
           <div className="composerControls">
-            <label htmlFor="routingMode">Routing</label>
+            <label htmlFor="routingMode">{copy.routing}</label>
             <select
               id="routingMode"
               value={routingMode}
@@ -328,7 +528,7 @@ function App() {
                 </option>
               ))}
             </select>
-            <label htmlFor="maxModelCalls">Budget</label>
+            <label htmlFor="maxModelCalls">{copy.budget}</label>
             <input
               id="maxModelCalls"
               type="number"
@@ -337,8 +537,8 @@ function App() {
               value={maxModelCalls}
               onChange={(event) => setMaxModelCalls(Number(event.target.value))}
             />
-            <button type="submit" disabled={apiState !== "online" || busy || !prompt.trim()}>
-              Start Job
+            <button data-testid="start-job-button" type="submit" disabled={apiState !== "online" || busy || !prompt.trim()}>
+              {copy.startJob}
             </button>
           </div>
           {error ? <p className="error">{error}</p> : null}
@@ -348,11 +548,11 @@ function App() {
       <section className="dashboard">
         <aside className="jobList">
           <div className="sectionHeader">
-            <h2>Jobs</h2>
+            <h2>{copy.jobs}</h2>
             <span>{jobListPage?.hasMore ? `${jobs.length}+` : jobs.length}</span>
           </div>
           <div className="jobFilters">
-            <div className="filterSegments" aria-label="Job status filter">
+            <div className="filterSegments" aria-label={copy.jobStatusFilter}>
               {jobStatusFilters.map((filter) => (
                 <button
                   key={filter.id}
@@ -361,19 +561,19 @@ function App() {
                   type="button"
                   onClick={() => setJobStatusFilter(filter.id)}
                 >
-                  {filter.label}
+                  {copy.statusFilters[filter.id]}
                 </button>
               ))}
             </div>
             <input
               id="jobSearch"
               type="search"
-              aria-label="Search job prompts"
-              placeholder="Search prompts"
+              aria-label={copy.searchPromptsAria}
+              placeholder={copy.searchPrompts}
               value={jobPromptFilter}
               onChange={(event) => setJobPromptFilter(event.target.value)}
             />
-            <div className="filterSegments timeFilterSegments" aria-label="Job created time filter">
+            <div className="filterSegments timeFilterSegments" aria-label={copy.jobTimeFilter}>
               {jobTimeFilters.map((filter) => (
                 <button
                   key={filter.id}
@@ -382,13 +582,13 @@ function App() {
                   type="button"
                   onClick={() => setJobTimeFilter(filter.id)}
                 >
-                  {filter.label}
+                  {copy.timeFilters[filter.id]}
                 </button>
               ))}
             </div>
             {jobTimeFilter === "custom" ? (
               <div className="customTimeFilters">
-                <label htmlFor="jobSince">Since</label>
+                <label htmlFor="jobSince">{copy.since}</label>
                 <input
                   id="jobSince"
                   type="datetime-local"
@@ -398,7 +598,7 @@ function App() {
                     setCustomSince(event.target.value);
                   }}
                 />
-                <label htmlFor="jobUntil">Until</label>
+                <label htmlFor="jobUntil">{copy.until}</label>
                 <input
                   id="jobUntil"
                   type="datetime-local"
@@ -424,17 +624,17 @@ function App() {
                     <strong>{job.id}</strong>
                     <span>{job.routingMode}</span>
                   </span>
-                  <span className="jobStatus">{job.status}</span>
-                  <span className="jobTime">{formatTime(job.createdAt)}</span>
+                  <span className="jobStatus">{copy.statuses[job.status]}</span>
+                  <span className="jobTime">{formatTime(job.createdAt, language)}</span>
                 </button>
               </li>
             ))}
-            {jobs.length === 0 ? <li className="emptyState">No jobs match.</li> : null}
+            {jobs.length === 0 ? <li className="emptyState">{copy.noJobsMatch}</li> : null}
           </ol>
           {jobListPage?.hasMore ? (
             <div className="loadMoreRow">
               <button className="secondaryButton" type="button" onClick={loadMoreJobs} disabled={busy}>
-                Load More
+                {copy.loadMore}
               </button>
             </div>
           ) : null}
@@ -443,7 +643,7 @@ function App() {
         <section className="jobDetail">
           <div className="sectionHeader detailHeader">
             <div>
-              <h2>{selectedFromList?.id ?? "No job selected"}</h2>
+              <h2>{selectedFromList?.id ?? copy.noJobSelected}</h2>
               <p>{selectedFromList ? `${selectedFromList.ingressOrigin} / ${selectedFromList.routingMode}` : "-"}</p>
             </div>
             <button
@@ -452,43 +652,43 @@ function App() {
               onClick={cancelSelectedJob}
               disabled={!isCancellable(selectedFromList) || busy}
             >
-              {selectedFromList?.status === "cancelled" ? "Cancelled" : "Cancel"}
+              {selectedFromList?.status === "cancelled" ? copy.cancelled : copy.cancel}
             </button>
           </div>
 
           {selectedFromList ? (
             <dl className="stats">
               <div>
-                <dt>Status</dt>
-                <dd>{selectedFromList.status}</dd>
+                <dt>{copy.status}</dt>
+                <dd>{copy.statuses[selectedFromList.status]}</dd>
               </div>
               <div>
-                <dt>Created</dt>
-                <dd>{formatTime(selectedFromList.createdAt)}</dd>
+                <dt>{copy.created}</dt>
+                <dd>{formatTime(selectedFromList.createdAt, language)}</dd>
               </div>
               <div>
-                <dt>Budget</dt>
+                <dt>{copy.budget}</dt>
                 <dd>{selectedFromList.maxModelCalls}</dd>
               </div>
               <div>
-                <dt>Timeline</dt>
+                <dt>{copy.timeline}</dt>
                 <dd>{timeline?.summary.totalTimelineItems ?? 0}</dd>
               </div>
             </dl>
           ) : (
-            <p className="emptyState">No job loaded.</p>
+            <p className="emptyState">{copy.noJobLoaded}</p>
           )}
 
           <div className="timelineHeader">
-            <h3>Timeline</h3>
-            <span>{timeline?.summary.truncated ? "latest items" : "complete"}</span>
+            <h3>{copy.timeline}</h3>
+            <span>{timeline?.summary.truncated ? copy.latestItems : copy.complete}</span>
           </div>
           <ol className="timeline">
             {timeline?.timeline.length ? (
               timeline.timeline.map((item) => (
                 <li key={item.id} className="timelineItem">
-                  <time>{formatTime(item.at)}</time>
-                  <span className={`source source-${item.source}`}>{item.source.replace("_", " ")}</span>
+                  <time>{formatTime(item.at, language)}</time>
+                  <span className={`source source-${item.source}`}>{copy.sources[item.source]}</span>
                   <div>
                     <strong>{compactEventType(item.eventType)}</strong>
                     <p>{item.title}</p>
@@ -497,7 +697,7 @@ function App() {
                 </li>
               ))
             ) : (
-              <li className="emptyState">No timeline events.</li>
+              <li className="emptyState">{copy.noTimelineEvents}</li>
             )}
           </ol>
         </section>

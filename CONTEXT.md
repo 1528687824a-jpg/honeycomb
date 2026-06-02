@@ -11,6 +11,118 @@ This rule was confirmed by the user on 2026-05-28 and applies to subsequent
 work on this project unless the user changes it.
 ```
 
+## 2026-06-02 GitHub README And Language Toggle Checkpoint
+
+User gave two GitHub README references:
+
+```text
+https://github.com/supermemoryai/supermemory
+https://github.com/mattpocock/skills
+```
+
+User instruction:
+
+```text
+Improve the GitHub introduction page by learning from high-star project README
+logic, but do not blindly copy. Also evaluate whether supermemory has product
+ideas Agent OpenClaw should absorb. Desktop UI should support two languages for
+now: English and Chinese.
+```
+
+Codex judgment:
+
+```text
+Useful from supermemory: split the audience path clearly (end-user/product use
+vs developer/API use) and treat memory/context as a core product layer, not a
+miscellaneous log.
+
+Useful from mattpocock/skills: start from the problem and failure mode, then
+explain the project's operating model.
+
+Product correction: do not rush directly from "alpha gates complete" to GitHub
+release. The maintainer must be able to experience the product locally first.
+```
+
+Implementation:
+
+```text
+README.md:
+  - clarified repository name vs product name;
+  - added "Why This Exists" problem framing;
+  - added "Choose Your Path" with owner tryout, quickstart, M3 config, and
+    future memory paths;
+  - linked docs/experience-memory.md.
+
+docs/experience-memory.md:
+  - documented the long-term "experience memory" direction;
+  - connected existing job timeline/artifacts/test reviews/final summaries and
+    historical experience files to future memory retrieval;
+  - kept it explicitly out of the v0.1.0-alpha blocker list.
+
+apps/desktop-app/src/main.tsx:
+  - added English / 中文 language switch in the top bar;
+  - language choice persists to localStorage;
+  - direct URLs support ?lang=en and ?lang=zh;
+  - translated core visible UI labels, filters, status labels, source labels,
+    empty states, and buttons;
+  - routing mode identifiers remain unchanged to preserve API semantics.
+
+apps/desktop-app/src/styles.css:
+  - added stable segmented-control styling for the language switch.
+
+scripts/smoke-desktop-ui.ts:
+  - made the smoke choose English explicitly before running;
+  - changed Start Job lookup to a stable data-testid selector so smoke does not
+    depend on English text.
+
+docs/owner-tryout.md:
+  - documented supported languages and direct ?lang=en / ?lang=zh URLs.
+```
+
+Verification:
+
+```text
+npm run check -> passed
+npm run check:no-secrets -> passed
+
+$env:DESKTOP_UI_SMOKE_PORT='5173'
+npm run smoke:desktop-ui -- --skip-api-start -> passed
+  jobId=JOB-20260602-61436A5C
+  terminalStatus=cancelled
+  timelineCursorRequests=5
+  timelineItems=76
+  screenshotPath=.runtime/desktop-ui-smoke/desktop-ui-dev-smoke.png
+
+Chinese screenshot check:
+  http://127.0.0.1:5173/?lang=zh
+  screenshot=.runtime/desktop-ui-smoke/desktop-ui-zh-url.png
+  visual check passed: Chinese labels render and layout remains stable.
+```
+
+Operational note:
+
+```text
+The owner tryout stack is still intentionally running for the user at:
+  http://127.0.0.1:5173
+
+Chinese direct URL:
+  http://127.0.0.1:5173/?lang=zh
+
+Stop with:
+  npm run tryout:stop
+```
+
+Current next ordered tasks:
+
+```text
+1. Commit and push README/product-memory/language-toggle work.
+2. User manually tries English and Chinese desktop flows.
+3. Fix owner-experience friction found during manual tryout.
+4. Then prepare v0.1.0-alpha release notes/tag/assets.
+5. Later with explicit authorization: OpenClaw real-mode validation across all
+   four routing modes.
+```
+
 ## 2026-06-02 Owner Tryout Path Checkpoint
 
 User clarified an important product sequencing rule:

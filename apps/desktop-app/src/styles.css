@@ -90,7 +90,38 @@ select {
 .topbarActions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 10px;
+}
+
+.languageToggle {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(72px, 1fr));
+  overflow: hidden;
+  border: 1px solid #c8ced8;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.languageButton {
+  min-width: 0;
+  min-height: 32px;
+  border: 0;
+  border-right: 1px solid #c8ced8;
+  border-radius: 0;
+  background: #ffffff;
+  color: #29313b;
+  font-size: 12px;
+}
+
+.languageButton:last-child {
+  border-right: 0;
+}
+
+.languageButton.active {
+  background: #2d5b86;
+  color: #ffffff;
 }
 
 .status {

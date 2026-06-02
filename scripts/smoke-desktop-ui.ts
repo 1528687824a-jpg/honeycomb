@@ -409,6 +409,10 @@ async function runUiFlow(page: CdpClient) {
       };
 
       await waitFor(() => document.querySelector("#prompt"), "prompt field missing");
+      const englishButton = Array.from(document.querySelectorAll(".languageButton"))
+        .find((candidate) => candidate.textContent.trim() === "English");
+      englishButton?.click();
+      await sleep(100);
 
       const beforeJobIds = new Set(
         Array.from(document.querySelectorAll(".jobRow strong"))
@@ -423,8 +427,7 @@ async function runUiFlow(page: CdpClient) {
       setNativeValue(routingMode, "supervisor_pipeline");
       setNativeValue(maxModelCalls, "20");
       const submitButton = await waitFor(() => {
-        const button = Array.from(document.querySelectorAll("button"))
-          .find((candidate) => candidate.textContent.trim() === "Start Job");
+        const button = document.querySelector('[data-testid="start-job-button"]');
         return button && !button.disabled ? button : null;
       }, "start job button was not enabled");
       submitButton.click();

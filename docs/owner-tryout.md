@@ -25,6 +25,22 @@ Desktop web console                       http://127.0.0.1:5173
 If port `5173` is busy, the script chooses the next free port and prints the
 actual URL. It also opens the desktop console automatically.
 
+## Language
+
+The desktop console currently supports:
+
+```text
+English
+中文
+```
+
+Use the language switch in the top bar. For direct links:
+
+```text
+http://127.0.0.1:5173/?lang=en
+http://127.0.0.1:5173/?lang=zh
+```
+
 ## What To Try
 
 In the desktop console:
