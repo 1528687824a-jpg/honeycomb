@@ -1,5 +1,68 @@
 # Agent OpenClaw Context Checkpoint
 
+## 2026-06-03 Desktop Shortcut Old UI Root Cause And Release Rebuild Checkpoint
+
+用户反馈：
+
+```text
+为什么我点桌面的快捷键还是之前的样子？
+```
+
+本次诊断结论：
+
+```text
+1. 桌面快捷方式本身没有错：
+   C:\Users\Administrator\Desktop\Agent OpenClaw.lnk
+   -> wscript.exe
+   -> scripts\launch-desktop-app.vbs
+   -> apps\desktop-app\src-tauri\target\release\agent-openclaw.exe
+2. 上一轮只完成了前端 dist build、production UI smoke、Tauri shell smoke，没有重建快捷方式实际启动的 Tauri release exe。
+3. 旧 release exe 时间戳是 2026-06-02T10:51:07，仍然内嵌旧 UI。
+4. 新前端 dist 是 2026-06-03 的黑色左栏 UI，但桌面快捷方式不会自动读取 dist；它启动的是已编译进 exe 的资源。
+```
+
+本次修复：
+
+```text
+1. 关闭正在运行的旧 agent-openclaw.exe。
+2. 执行：
+   npm --prefix apps/desktop-app exec tauri build -- --no-bundle
+3. 新 release exe：
+   apps\desktop-app\src-tauri\target\release\agent-openclaw.exe
+   LastWriteTime=2026-06-03T05:59:09
+```
+
+本次验证：
+
+```text
+1. 从桌面快捷方式 Agent OpenClaw.lnk 启动成功。
+2. 截图确认打开的是新的黑色左侧栏界面：
+   .runtime\desktop-ui-smoke\shortcut-after-rebuild.png
+3. 进程树：
+   agent-openclaw.exe
+     -> msedgewebview2.exe
+   hasConhostChild=false
+4. 黑色终端窗口没有回归。
+```
+
+需要记住：
+
+```text
+以后只改 apps/desktop-app/src 或跑 npm --prefix apps/desktop-app run build，并不会更新桌面快捷方式打开的 release exe。
+只要用户要从桌面快捷方式看到最新 UI，必须重建：
+npm --prefix apps/desktop-app exec tauri build -- --no-bundle
+```
+
+下一步顺序：
+
+```text
+1. 用户重新双击桌面 Agent OpenClaw.lnk，确认看到黑色左侧栏新界面。
+2. 用户检查首次引导、Settings 密码/密保入口、左侧功能栏是否符合预期。
+3. Codex 根据反馈微调 UI 文案、导航顺序、图标和设置页。
+4. 把后端/API/Docker 状态放进桌面 Dashboard 或 Settings 讲清楚。
+5. 做 First Run 到真实 OpenClaw agent 框架的“备份 + 写入”流程。
+```
+
 ## 2026-06-03 Dark Desktop Panel Sidebar And Guided Onboarding Checkpoint
 
 用户给出新的桌面 UI 方向：
