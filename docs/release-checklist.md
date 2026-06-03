@@ -12,8 +12,8 @@ Alpha is ready when a new operator can verify these paths from the public repo:
 ```text
 1. HTTP-only Docker quickstart reaches a succeeded mock job.
 2. README and QUICKSTART explain the first run without private credentials.
-3. Web panel is visible and usable without implicitly starting Docker Desktop.
-4. Web panel can talk to the local API when the backend is started explicitly.
+3. Desktop console is visible and usable against the local API.
+4. Windows desktop installer can be built locally.
 5. M3 real-provider config path has one explicitly authorized real-provider
    smoke result.
 6. Git remote/CI exists and the CI-safe checks are green.
@@ -26,7 +26,6 @@ Feishu public HTTPS ingress on the author's domain.
 waiting_for_human resume/accept/retry API.
 M2 recovery nightly CI.
 macOS/Linux desktop installers.
-Windows desktop installer.
 Real media providers.
 OpenClaw real mode across all four routing modes.
 ```
@@ -43,12 +42,11 @@ local product loop directly.
 Before cutting `v0.1.0-alpha`:
 
 ```text
-1. Run npm run tryout:web.
-2. Confirm the web panel opens without starting Docker Desktop.
-3. Start the backend explicitly when live API/job checks are needed.
-4. Create at least one job from the console.
-5. Inspect messages and timeline.
-6. Stop with npm run tryout:stop after the manual tryout is done.
+1. Run npm run tryout:start.
+2. Confirm the desktop console opens and shows API online.
+3. Create at least one job from the console.
+4. Inspect messages and timeline.
+5. Stop with npm run tryout:stop after the manual tryout is done.
 ```
 
 This keeps the release path anchored in "can I use it?" rather than "can CI
@@ -63,10 +61,10 @@ HTTP-only Docker quickstart        done
 README/QUICKSTART first run        done
   docs/assets/quickstart-demo.gif is linked from both files
 
-Web panel                          done for MVP
+Desktop console                    done for MVP
   create/search/filter/cancel/timeline smokes pass in dev and prod UI modes
 
-Windows desktop installer          optional wrapper, not alpha gate
+Windows desktop installer          done on local Windows host
   MSI/NSIS artifacts copied to D:\AgentOpenClaw\installers\2026-06-01
 
 Cross-platform installer probes    partial
@@ -82,8 +80,8 @@ Git remote + hosted CI             done
   desktop handoff checkpoint [skip ci]
 
 Owner local tryout path            done for dev/browser console
-  latest proof: npm run tryout:web -- -NoOpen opened http://127.0.0.1:5173
-  without starting Docker Compose; backendAutoStarted=false
+  latest proof: npm run tryout:start -- -NoOpen passed on 2026-06-02;
+  desktop UI smoke created JOB-20260602-41970DBA and rendered timeline
 ```
 
 ## Pre-Release Local Commands
@@ -102,6 +100,8 @@ npm run smoke:timeline-since
 npm run smoke:list-jobs
 npm run smoke:desktop-ui
 npm run smoke:desktop-ui-prod
+npm run smoke:tauri-shell
+npm --prefix apps/desktop-app run tauri:build
 ```
 
 Run sequentially when they share the dev stack. The smoke lock protects common
@@ -112,8 +112,6 @@ Checks requiring explicit operator authorization:
 ```powershell
 npm run smoke:m3-real-provider
 npm run smoke:openclaw-real
-npm run smoke:tauri-shell
-npm --prefix apps/desktop-app run tauri:build
 ```
 
 Provider keys in `.env` are not permission to spend quota.

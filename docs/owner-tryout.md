@@ -1,9 +1,9 @@
 # Owner Tryout
 
 This is the pre-release path for trying Agent OpenClaw on your own machine
-before publishing a GitHub release. The primary path now opens a browser-based
-web panel first. Opening the panel must not implicitly start Docker Desktop or
-Docker Compose; backend startup is a separate, explicit action.
+before publishing a GitHub release. The primary path starts the HTTP-only mock
+backend and opens the Tauri desktop application, so the first thing you feel is
+the desktop product rather than a browser dashboard.
 
 Use this when the question is not "can CI pass?" but "can I sit down and use
 the product?"
@@ -13,51 +13,51 @@ the product?"
 From the repo root:
 
 ```powershell
-npm run tryout:web
+npm run tryout:desktop
 ```
 
-`npm run tryout:start` is the same web-panel alias.
-
-This starts:
-
-```text
-Web panel     http://127.0.0.1:5173
-API target    http://localhost:3000
-```
-
-If port `5173` is busy, the script chooses the next free port and prints the
-actual URL. It also opens the panel automatically. If the API is offline, the
-panel still opens and shows API offline.
-
-To run live jobs, start the backend stack separately:
+To create a desktop launch icon first:
 
 ```powershell
-docker compose up --build
+npm run tryout:shortcut
 ```
 
-That backend starts:
+That creates `Agent OpenClaw.lnk` on the Windows desktop. Double-clicking it
+starts the local backend in the background and opens the Tauri desktop app. It
+logs startup details to `logs/desktop-launcher.log` instead of leaving a
+PowerShell build window in front of the product.
+
+The script starts:
 
 ```text
 Postgres + orchestrator-api + dbos-worker  http://localhost:3000
+Tauri desktop app                          apps/desktop-app
 ```
 
-The web panel opens to First Run by default. That flow orients the owner,
+The desktop app opens to First Run by default. That flow orients the owner,
 collects provider settings, asks work-profile questions, and generates a safe
 setup bundle for later agent personalization. It does not write the raw provider
 key to disk.
 
-Legacy full-stack tryout:
+Browser development fallback:
 
 ```powershell
-npm run tryout:stack
+npm run tryout:start
 ```
 
-This older path starts Docker Compose and the web panel together. It is useful
-for engineering checks, not as the first user-facing experience.
+That fallback starts:
+
+```text
+Postgres + orchestrator-api + dbos-worker  http://localhost:3000
+Desktop web console                       http://127.0.0.1:5173
+```
+
+If port `5173` is busy, the script chooses the next free port and prints the
+actual URL. It also opens the desktop console automatically.
 
 ## Language
 
-The web panel currently supports:
+The desktop console currently supports:
 
 ```text
 English
@@ -73,7 +73,7 @@ http://127.0.0.1:5173/?lang=zh
 
 ## What To Try
 
-In the web panel:
+In the desktop app:
 
 ```text
 1. Confirm the app opens on First Run.
@@ -123,8 +123,7 @@ npm run tryout:stop
 ```
 
 This stops the desktop dev server and Docker containers, but keeps Docker
-volumes so you can inspect prior jobs on the next run. When the current run was
-web-panel only, it stops only the web panel and does not touch Docker Compose.
+volumes so you can inspect prior jobs on the next run.
 
 To delete local state too:
 
@@ -135,12 +134,13 @@ docker compose down -v
 ## Logs And State
 
 ```text
-logs/web-panel.log
+logs/owner-tryout-desktop.log
 .runtime/owner-tryout.json
 ```
 
-If the web panel does not open, copy the printed `Web panel` URL into a browser.
-If the API is offline, start the backend separately when you need live jobs.
+If the desktop console does not open, copy the printed `Desktop UI` URL into a
+browser. If the API is offline, stop the tryout and start it again after Docker
+Desktop is fully running.
 
 ## Release Boundary
 
