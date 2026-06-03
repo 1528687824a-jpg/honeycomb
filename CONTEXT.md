@@ -1,5 +1,38 @@
 # Agent OpenClaw Context Checkpoint
 
+## 2026-06-02 RTK Token-Saving Evaluation Checkpoint
+
+用户询问 `rtk-ai/rtk` 是否可以给 Agent OpenClaw 的工作省 token。
+
+本轮外部资料判断：
+
+```text
+1. RTK 的核心不是压缩模型回答，而是过滤/压缩 shell 命令输出，再把更短的输出放进 LLM 上下文。
+2. 官方 README 声称常见 dev command 可省 60-90% token；这是按命令输出场景估算，实际节省取决于项目和命令类型。
+3. RTK 有 OpenClaw 插件：通过 before_tool_call 拦截 exec tool call，调用 rtk rewrite，把 git status 等命令改成 rtk git status。
+4. 本机当前未安装 rtk；`rtk --version` 和 `where.exe rtk` 都失败。
+5. RTK 在 Windows 原生环境可手动调用，但自动 rewrite hook 对 Bash/WSL 支持更完整；OpenClaw 插件源码里还使用 `which rtk`，在原生 Windows 上需要验证或改成跨平台检测。
+```
+
+Codex 独立判断：
+
+```text
+1. 对“我们当前 Codex 开发过程”：有潜在价值，尤其是 git diff、test output、Docker logs、rg/tree 等高噪声命令；但在当前 PowerShell/Codex Desktop 工具链里不会自动生效，最多先手动试用。
+2. 对“Agent OpenClaw 产品运行时”：不是直接降低所有 DeepSeek/OpenClaw provider token；只有当 agent 大量调用 exec 并把命令输出塞进上下文时，RTK 才明显省 token。
+3. 对产品可借鉴的功能：可以做成可选的“tool output compression / RTK-compatible command rewrite”能力，作为未来差异化；但当前 P0 仍是桌面 First Run 闭环，不能被它打断。
+4. 若要引入，必须做 A/B benchmark：同一组 OpenClaw real jobs，在关闭/开启 RTK 后比较 provider token、输出质量、失败可诊断性；不能只信 README 的百分比。
+```
+
+后续任务里新增一个非 P0 技术验证项：
+
+```text
+在用户走完 First Run、写入流程和 installer 基础完成后，安排 RTK spike：
+1. 先在隔离环境安装 rtk。
+2. 验证 Windows / Docker / OpenClaw gateway 下插件是否可用。
+3. 跑四种 routing mode 或至少 shell-heavy job 的 A/B token benchmark。
+4. 只有确认不损失诊断信息，再决定是否作为可选插件或内置输出压缩能力。
+```
+
 ## 2026-06-02 Context Update Rules And Claude Review Intake Checkpoint
 
 用户新增/重申的硬规则：
