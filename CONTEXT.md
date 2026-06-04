@@ -1,4 +1,128 @@
-# Agent OpenClaw Context Checkpoint
+# Honeycomb Context Checkpoint (formerly Agent OpenClaw)
+
+## 2026-06-04 Honeycomb Desktop Experience, Branding, Chinese GitHub And ECC Assessment Checkpoint
+
+### Long-term working rules
+
+```text
+1. After every completed work item, update BOTH context files.
+2. New context updates must be inserted at the very beginning/newest position, never appended at the end.
+3. Every final work report must list the next tasks in execution order.
+4. At the start of a task, the user may provide a Claude evaluation/advice Markdown file. Read it for useful ideas, but keep independent engineering judgment and do not trust it blindly.
+5. A single wait must stop within 5 minutes. Diagnose or change approach instead of waiting longer.
+6. The maintainer must be able to experience the local desktop product before public alpha/release polish is treated as complete.
+```
+
+### User decisions now in force
+
+```text
+1. Product and repository name: honeycomb.
+2. The primary owner experience is a dark desktop application, not a web-only panel.
+3. Desktop UI supports Chinese and English; GitHub introduction/README content is Chinese.
+4. First launch order: animated product tour -> locked First Run -> provider key -> progressive work interview -> generated Agent team -> unlock full console.
+5. Learning from ECC is the last requested follow-up after the current desktop/product work. Selectively adopt useful ideas; do not copy the project wholesale.
+```
+
+### Completed in this checkpoint
+
+```text
+Desktop shell and navigation
+- Left sidebar can collapse and expand.
+- Before First Run is complete, all other product pages are hidden.
+- After First Run completes, the full navigation and console are unlocked.
+
+Chinese localization and model visibility
+- Jobs routing modes are localized in Chinese.
+- Agents, Models, and Memory pages are localized in Chinese.
+- Models page shows every role/Agent model used by each of the four routing modes, rather than only the planner model.
+
+First Run experience
+- The first-launch tour has simple motion and leads directly into First Run.
+- Provider/API Key configuration is a separate first stage and fades away after completion.
+- The work interview explains why answers are requested and shows a red local-privacy promise.
+- Fixed first three questions are implemented:
+  1. work field;
+  2. role in that field, with a field-tailored placeholder after an Agent thinking state;
+  3. usual work content, with generated options and an Other input.
+- Honeycomb logo has idle/talking/thinking animation states during the tour and interview.
+- Generated work profile produces a recommended routing mode and an Agent team review before setup completion.
+
+Branding and launch
+- GitHub repository renamed to https://github.com/1528687824a-jpg/honeycomb.
+- GitHub description and root README are Chinese.
+- New hard geometric Honeycomb logo is used in the desktop top-left, docs, icon files, and shortcut.
+- Desktop shortcut is now C:\Users\Administrator\Desktop\honeycomb.lnk.
+- Shortcut launches through wscript/VBS without a visible black terminal window.
+- Launcher opens the desktop UI first; Docker/backend startup does not block the panel from appearing.
+
+GitHub introduction
+- Root README was rewritten in Chinese using a high-signal project introduction structure.
+- Latest real desktop First Run screenshot was added at docs/assets/honeycomb-first-run.png.
+```
+
+### Verification evidence
+
+```text
+Repository state:
+- main clean and tracking origin/main
+- origin = https://github.com/1528687824a-jpg/honeycomb.git
+- latest pushed commit = 32a0574 Rewrite GitHub introduction in Chinese
+
+Checks passed:
+- npm run check
+- npm run check:no-secrets
+- npm run smoke:desktop-onboarding
+
+Latest onboarding smoke evidence:
+- animated_tour_to_first_run
+- navigation_locked_before_setup
+- provider_only_stage
+- thinking_state
+- tailored_role_placeholder
+- generated_work_options
+- agent_profile_review
+- navigation_unlocked_after_setup
+- sidebar_collapse
+- navLocked=true, collapsed=true, setupCompleted=true, language=zh
+
+Real shortcut evidence:
+- honeycomb.lnk exists
+- target = C:\Windows\system32\wscript.exe
+- launcher = scripts\launch-desktop-app.vbs
+- icon = apps\desktop-app\src-tauri\icons\icon.ico
+
+GitHub API evidence:
+- full name = 1528687824a-jpg/honeycomb
+- default branch = main
+- public repository
+- description = 本地优先、可持久化、可检查的多 Agent 编排桌面应用，让 Agent 团队真正理解你的工作。
+```
+
+### ECC assessment and independent judgment
+
+```text
+Worth adopting:
+- Extract small, atomic experience candidates from completed work.
+- Each candidate must retain source job, evidence, confidence, scope, and status.
+- Candidates default to pending and become reusable memory only after explicit user adoption.
+- Later retrieval should be iterative: retrieve -> assess missing context -> retrieve again, with a small loop limit.
+
+Do not copy blindly:
+- Honeycomb already has stronger executable foundations than ECC guidance in durable DBOS jobs, persisted stage artifacts, retries, test-agent reviews, and final quality gates.
+- Avoid claiming "continuous learning" while Memory is only a placeholder.
+- Never automatically turn one successful result into permanent truth.
+```
+
+### Next tasks in order
+
+```text
+1. Implement the ECC-inspired experience-candidate vertical slice:
+   database model -> shared types -> API -> conservative candidate extraction -> adopt/reject actions.
+2. Connect the desktop Memory page to real candidates and add a lifecycle smoke test.
+3. Rebuild the Honeycomb desktop release executable and verify the real shortcut after the Memory implementation.
+4. Let the maintainer use the desktop product and refine the actual owner experience from feedback.
+5. Only after owner experience is satisfactory, continue alpha polish: signing, release tag, and first public alpha notes.
+```
 
 ## 2026-06-03 Desktop Shortcut Old UI Root Cause And Release Rebuild Checkpoint
 
