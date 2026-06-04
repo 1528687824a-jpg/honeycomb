@@ -1,88 +1,175 @@
-# honeycomb
+<p align="center">
+  <img src="docs/assets/honeycomb-mark.svg" width="112" alt="honeycomb 标志">
+</p>
 
-honeycomb is a local-first multi-agent orchestration platform for OpenClaw.
-It gives an owner a durable control plane, a desktop console, and a guided
-first-run interview that specializes an agent team around real work.
+<h1 align="center">honeycomb</h1>
 
-Use it when a one-off bot script is too fragile, but a hosted workflow product
-is too opaque. It gives you a durable DBOS/Postgres control plane, four routing
-modes, HTTP and Feishu adapters, and a desktop control console so an agent
-cluster can be started, inspected, cancelled, and later generated from an
-interview-style config flow.
+<p align="center">
+  本地优先、可持久化、可检查的多 Agent 编排桌面应用
+</p>
 
-## Why This Exists
+<p align="center">
+  <strong>让 Agent 团队真正理解你的工作，并让每一次协作都有迹可循。</strong>
+</p>
 
-Most multi-agent demos are easy to start and hard to trust: no durable state,
-unclear handoffs, no replayable timeline, and no clean path from "my first
-local run" to "my own agent cluster." honeycomb starts from the opposite
-end:
+---
+
+![honeycomb 首次启动界面](docs/assets/honeycomb-first-run.png)
+
+## honeycomb 是什么
+
+honeycomb 是围绕 OpenClaw 构建的多 Agent 编排与控制平台。
+
+它不是一个只会把问题转发给模型的聊天面板，而是一套可以长期使用的本地工作系统：
+
+- 第一次启动时，通过渐进式访谈理解你的领域、职业和日常工作；
+- 根据你的回答生成适合真实工作的 Agent 团队与提示词；
+- 使用四种编排模式组织多个 Agent 协作；
+- 用 DBOS 与 PostgreSQL 持久化任务状态，进程中断后仍可恢复；
+- 保存任务、消息、阶段产物、评审和完整时间线；
+- 在桌面应用中创建任务、检查过程、取消运行和管理配置。
+
+适合这样的场景：
+
+> 单个脚本已经不够可靠，但你又不愿把工作过程交给一个看不见内部状态的托管黑盒。
+
+## 为什么做 honeycomb
+
+许多多 Agent 演示很容易跑起来，却很难长期信任：
+
+| 常见问题 | honeycomb 的处理方式 |
+| --- | --- |
+| 进程退出后任务状态丢失 | 使用 DBOS 检查点与 PostgreSQL 持久化状态 |
+| Agent 之间如何交接不清楚 | 保存阶段、消息、产物和完整时间线 |
+| 输出质量只能凭感觉判断 | 使用测试 Agent、验收标准、重试和最终质量门禁 |
+| 每次任务都从零开始 | 正在建设经过人工确认的经验记忆与持续学习机制 |
+| 配置 Agent 的门槛太高 | 首次启动访谈会生成工作画像与 Agent 提示词 |
+| 只能在终端操作 | 提供中文与英文桌面控制台 |
+
+## 当前体验
+
+### 首次启动
+
+首次打开桌面应用时，honeycomb 会先介绍界面，然后进入强制首次配置流程：
+
+1. 单独配置驱动面板的 Provider 与 API Key；
+2. 询问你的工作领域；
+3. 根据领域生成职业/角色提示；
+4. 根据前两项回答生成日常工作选项；
+5. 生成工作画像、推荐编排模式和 Agent 团队；
+6. 写入本地安全配置后，解锁完整控制台。
+
+访谈答案只用于配置本地面板。API Key 不会写入生成的 Agent 提示词文件。
+
+### 桌面控制台
+
+- 深色桌面应用与可收缩左侧栏；
+- 中文、英文界面切换；
+- 创建、搜索、筛选和取消任务；
+- 查看任务状态、消息、阶段产物和时间线；
+- 查看每种编排模式中各 Agent 使用的模型；
+- 管理本地密码、密保问题和语言偏好；
+- 从桌面 `honeycomb` 快捷方式启动，不显示黑色终端窗口。
+
+## 四种编排模式
+
+| 编排模式 | 适用场景 | 核心行为 |
+| --- | --- | --- |
+| `supervisor_pipeline` | 默认推荐，重视质量与可控性 | 每个阶段完成后由测试 Agent 评审，失败时重试，必要时等待人工处理 |
+| `pipeline` | 步骤明确、追求速度的生产链 | Agent 按顺序传递产物，最后执行整体质量检查 |
+| `classic_master_slave` | 主控 Agent 分派多个相对独立的子任务 | 主控负责分派和汇总，子 Agent 分别执行 |
+| `master_slave_discussion` | 问题模糊、需要不同观点讨论 | 多个 Agent 进行持久化讨论，再由主控 Agent 综合结论 |
+
+第一次运行建议使用 `supervisor_pipeline`。
+
+## 已经具备的能力
 
 ```text
-local first          run the stack on your machine
-durable             DBOS checkpoints + Postgres business state
-inspectable         jobs, messages, artifacts, and timeline are visible
-mode-switchable     four routing modes are first-class product behavior
-OpenClaw-native     a platform layer around OpenClaw, not a replacement for it
+桌面应用          Tauri + React，支持中文与英文
+任务 API          创建、查询、列表、时间线、消息、取消
+持久编排          DBOS 检查点 + PostgreSQL 业务状态
+Agent 协作        四种编排模式、阶段交接和讨论轮次
+质量验证          测试 Agent、验收标准、阶段重试、最终质量门禁
+产物追踪          任务产物、测试报告、最终结果和完整时间线
+首次启动          Provider 配置、工作访谈、Agent 提示词生成
+外部入口          HTTP 与飞书适配器
+真实运行边界      通过适配器调用 OpenClaw，不修改 OpenClaw 源码
 ```
 
-![HTTP-only quickstart demo](docs/assets/quickstart-demo.gif)
+## 正在建设
 
-![honeycomb desktop UI](docs/assets/desktop-ui-mvp.png)
+- 从已完成任务中提取原子化经验候选；
+- 为经验记录保存置信度、证据、作用域和来源任务；
+- 由用户确认后再把经验写入可复用记忆，避免错误经验自动扩散；
+- 在后续任务与 Agent 生成过程中检索相关经验；
+- 完善真实 OpenClaw 模式下四种编排模式的端到端验证；
+- 发布首个可公开体验的 Alpha 版本。
 
-## Choose Your Path
+## 快速体验桌面应用
 
-```text
-I want to feel the desktop product     npm run tryout:desktop
-I want a desktop shortcut              npm run tryout:shortcut
-I want the browser dev fallback        npm run tryout:start
-I want the clean public quickstart     docker compose up --build
-I want to generate a cluster           read docs/m3-real-provider-operator-guide.md
-I want to understand future memory     read docs/experience-memory.md
-```
+### 环境要求
 
-## Owner Tryout
+- Windows；
+- Docker Desktop；
+- Node.js `^20.19.0` 或 `>=22.12.0`；
+- npm `>=10`；
+- 构建 Tauri 桌面程序时需要 Rust、MSVC 与 Windows SDK。
 
-Before cutting a public release, use the owner tryout path to feel the product
-locally from the Tauri desktop app:
+### 启动
+
+在仓库根目录执行：
 
 ```powershell
 npm run tryout:desktop
 ```
 
-This starts the HTTP-only mock backend, opens the desktop app on First Run, and
-lets you configure a provider key, answer the work interview, generate a safe
-agent setup bundle, then switch into the console. Stop it with:
-
-```powershell
-npm run tryout:stop
-```
-
-To put a launch icon on the Windows desktop:
+创建桌面快捷方式：
 
 ```powershell
 npm run tryout:shortcut
 ```
 
-The shortcut opens the desktop app through a hidden launcher. Backend startup is
-logged to `logs/desktop-launcher.log`; it should not leave a terminal window in
-front of the app.
+之后可以直接双击桌面的 `honeycomb.lnk`。应用会立即打开，并在后台检查或启动本地服务。
 
-See `docs/owner-tryout.md` for the local experience checklist.
+停止本地体验环境：
 
-## Quickstart
+```powershell
+npm run tryout:stop
+```
 
-Start the local stack:
+## Docker 快速启动
 
 ```powershell
 docker compose up --build
 ```
 
-This starts Postgres, `orchestrator-api` on `http://localhost:3000`, and the
-DBOS worker. In another terminal, create a job:
+启动后包含：
+
+```text
+PostgreSQL                         localhost:5432
+orchestrator-api                   http://localhost:3000
+DBOS worker                        后台运行
+```
+
+默认使用模拟 Agent，不会产生真实模型费用。
+
+停止服务但保留数据：
+
+```powershell
+docker compose down
+```
+
+只有在明确要删除本地状态时才执行：
+
+```powershell
+docker compose down -v
+```
+
+## 创建一个任务
 
 ```powershell
 $body = @{
-  prompt = 'Plan a short launch article for a new AI writing tool'
+  prompt = '为一个新的 AI 写作工具规划一篇简短发布文章'
   requesterId = 'quickstart'
   routingMode = 'supervisor_pipeline'
 } | ConvertTo-Json
@@ -96,180 +183,75 @@ $created = Invoke-RestMethod `
 $created
 ```
 
-Expected shape:
-
-```json
-{
-  "jobId": "JOB-...",
-  "status": "queued",
-  "ingressOrigin": "http"
-}
-```
-
-Poll the job and read its visible outputs:
+查询任务和时间线：
 
 ```powershell
-do {
-  Start-Sleep -Seconds 2
-  $job = Invoke-RestMethod -Uri "http://localhost:3000/jobs/$($created.jobId)"
-  $job.status
-} until (@('succeeded', 'failed', 'waiting_for_human', 'cancelled') -contains $job.status)
-
+Invoke-RestMethod -Uri "http://localhost:3000/jobs/$($created.jobId)"
 Invoke-RestMethod -Uri "http://localhost:3000/jobs/$($created.jobId)/messages"
 Invoke-RestMethod -Uri "http://localhost:3000/jobs/$($created.jobId)/timeline"
 ```
 
-Equivalent one-line `curl` create call:
+## 系统结构
 
-```bash
-curl -s -X POST http://localhost:3000/jobs -H 'content-type: application/json' -d '{"prompt":"Plan a short launch article for a new AI writing tool","requesterId":"quickstart","routingMode":"supervisor_pipeline"}'
+```text
+桌面应用 / HTTP / 飞书
+          │
+          ▼
+   orchestrator-api
+          │
+          ▼
+      DBOS worker
+          │
+    ┌─────┴─────┐
+    ▼           ▼
+PostgreSQL   Agent 适配器
+                 │
+                 ▼
+              OpenClaw
 ```
 
-Ready-made request bodies for all four routing modes live under
-`examples/demo-jobs/`.
-
-Stop the stack:
-
-```powershell
-docker compose down
-```
-
-The Docker volumes keep Postgres and job artifacts. Use
-`docker compose down -v` only when you want to delete local state.
-
-## Pick A Routing Mode
-
-| Mode | Choose It When |
+| 目录 | 内容 |
 | --- | --- |
-| `supervisor_pipeline` | You want the safest default: stage-by-stage handoff, test-agent review after each stage, retries, and human stop on repeated failure. |
-| `pipeline` | You want a fast linear chain where each child agent hands output to the next, with a final quality gate. |
-| `classic_master_slave` | You want the main agent to dispatch child agents independently and gather their outputs, with an optional final gate. |
-| `master_slave_discussion` | You want multiple child agents to discuss for persisted rounds, then let the main agent synthesize the result. |
+| `apps/desktop-app` | Tauri + React 桌面应用 |
+| `apps/orchestrator-api` | 任务与控制 API |
+| `apps/dbos-worker` | 持久工作流、编排模式和 Agent 适配器 |
+| `packages/db` | PostgreSQL 数据访问与迁移 |
+| `packages/shared` | 共享类型和契约 |
+| `examples` | 示例任务与首次配置回答 |
+| `platform-assets` | Agent 模板和平台资源 |
+| `scripts` | 启动、检查、验证和维护脚本 |
+| `docs` | 架构边界、运维和开发记录 |
 
-Most first runs should use `supervisor_pipeline`. Use
-`master_slave_discussion` for ambiguous tasks where disagreement is useful, and
-`pipeline` for predictable production chains.
-
-## What Works Now
-
-```text
-HTTP job API                  POST /jobs, GET /jobs, messages, timeline, cancel
-Durable orchestration          DBOS checkpoints + Postgres business state
-Routing modes                  supervisor, pipeline, classic, discussion
-M3 config generation           mock and fake-provider smokes pass
-Desktop console                create, search/filter jobs, inspect timeline, cancel
-Docker quickstart              Postgres + API + worker in mock HTTP-only mode
-Optional adapters              Feishu local webhook, Feishu public ingress reference
-OpenClaw real mode             adapter path exists; local smoke requires WSL setup
-```
-
-OpenClaw and ClawPanel are external products. This repository contains the
-platform layer, templates, docs, and verification scripts that call OpenClaw
-through a CLI adapter instead of modifying OpenClaw source.
-
-## Desktop Console
-
-The desktop shell lives under `apps/desktop-app`. It is a React/Tauri app for
-the same HTTP API with two product views:
-
-```text
-First Run   guide, provider key, work interview, generated agent prompts
-Console     create, search/filter jobs, inspect timelines, cancel runs
-```
-
-First Run keeps the raw provider key in memory and writes only a safe setup
-bundle under the app data directory. Applying generated prompts into real
-OpenClaw agent folders is a later explicit step with backups.
-
-For the browser development fallback:
-
-```powershell
-npm install --prefix apps/desktop-app
-npm --prefix apps/desktop-app run dev
-```
-
-Then open `http://localhost:5173` while the API is running. Full Tauri builds
-require Rust/Cargo plus the native desktop packaging toolchain on the host. On
-Windows that means Visual Studio Build Tools with MSVC and a Windows SDK. The
-first local packaging proof and verified Windows installer artifact paths are tracked in
-`docs/desktop-installer-notes.md`.
-
-## Local Checks
-
-Local Node-based scripts require Node `^20.19.0 || >=22.12.0` and npm `>=10`.
+## 本地检查
 
 ```powershell
 npm run check
 npm run check:no-secrets
 npm run build
-npm run smoke:docker-compose
-npm run smoke:http-only
-npm run smoke:m3-config
-npm run smoke:m3-real-planner
-npm run smoke:cancel-job
-npm run smoke:desktop-ui
+npm run smoke:desktop-onboarding
 npm run smoke:desktop-ui-prod
 npm run smoke:tauri-shell
+npm run smoke:docker-compose
+npm run smoke:http-only
 ```
 
-Optional checks:
+真实 Provider 与真实 OpenClaw 验证需要本地配置和明确授权：
 
 ```powershell
 npm run smoke:m3-real-provider
-npm run smoke:feishu-webhook
-npm run smoke:m2-recovery
 npm run smoke:openclaw-real
 ```
 
-`smoke:m3-real-provider` requires local `M3_PLANNER_BASE_URL`,
-`M3_PLANNER_MODEL`, and `M3_PLANNER_API_KEY` configuration. It does not print
-secret values. See `docs/m3-real-provider-operator-guide.md` for provider
-templates and failure triage. `smoke:openclaw-real` requires a configured WSL
-OpenClaw runtime.
+检查脚本不会输出 API Key。
 
-Feishu public HTTPS ingress is an optional self-hosting reference path, not a
-quickstart or product gate. See `docs/reference-feishu-public-ingress.md`; the
-helper scripts require explicit `FEISHU_PUBLIC_*` environment variables.
+## 项目边界
 
-## Repository Map
+honeycomb 是 OpenClaw 之上的平台层，不是 OpenClaw 的替代品。
 
-```text
-apps/                  API, worker, and desktop client.
-examples/              Pasteable demo jobs and M3 interview answers.
-packages/              Shared DB and type packages.
-scripts/               Dev/start/smoke/maintenance scripts.
-platform-assets/       Agent templates and marked vendor workarounds.
-docs/                  Project boundaries, setup notes, and reference guides.
-CONTEXT.md             Current agent-facing project checkpoint.
-SETUP.md               Detailed local setup and smoke-test guide.
-```
+正常开发中不直接修改 OpenClaw 或 ClawPanel 源码。真实运行通过
+`apps/dbos-worker/src/adapters/openclaw.ts` 适配器边界完成，Agent 模板保存在
+`platform-assets/openclaw-agent-templates/`。
 
-Read next:
+## 许可证
 
-```text
-QUICKSTART.md
-INSTALL.md
-SETUP.md
-docs/PROJECT_STRUCTURE.md
-docs/BOUNDARIES.md
-docs/job-cancellation-semantics.md
-docs/m3-real-provider-operator-guide.md
-docs/experience-memory.md
-docs/owner-tryout.md
-docs/desktop-installer-notes.md
-docs/release-checklist.md
-docs/reference-feishu-public-ingress.md
-SECURITY.md
-CONTRIBUTING.md
-```
-
-## Boundary Rule
-
-Do not modify OpenClaw or ClawPanel source code as part of normal platform
-development. Use `apps/dbos-worker/src/adapters/openclaw.ts` as the runtime
-boundary, and keep prompt/config assets under
-`platform-assets/openclaw-agent-templates/`.
-
-## License
-
-Apache-2.0. See `LICENSE`.
+本项目使用 [Apache-2.0](LICENSE) 许可证。

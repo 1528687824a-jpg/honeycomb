@@ -1,50 +1,25 @@
-# honeycomb Desktop Shell
+# honeycomb 桌面应用
 
-This is the Tauri desktop control surface for honeycomb.
+这里是 honeycomb 的 Tauri + React 桌面控制台。
 
-The v1 desktop app expects the backend stack to be running locally through
-Docker Compose or the development scripts, then talks to `http://localhost:3000`.
-It now has two top-level views:
+桌面应用连接本地 `orchestrator-api`，用于完成首次配置、管理 Agent 团队、创建任务、切换编排模式、检查消息与时间线，以及取消正在运行的任务。
 
-```text
-First Run   orient the owner, configure a provider key, answer a work interview,
-            and generate a safe desktop setup bundle
-Console     create, inspect, filter, and cancel orchestrator jobs
-```
+## 首次启动
 
-First Run keeps the provider key in memory for the current session. The
-generated setup files record only that a key was configured; they do not write
-the secret to disk.
-
-Current console surface:
+首次打开时会按顺序完成：
 
 ```text
-job list
-status filters and prompt search over GET /jobs
-new HTTP job creation
-job detail summary
-timeline view from GET /jobs/:id/timeline
-cancel action through POST /jobs/:id/cancel
+界面引导
+配置 Provider 与 API Key
+渐进式工作访谈
+生成工作画像与 Agent 团队
+写入本地安全配置
+解锁完整控制台
 ```
 
-From the repo root, the product-like owner path is:
+原始 API Key 只保留在当前运行状态中，不会写入生成的 Agent 提示词文件。
 
-```powershell
-npm run tryout:desktop
-```
-
-That starts the local backend stack and opens the Tauri desktop app.
-
-Manual development path:
-
-```powershell
-docker compose up --build
-npm install --prefix apps/desktop-app
-npm --prefix apps/desktop-app run tauri:dev
-```
-
-The First Run save command writes the preview bundle under the app data
-directory in `desktop-first-run`:
+首次启动生成的配置保存在应用数据目录中的 `desktop-first-run`：
 
 ```text
 first-run-profile.json
@@ -52,10 +27,35 @@ cluster.config.json
 agents/<agent-id>/AGENTS.md
 ```
 
-The current repository smoke validates the shell structure and records whether
-the Rust/Tauri build toolchain is installed. Full Tauri packaging requires Rust
-(`cargo` and `rustc`) plus the host native packaging toolchain. On Windows that
-means Visual Studio Build Tools with MSVC and a Windows SDK.
+## 开发运行
 
-Installer build notes and the verified Windows artifact paths are tracked in
-`docs/desktop-installer-notes.md`.
+先启动后端：
+
+```powershell
+docker compose up --build
+```
+
+再启动桌面开发模式：
+
+```powershell
+npm install --prefix apps/desktop-app
+npm --prefix apps/desktop-app run tauri:dev
+```
+
+只运行浏览器开发界面：
+
+```powershell
+npm --prefix apps/desktop-app run dev
+```
+
+## 构建与检查
+
+```powershell
+npm --prefix apps/desktop-app run build
+npm --prefix apps/desktop-app exec tauri build -- --no-bundle
+npm run smoke:desktop-onboarding
+npm run smoke:desktop-ui-prod
+npm run smoke:tauri-shell
+```
+
+Windows 桌面构建需要 Rust、MSVC 与 Windows SDK。
