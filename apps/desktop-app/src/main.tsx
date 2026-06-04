@@ -522,7 +522,7 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showTour, setShowTour] = useState(
-    () => window.localStorage.getItem("agentOpenClaw.tourCompleted") !== "true"
+    () => window.localStorage.getItem("honeycomb.tourCompleted") !== "true"
   );
   const [tourIndex, setTourIndex] = useState(0);
   const [setupComplete, setSetupComplete] = useState(
@@ -836,7 +836,7 @@ function App() {
   }
 
   function completeTour() {
-    window.localStorage.setItem("agentOpenClaw.tourCompleted", "true");
+    window.localStorage.setItem("honeycomb.tourCompleted", "true");
     setShowTour(false);
     if (!setupComplete) {
       setActiveView("setup");
