@@ -105,34 +105,23 @@ select {
   place-items: center;
 }
 
-.honeycombLogo svg {
+.honeycombLogo img {
   width: 100%;
   height: 100%;
-  overflow: visible;
-}
-
-.logoCell {
-  fill: none;
-  stroke: #f5b942;
-  stroke-width: 8;
-  stroke-linecap: square;
-  stroke-linejoin: miter;
-}
-
-.logoCore {
-  fill: #f7f1df;
+  display: block;
+  object-fit: contain;
+  mix-blend-mode: screen;
+  filter: drop-shadow(0 0 10px rgba(245, 185, 66, 0.34));
+  user-select: none;
 }
 
 .honeycombLogo-talking {
-  animation: logoTalk 1.8s ease-in-out infinite;
+  animation: logoTalk 2.4s ease-in-out infinite;
 }
 
-.honeycombLogo-thinking svg {
-  animation: logoThink 1.15s linear infinite;
-}
-
-.honeycombLogo-thinking .logoCore {
-  animation: logoCoreThink 900ms ease-in-out infinite;
+.honeycombLogo-thinking img {
+  animation: logoThink 1.35s ease-in-out infinite;
+  filter: drop-shadow(0 0 18px rgba(245, 185, 66, 0.7)) drop-shadow(0 0 28px rgba(255, 222, 116, 0.22));
 }
 
 .activityRail nav,
@@ -1427,23 +1416,19 @@ select {
   }
 
   50% {
-    transform: translateY(-2px) scale(1.035);
+    transform: translateY(-4px) scale(1.035);
   }
 }
 
 @keyframes logoThink {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@keyframes logoCoreThink {
   0%,
   100% {
-    opacity: 0.65;
+    transform: scale(1);
+    opacity: 0.78;
   }
 
   50% {
+    transform: scale(1.055);
     opacity: 1;
   }
 }
@@ -1478,6 +1463,144 @@ select {
   place-items: center;
   padding: 34px;
   background: #0f1115;
+}
+
+.onboardingWelcome {
+  background:
+    radial-gradient(circle at 50% 20%, rgba(245, 185, 66, 0.14), transparent 30%),
+    #0f1115;
+}
+
+.welcomeStage {
+  width: min(760px, 100%);
+  display: grid;
+  justify-items: center;
+  gap: 22px;
+  box-sizing: border-box;
+  padding: 24px 22px;
+  text-align: center;
+  animation: focusArrive 520ms ease-out both;
+}
+
+.welcomeLogoScene {
+  position: relative;
+  width: 220px;
+  height: 176px;
+  display: grid;
+  place-items: center;
+}
+
+.welcomeLogo {
+  animation: welcomeLogoArrive 780ms cubic-bezier(0.2, 0.8, 0.2, 1) both, logoTalk 2.6s ease-in-out 840ms infinite;
+}
+
+.confettiBurst {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.confettiBurst span {
+  --angle: 0deg;
+  --distance: 78px;
+  position: absolute;
+  left: 50%;
+  top: 56%;
+  width: 6px;
+  height: 18px;
+  border-radius: 2px;
+  background: #f5b942;
+  opacity: 0;
+  transform: translate(-50%, -50%) rotate(var(--angle)) translateY(0);
+  animation: confettiPop 980ms ease-out 580ms both;
+}
+
+.confettiBurst span:nth-child(3n + 1) {
+  background: #ffe08a;
+}
+
+.confettiBurst span:nth-child(3n + 2) {
+  background: #f28a2e;
+}
+
+.confettiBurst span:nth-child(1) { --angle: -74deg; --distance: 88px; }
+.confettiBurst span:nth-child(2) { --angle: -58deg; --distance: 108px; animation-delay: 620ms; }
+.confettiBurst span:nth-child(3) { --angle: -42deg; --distance: 78px; animation-delay: 680ms; }
+.confettiBurst span:nth-child(4) { --angle: -25deg; --distance: 116px; animation-delay: 610ms; }
+.confettiBurst span:nth-child(5) { --angle: -10deg; --distance: 86px; animation-delay: 720ms; }
+.confettiBurst span:nth-child(6) { --angle: 12deg; --distance: 102px; animation-delay: 640ms; }
+.confettiBurst span:nth-child(7) { --angle: 28deg; --distance: 118px; animation-delay: 700ms; }
+.confettiBurst span:nth-child(8) { --angle: 43deg; --distance: 82px; animation-delay: 590ms; }
+.confettiBurst span:nth-child(9) { --angle: 59deg; --distance: 108px; animation-delay: 660ms; }
+.confettiBurst span:nth-child(10) { --angle: 76deg; --distance: 90px; animation-delay: 730ms; }
+.confettiBurst span:nth-child(11) { --angle: -112deg; --distance: 72px; animation-delay: 720ms; }
+.confettiBurst span:nth-child(12) { --angle: -132deg; --distance: 96px; animation-delay: 650ms; }
+.confettiBurst span:nth-child(13) { --angle: -151deg; --distance: 82px; animation-delay: 700ms; }
+.confettiBurst span:nth-child(14) { --angle: -170deg; --distance: 108px; animation-delay: 620ms; }
+.confettiBurst span:nth-child(15) { --angle: 111deg; --distance: 72px; animation-delay: 710ms; }
+.confettiBurst span:nth-child(16) { --angle: 132deg; --distance: 98px; animation-delay: 660ms; }
+.confettiBurst span:nth-child(17) { --angle: 153deg; --distance: 84px; animation-delay: 740ms; }
+.confettiBurst span:nth-child(18) { --angle: 171deg; --distance: 108px; animation-delay: 600ms; }
+
+.welcomeStage h1 {
+  max-width: 680px;
+  margin: -10px 0 0;
+  color: #ffffff;
+  font-size: 34px;
+  line-height: 1.14;
+  font-weight: 720;
+}
+
+.typingLead {
+  min-height: 76px;
+  max-width: 680px;
+  margin: 0;
+  color: #b9c2cf;
+  font-size: 15px;
+  line-height: 1.7;
+  text-align: center;
+}
+
+.typingCursor {
+  display: inline-block;
+  width: 2px;
+  height: 1.15em;
+  margin-left: 3px;
+  vertical-align: -0.18em;
+  background: #f5b942;
+  box-shadow: 0 0 10px rgba(245, 185, 66, 0.7);
+  animation: cursorBlink 760ms step-end infinite;
+}
+
+.supervisorNameField {
+  width: min(460px, 100%);
+  justify-items: center;
+  gap: 11px;
+  color: #e9eef6;
+}
+
+.supervisorNameField strong {
+  color: #ffffff;
+  font-size: 18px;
+}
+
+.supervisorNameField input {
+  min-height: 48px;
+  border-color: #4d3920;
+  background: #151a22;
+  text-align: center;
+  font-size: 15px;
+}
+
+.supervisorNext {
+  justify-self: center;
+}
+
+.supervisorNext:disabled {
+  border-color: #6c4517;
+  background: #6a4213;
+  color: #23170a;
+  opacity: 1;
 }
 
 .setupFocusCard,
@@ -1768,6 +1891,42 @@ select {
   }
 }
 
+@keyframes welcomeLogoArrive {
+  from {
+    opacity: 0;
+    transform: translateY(18px) scale(0.88);
+    filter: blur(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+@keyframes confettiPop {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) rotate(var(--angle)) translateY(0) scale(0.5);
+  }
+
+  22% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) rotate(var(--angle)) translateY(calc(var(--distance) * -1)) scale(1);
+  }
+}
+
+@keyframes cursorBlink {
+  50% {
+    opacity: 0;
+  }
+}
+
 @media (max-width: 760px) {
   .darkShell {
     grid-template-columns: 46px minmax(0, 1fr);
@@ -1808,5 +1967,24 @@ select {
 
   .timelineItem {
     gap: 6px;
+  }
+
+  .welcomeLogoScene {
+    width: 180px;
+    height: 142px;
+  }
+
+  .welcomeStage h1 {
+    font-size: 27px;
+  }
+
+  .typingLead {
+    min-height: 118px;
+    font-size: 14px;
+  }
+
+  .interviewHeader,
+  .reviewHeading {
+    align-items: flex-start;
   }
 }

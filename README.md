@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/honeycomb-mark.svg" width="112" alt="honeycomb 标志">
+  <img src="docs/assets/honeycomb-logo.png" width="132" alt="honeycomb 标志">
 </p>
 
 <h1 align="center">honeycomb</h1>
@@ -52,14 +52,16 @@ honeycomb 是围绕 OpenClaw 构建的多 Agent 编排与控制平台。
 
 首次打开桌面应用时，honeycomb 会先介绍界面，然后进入强制首次配置流程：
 
-1. 单独配置驱动面板的 Provider 与 API Key；
-2. 询问你的工作领域；
-3. 根据领域生成职业/角色提示；
-4. 根据前两项回答生成日常工作选项；
-5. 生成工作画像、推荐编排模式和 Agent 团队；
-6. 写入本地安全配置后，解锁完整控制台。
+1. 先看到居中的新 logo 与“开始创造您第一个专属AI员工”；
+2. 给常驻面板主管 Agent 取名；
+3. 单独配置驱动面板的 Provider 与 API Key；
+4. 询问你的工作领域；
+5. 根据领域生成职业/角色提示；
+6. 根据前两项回答生成日常工作选项；
+7. 生成工作画像、推荐编排模式、面板主管 Agent 和业务 Agent 团队；
+8. 写入本地安全配置后，解锁完整控制台与界面导览。
 
-访谈答案只用于配置本地面板。API Key 不会写入生成的 Agent 提示词文件。
+访谈答案只用于配置本地面板。API Key 不会写入生成的 Agent 提示词文件。面板主管 Agent 的内置提示词会限制它只回答 Honeycomb 操作、Provider 配置、Agent 团队调整和工作流相关问题，并禁止把密钥写入提示词。
 
 ### 桌面控制台
 
@@ -98,7 +100,7 @@ honeycomb 是围绕 OpenClaw 构建的多 Agent 编排与控制平台。
 Agent 协作        四种编排模式、阶段交接和讨论轮次
 质量验证          测试 Agent、验收标准、阶段重试、最终质量门禁
 产物追踪          任务产物、测试报告、最终结果和完整时间线
-首次启动          Provider 配置、工作访谈、Agent 提示词生成
+首次启动          主管 Agent 命名、Provider 配置、工作访谈、Agent 提示词生成
 经验记忆          候选提取、来源证据、置信度、作用域、人工采纳或拒绝
 外部入口          HTTP 与飞书适配器
 真实运行边界      通过适配器调用 OpenClaw，不修改 OpenClaw 源码

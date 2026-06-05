@@ -1,8 +1,30 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="-7 -7 114 114">
-  <g fill="none" stroke="#F5B942" stroke-width="8" stroke-linecap="square" stroke-linejoin="miter">
-    <path d="M50 5 76 20v26l-9 5M33 51l-9-5V20L50 5"/>
-    <path d="m45 58-1 28-22 12L3 87V63l21-12 12 7"/>
-    <path d="m55 58 1 28 22 12 19-11V63L76 51l-12 7"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="honeycomb logo">
+  <defs>
+    <radialGradient id="glow" cx="50%" cy="46%" r="48%">
+      <stop offset="0%" stop-color="#FFE9A8" stop-opacity="0.95"/>
+      <stop offset="42%" stop-color="#F5B942" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="cell" x1="34%" y1="18%" x2="70%" y2="92%">
+      <stop offset="0%" stop-color="#FFD567"/>
+      <stop offset="52%" stop-color="#F6A523"/>
+      <stop offset="100%" stop-color="#D98012"/>
+    </linearGradient>
+    <linearGradient id="core" x1="33%" y1="17%" x2="76%" y2="89%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#F4E9CF"/>
+    </linearGradient>
+    <filter id="soft-shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#D67E09" flood-opacity="0.42"/>
+      <feDropShadow dx="0" dy="0" stdDeviation="18" flood-color="#FFE28D" flood-opacity="0.5"/>
+    </filter>
+  </defs>
+  <rect width="1024" height="1024" fill="#000000"/>
+  <circle cx="512" cy="510" r="390" fill="url(#glow)"/>
+  <g filter="url(#soft-shadow)" stroke-linejoin="round">
+    <path d="M512 194 655 276v164l-143 82-143-82V276z" fill="url(#cell)" stroke="#FFD86D" stroke-width="16"/>
+    <path d="M368 428 511 510v164l-143 82-143-82V510z" fill="url(#cell)" stroke="#FFD86D" stroke-width="16"/>
+    <path d="M656 428 799 510v164l-143 82-143-82V510z" fill="url(#cell)" stroke="#FFD86D" stroke-width="16"/>
+    <path d="M512 384 604 437v106l-92 53-92-53V437z" fill="url(#core)" stroke="#FFFFFF" stroke-width="14"/>
   </g>
-  <path fill="#F7F1DF" d="m50 36 15 9v18l-15 9-15-9V45z"/>
 </svg>

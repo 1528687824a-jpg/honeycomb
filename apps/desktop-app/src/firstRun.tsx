@@ -1,10 +1,10 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ArrowRight, Check, KeyRound, ShieldCheck, Sparkles } from "lucide-react";
 import type { RoutingMode } from "./api";
 import { HoneycombLogo } from "./brand";
 
 type Language = "en" | "zh";
-type SetupStage = "provider" | "providerLeaving" | "interview" | "thinking" | "review" | "saving";
+type SetupStage = "welcome" | "provider" | "providerLeaving" | "interview" | "thinking" | "review" | "saving";
 
 type ProviderDraft = {
   providerName: string;
@@ -46,10 +46,14 @@ type FirstRunPanelProps = {
 const copyByLanguage = {
   en: {
     heading: "First Run",
+    welcomeTitle: "Start creating your first dedicated AI employee",
+    supervisorQuestion: "Name your supervisor agent",
+    supervisorPlaceholder: "For example: Honeycomb Supervisor",
+    welcomeNext: "Next",
     providerEyebrow: "Private provider setup",
-    providerTitle: "Connect the AI that powers your panel",
+    providerTitle: "Start creating your first dedicated AI employee",
     providerIntro:
-      "Honeycomb uses this provider to understand your work and specialize your agent team. Your key is kept out of generated prompt files.",
+      "Honeycomb will use this Provider to understand your work, customize dedicated prompts for your Agent team, and later fit into your workflow as the supervisor. Your API key will not be written into generated prompt files. The model can be changed at any time.",
     provider: "Provider",
     baseUrl: "Base URL",
     model: "Model",
@@ -83,6 +87,7 @@ const copyByLanguage = {
     fixedStep: "Question",
     of: "of",
     agents: {
+      "panel-supervisor-agent": "Answers panel questions, guides setup, and enforces Honeycomb operating limits",
       "main-agent": "Coordinates planning, routing, and synthesis",
       "research-agent": "Finds context, evidence, constraints, and risks",
       "writer-agent": "Turns upstream work into polished deliverables",
@@ -93,10 +98,14 @@ const copyByLanguage = {
   },
   zh: {
     heading: "首次启动",
+    welcomeTitle: "开始创造您第一个专属AI员工",
+    supervisorQuestion: "请给你的主管agent取个名字吧",
+    supervisorPlaceholder: "例如：蜂巢主管",
+    welcomeNext: "下一步",
     providerEyebrow: "私密 Provider 配置",
-    providerTitle: "连接驱动面板的 AI",
+    providerTitle: "开始创造您第一个专属AI员工",
     providerIntro:
-      "Honeycomb 会用这个 Provider 理解你的工作，并为你的 Agent 团队定制提示词。API Key 不会写入生成的提示词文件。",
+      "Honeycomb 会用这个 Provider 理解你的工作，并为你的 Agent 团队定制专属提示词。并且之后会融入你的工作流程，充当主管的角色。API Key 不会写入生成的提示词文件。大模型之后可以随时更改",
     provider: "Provider",
     baseUrl: "Base URL",
     model: "模型",
@@ -130,6 +139,7 @@ const copyByLanguage = {
     fixedStep: "问题",
     of: "/",
     agents: {
+      "panel-supervisor-agent": "回答面板问题、引导配置，并执行 Honeycomb 操作边界",
       "main-agent": "负责规划、编排和最终整合",
       "research-agent": "收集背景、证据、约束和风险",
       "writer-agent": "把上游内容整理成成熟产出",
@@ -245,6 +255,53 @@ function buildAgentPrompt(agentId: string, interview: InterviewDraft, profile: P
   ].join("\n");
 }
 
+function buildPanelSupervisorPrompt(
+  supervisorName: string,
+  provider: ProviderDraft,
+  interview: InterviewDraft,
+  profile: Profile
+) {
+  const displayName = supervisorName.trim() || "Honeycomb Supervisor";
+  return [
+    `# ${displayName}`,
+    "",
+    "You are Honeycomb's resident panel supervisor agent. You live inside the Honeycomb control panel and help the user understand, configure, and operate their local multi-agent workspace.",
+    "",
+    "Core mission:",
+    "- Answer questions about Honeycomb's pages, settings, routing modes, provider setup, generated agent team, memory candidates, jobs, timelines, and safety boundaries.",
+    "- Translate the user's work into practical panel actions, configuration plans, and review checklists.",
+    "- Act like a supervisor for the user's agent team: clarify goals, recommend when to add or remove specialist agents, and keep the workflow inspectable.",
+    "",
+    "Hard boundaries:",
+    "- Never ask the user to paste API keys into chat, prompt files, AGENTS.md, screenshots, logs, or public issues.",
+    "- Never write, print, summarize, infer, or expose API keys. Provider credentials belong only in the provider configuration flow or secure local settings.",
+    "- Do not claim a setting, key, file, or OpenClaw config has been changed unless Honeycomb's UI/backend has actually completed that operation.",
+    "- Do not invent unavailable pages or features. If a capability is not implemented yet, say so and give the closest safe current workflow.",
+    "- Keep answers scoped to Honeycomb, OpenClaw orchestration, the user's configured work profile, and the local panel. Refuse unrelated requests that would turn you into a general chatbot.",
+    "- When advising agent-team changes, stay inside the fixed role catalog unless the product explicitly adds a new role type. Prefer one clear specialist agent over many vague agents.",
+    "",
+    "Built-in product answers:",
+    "- If the user asks where to configure an AI key, direct them to First Run Provider setup first; after setup, direct them to the model/provider settings area when it exists. Remind them keys are never written into generated prompt files.",
+    "- If the user asks whether they can add several child agents, explain that Honeycomb can support additional specialist agents after review, but each one needs a clear role, tool boundary, quality gate, and budget impact. Recommend starting from the existing catalog: research, writer, image, video, test/supervisor, data, coder, reviewer, translator.",
+    "- If the user asks which routing mode to use, recommend supervisor_pipeline for quality-sensitive work, pipeline for clear step-by-step production, classic_master_slave for simple delegation, and master_slave_discussion for ambiguous work needing multiple viewpoints.",
+    "- If the user asks about memory, explain that successful jobs create reviewable experience candidates; the user must adopt them before reuse.",
+    "",
+    "User work profile:",
+    profile.summary,
+    "",
+    "Current local provider reference:",
+    `- Provider: ${provider.providerName || "not configured"}`,
+    `- Base URL: ${provider.baseUrl || "not configured"}`,
+    `- Model: ${provider.model || "not configured"}`,
+    "- API key: configured separately; never include it here.",
+    "",
+    "Response style:",
+    "- Use the user's UI language when clear; otherwise answer in the language they used.",
+    "- Be concise, specific, and operational.",
+    "- Ask one short clarifying question only when the next safe panel action depends on it."
+  ].join("\n");
+}
+
 function buildAgents(interview: InterviewDraft, profile: Profile): GeneratedAgent[] {
   const orderedIds = ["main-agent", ...profile.stageAgents, "test-agent"];
   return orderedIds.map((id) => ({
@@ -268,8 +325,10 @@ async function saveDesktopSetup(payload: unknown) {
 
 export function FirstRunPanel({ language, onComplete }: FirstRunPanelProps) {
   const copy = copyByLanguage[language];
-  const [stage, setStage] = useState<SetupStage>("provider");
+  const [stage, setStage] = useState<SetupStage>("welcome");
   const [questionIndex, setQuestionIndex] = useState(0);
+  const [supervisorName, setSupervisorName] = useState("");
+  const [typedIntroLength, setTypedIntroLength] = useState(0);
   const [provider, setProvider] = useState<ProviderDraft>({
     providerName: "DeepSeek",
     baseUrl: "https://api.deepseek.com",
@@ -292,6 +351,31 @@ export function FirstRunPanel({ language, onComplete }: FirstRunPanelProps) {
   const workOptions = useMemo(() => buildWorkOptions(interview.industry, interview.role, language), [interview.industry, interview.role, language]);
   const profile = useMemo(() => inferProfile(interview), [interview]);
   const agents = useMemo(() => buildAgents(interview, profile), [interview, profile]);
+  const panelSupervisorAgent = useMemo<GeneratedAgent>(() => ({
+    id: "panel-supervisor-agent",
+    displayName: supervisorName.trim() || copy.supervisorPlaceholder,
+    role: "panel-supervisor",
+    prompt: buildPanelSupervisorPrompt(supervisorName, provider, interview, profile)
+  }), [copy.supervisorPlaceholder, interview, profile, provider, supervisorName]);
+
+  useEffect(() => {
+    if (stage !== "welcome") {
+      setTypedIntroLength(copy.providerIntro.length);
+      return;
+    }
+
+    setTypedIntroLength(0);
+    const interval = window.setInterval(() => {
+      setTypedIntroLength((current) => {
+        if (current >= copy.providerIntro.length) {
+          window.clearInterval(interval);
+          return current;
+        }
+        return current + 1;
+      });
+    }, language === "zh" ? 34 : 22);
+    return () => window.clearInterval(interval);
+  }, [copy.providerIntro, language, stage]);
 
   function updateProvider(field: keyof ProviderDraft, value: string) {
     setProvider((current) => ({ ...current, [field]: value }));
@@ -299,6 +383,11 @@ export function FirstRunPanel({ language, onComplete }: FirstRunPanelProps) {
 
   function updateInterview(field: keyof InterviewDraft, value: string) {
     setInterview((current) => ({ ...current, [field]: value }));
+  }
+
+  function continueWelcome() {
+    if (!supervisorName.trim()) return;
+    setStage("provider");
   }
 
   function connectProvider() {
@@ -350,18 +439,24 @@ export function FirstRunPanel({ language, onComplete }: FirstRunPanelProps) {
 
   async function saveSetup() {
     setStage("saving");
+    const allAgents = [panelSupervisorAgent, ...agents];
     const clusterConfig = {
       schemaVersion: "agent-openclaw.cluster.v1",
       clusterId: slug(`${interview.role}-${interview.industry}`),
       name: `${interview.role || "Owner"} Agent Cluster`,
       description: interview.dailyWork,
       defaultRoutingMode: profile.recommendedRoutingMode,
-      agents: agents.map((agent) => ({
+      agents: allAgents.map((agent) => ({
         id: agent.id,
         role: agent.role,
         displayName: agent.displayName,
         promptPath: `agents/${agent.id}/AGENTS.md`,
-        capabilities: agent.id === "main-agent" ? ["planning", "routing", "final synthesis"] : ["specialized work"]
+        capabilities:
+          agent.id === "panel-supervisor-agent"
+            ? ["panel guidance", "provider setup help", "workflow supervision", "guardrails"]
+            : agent.id === "main-agent"
+              ? ["planning", "routing", "final synthesis"]
+              : ["specialized work"]
       })),
       stages: profile.stageAgents.map((agentId) => ({
         stageType: agentId.replace("-agent", ""),
@@ -371,7 +466,17 @@ export function FirstRunPanel({ language, onComplete }: FirstRunPanelProps) {
         maxRetries: 3
       })),
       generatedAt: new Date().toISOString(),
-      source: { planner: "desktop-first-run", model: provider.model }
+      source: { planner: "desktop-first-run", model: provider.model },
+      panelSupervisor: {
+        id: panelSupervisorAgent.id,
+        displayName: panelSupervisorAgent.displayName,
+        promptPath: `agents/${panelSupervisorAgent.id}/AGENTS.md`,
+        rules: [
+          "answers Honeycomb panel questions only",
+          "never includes API keys in prompts",
+          "recommends agent-team changes through reviewed configuration steps"
+        ]
+      }
     };
 
     await saveDesktopSetup({
@@ -382,12 +487,59 @@ export function FirstRunPanel({ language, onComplete }: FirstRunPanelProps) {
         apiKeyConfigured: true
       },
       interview,
-      profile,
+      profile: {
+        ...profile,
+        supervisorName: panelSupervisorAgent.displayName
+      },
       clusterConfig,
-      agents: agents.map((agent) => ({ path: `agents/${agent.id}/AGENTS.md`, contents: agent.prompt }))
+      agents: allAgents.map((agent) => ({ path: `agents/${agent.id}/AGENTS.md`, contents: agent.prompt }))
     });
     window.localStorage.setItem("honeycomb.setupCompleted", "true");
     window.setTimeout(onComplete, 520);
+  }
+
+  if (stage === "welcome") {
+    const canContinue = Boolean(supervisorName.trim());
+    return (
+      <section className="firstRun focusSetup onboardingWelcome">
+        <div className="welcomeStage">
+          <div className="welcomeLogoScene">
+            <div className="confettiBurst" aria-hidden="true">
+              {Array.from({ length: 18 }, (_, index) => <span key={index} />)}
+            </div>
+            <HoneycombLogo size={190} mode="talking" className="welcomeLogo" alt="honeycomb" />
+          </div>
+          <h1>{copy.welcomeTitle}</h1>
+          <p className="typingLead" aria-label={copy.providerIntro}>
+            {copy.providerIntro.slice(0, typedIntroLength)}
+            <span className="typingCursor" aria-hidden="true" />
+          </p>
+          <label className="supervisorNameField">
+            <strong>{copy.supervisorQuestion}</strong>
+            <input
+              autoFocus
+              value={supervisorName}
+              placeholder={copy.supervisorPlaceholder}
+              onChange={(event) => setSupervisorName(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && canContinue) {
+                  continueWelcome();
+                }
+              }}
+            />
+          </label>
+          <button
+            className="primaryButton setupPrimary supervisorNext"
+            type="button"
+            onClick={continueWelcome}
+            disabled={!canContinue}
+          >
+            {copy.welcomeNext}
+            <ArrowRight size={16} aria-hidden="true" />
+          </button>
+        </div>
+      </section>
+    );
   }
 
   if (stage === "provider" || stage === "providerLeaving") {
@@ -395,7 +547,7 @@ export function FirstRunPanel({ language, onComplete }: FirstRunPanelProps) {
       <section className="firstRun focusSetup">
         <div className={`setupFocusCard providerFocus ${stage === "providerLeaving" ? "leaving" : ""}`}>
           <div className="setupLogoWrap">
-            <HoneycombLogo size={72} mode="talking" />
+            <HoneycombLogo size={92} mode="talking" />
           </div>
           <p className="eyebrow">{copy.providerEyebrow}</p>
           <h1>{copy.providerTitle}</h1>
@@ -458,7 +610,7 @@ export function FirstRunPanel({ language, onComplete }: FirstRunPanelProps) {
             <div><dt>{copy.stages}</dt><dd>{profile.stageAgents.join(" → ")}</dd></div>
           </dl>
           <div className="agentReviewGrid">
-            {agents.map((agent) => (
+            {[panelSupervisorAgent, ...agents].map((agent) => (
               <article key={agent.id}>
                 <Check size={16} aria-hidden="true" />
                 <strong>{agent.id}</strong>

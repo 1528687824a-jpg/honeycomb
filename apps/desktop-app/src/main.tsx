@@ -86,21 +86,25 @@ const routingModeLabels: Record<Language, Record<RoutingMode, string>> = {
 
 const routingModeModelMap: Record<RoutingMode, Array<{ role: string; agents: string; model: string }>> = {
   supervisor_pipeline: [
+    { role: "Panel supervisor", agents: "panel-supervisor-agent", model: "deepseek-v4-pro" },
     { role: "Planner", agents: "main-agent", model: "deepseek-v4-pro" },
     { role: "Stage workers", agents: "research / writer / image", model: "deepseek-v4-pro" },
     { role: "Supervisor", agents: "test-agent", model: "deepseek-v4-pro" }
   ],
   pipeline: [
+    { role: "Panel supervisor", agents: "panel-supervisor-agent", model: "deepseek-v4-pro" },
     { role: "Planner", agents: "main-agent", model: "deepseek-v4-pro" },
     { role: "Sequential stages", agents: "research → writer → image", model: "deepseek-v4-pro" },
     { role: "Final check", agents: "test-agent", model: "deepseek-v4-pro" }
   ],
   classic_master_slave: [
+    { role: "Panel supervisor", agents: "panel-supervisor-agent", model: "deepseek-v4-pro" },
     { role: "Lead", agents: "main-agent", model: "deepseek-v4-pro" },
     { role: "Workers", agents: "research / writer / image", model: "deepseek-v4-pro" },
     { role: "Reviewer", agents: "test-agent", model: "deepseek-v4-pro" }
   ],
   master_slave_discussion: [
+    { role: "Panel supervisor", agents: "panel-supervisor-agent", model: "deepseek-v4-pro" },
     { role: "Lead", agents: "main-agent", model: "deepseek-v4-pro" },
     { role: "Discussion team", agents: "research / writer / image / test", model: "deepseek-v4-pro" },
     { role: "Synthesis", agents: "main-agent", model: "deepseek-v4-pro" }
@@ -537,15 +541,18 @@ function App() {
   const [memoryMessage, setMemoryMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [showTour, setShowTour] = useState(
-    () => window.localStorage.getItem("honeycomb.tourCompleted") !== "true"
-  );
-  const [tourIndex, setTourIndex] = useState(0);
   const [setupComplete, setSetupComplete] = useState(
     () =>
       window.localStorage.getItem("honeycomb.setupCompleted") === "true" ||
       new URLSearchParams(window.location.search).get("skipOnboarding") === "true"
   );
+  const [showTour, setShowTour] = useState(
+    () =>
+      (window.localStorage.getItem("honeycomb.setupCompleted") === "true" ||
+        new URLSearchParams(window.location.search).get("skipOnboarding") === "true") &&
+      window.localStorage.getItem("honeycomb.tourCompleted") !== "true"
+  );
+  const [tourIndex, setTourIndex] = useState(0);
   const [sideCollapsed, setSideCollapsed] = useState(
     () => window.localStorage.getItem("honeycomb.sideCollapsed") === "true"
   );
@@ -598,6 +605,7 @@ function App() {
   const agentSequenceLabel = (value: string) => {
     if (language !== "zh") return value;
     return value
+      .replaceAll("panel-supervisor-agent", "面板主管 Agent")
       .replaceAll("main-agent", "主控 Agent")
       .replaceAll("research-agent", "研究 Agent")
       .replaceAll("writer-agent", "写作 Agent")
@@ -1296,6 +1304,11 @@ function App() {
   function renderAgents() {
     const agents = [
       {
+        id: "panel-supervisor-agent",
+        name: language === "zh" ? "面板主管 Agent" : "Panel supervisor agent",
+        description: language === "zh" ? "回答 Honeycomb 面板问题、引导 Provider 与模型配置，并约束 Agent 团队变更。" : "Answers Honeycomb panel questions, guides provider and model setup, and constrains agent-team changes."
+      },
+      {
         id: "main-agent",
         name: language === "zh" ? "主控 Agent" : "Main agent",
         description: language === "zh" ? "拆解目标、选择编排模式、分配工作并整合最终结果。" : "Breaks down goals, selects routing, delegates work, and synthesizes the final result."
@@ -1350,6 +1363,7 @@ function App() {
     const roleLabels: Record<string, string> = language === "zh"
       ? {
           Planner: "规划模型",
+          "Panel supervisor": "面板主管模型",
           "Stage workers": "阶段执行模型",
           Supervisor: "监督模型",
           "Sequential stages": "顺序阶段模型",
@@ -1643,6 +1657,18 @@ function App() {
   }
 
   function renderActiveView() {
+    if (!setupComplete && !showTour) {
+      return (
+        <FirstRunPanel
+          language={language}
+          onComplete={() => {
+            setSetupComplete(true);
+            setActiveView("dashboard");
+            setShowTour(window.localStorage.getItem("honeycomb.tourCompleted") !== "true");
+          }}
+        />
+      );
+    }
     if (activeView === "dashboard") return renderDashboard();
     if (activeView === "setup") {
       return (
@@ -1651,6 +1677,7 @@ function App() {
           onComplete={() => {
             setSetupComplete(true);
             setActiveView("dashboard");
+            setShowTour(window.localStorage.getItem("honeycomb.tourCompleted") !== "true");
           }}
         />
       );

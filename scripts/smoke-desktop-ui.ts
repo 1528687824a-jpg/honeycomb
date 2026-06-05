@@ -644,9 +644,20 @@ async function runOnboardingFlow(page: CdpClient) {
         element.dispatchEvent(new Event("change", { bubbles: true }));
       };
 
-      const closeTour = await waitFor(() => document.querySelector(".tourClose"), "tour close button missing");
-      closeTour.click();
+      await waitFor(() => document.querySelector(".welcomeStage"), "welcome setup did not appear");
+      const welcomeTitleVisible = document.body.textContent.includes("开始创造您第一个专属AI员工");
+      const nameNext = await waitFor(() => document.querySelector(".welcomeStage .supervisorNext"), "supervisor next button missing");
+      const nameButtonDisabledBeforeInput = nameNext.disabled;
+      const supervisorNameInput = document.querySelector(".supervisorNameField input");
+      setNativeValue(supervisorNameInput, "蜂巢主管");
+      await waitFor(() => !document.querySelector(".welcomeStage .supervisorNext").disabled, "supervisor next button did not enable");
+      const nameButtonEnabledAfterInput = !document.querySelector(".welcomeStage .supervisorNext").disabled;
+      document.querySelector(".welcomeStage .supervisorNext").click();
+
       await waitFor(() => document.querySelector(".providerFocus"), "provider setup did not appear");
+      const providerTitleUpdated = document.body.textContent.includes("开始创造您第一个专属AI员工");
+      const providerIntroUpdated = document.body.textContent.includes("定制专属提示词") &&
+        document.body.textContent.includes("大模型之后可以随时更改");
 
       const navLocked = !document.querySelector('[data-testid="console-view-tab"]');
       const apiKey = document.querySelector('.providerFocus input[type="password"]');
@@ -681,15 +692,35 @@ async function runOnboardingFlow(page: CdpClient) {
       await waitFor(() => document.querySelector(".dashboardPage"), "dashboard did not appear after setup completion");
 
       const consoleVisibleAfterComplete = Boolean(document.querySelector('[data-testid="console-view-tab"]'));
+      const tourVisibleAfterSetup = Boolean(document.querySelector(".tourOverlay"));
+      const savedPreview = JSON.parse(localStorage.getItem("honeycomb.firstRunPreview") || "{}");
+      const supervisorPrompt = savedPreview.agents?.find((agent) => agent.path.includes("panel-supervisor-agent"))?.contents || "";
+      const supervisorPromptHasGuardrails =
+        supervisorPrompt.includes("Never ask the user to paste API keys") &&
+        supervisorPrompt.includes("If the user asks whether they can add several child agents");
       const toggle = document.querySelector('[data-testid="sidebar-toggle"]');
       toggle.click();
       await sleep(250);
       const collapsed = document.querySelector(".darkShell").classList.contains("sideCollapsed");
 
+      if (!welcomeTitleVisible) throw new Error("updated welcome title was not visible");
+      if (!nameButtonDisabledBeforeInput) throw new Error("supervisor next button was not disabled before input");
+      if (!nameButtonEnabledAfterInput) throw new Error("supervisor next button was not enabled after input");
+      if (!providerTitleUpdated || !providerIntroUpdated) throw new Error("provider copy was not updated");
+      if (!supervisorPromptHasGuardrails) throw new Error("panel supervisor prompt guardrails missing");
+      if (!tourVisibleAfterSetup) throw new Error("guided tour did not appear after setup");
+
       return {
         navLocked,
+        welcomeTitleVisible,
+        nameButtonDisabledBeforeInput,
+        nameButtonEnabledAfterInput,
+        providerTitleUpdated,
+        providerIntroUpdated,
         tailoredPlaceholder,
         generatedAgentCount,
+        tourVisibleAfterSetup,
+        supervisorPromptHasGuardrails,
         consoleVisibleAfterComplete,
         collapsed,
         setupCompleted: localStorage.getItem("honeycomb.setupCompleted") === "true",
@@ -709,8 +740,15 @@ async function runOnboardingFlow(page: CdpClient) {
   }
   return result.result.value as {
     navLocked: boolean;
+    welcomeTitleVisible: boolean;
+    nameButtonDisabledBeforeInput: boolean;
+    nameButtonEnabledAfterInput: boolean;
+    providerTitleUpdated: boolean;
+    providerIntroUpdated: boolean;
     tailoredPlaceholder: string;
     generatedAgentCount: number;
+    tourVisibleAfterSetup: boolean;
+    supervisorPromptHasGuardrails: boolean;
     consoleVisibleAfterComplete: boolean;
     collapsed: boolean;
     setupCompleted: boolean;
@@ -962,7 +1000,8 @@ async function main() {
     logStep("waiting for UI");
     await waitForHttp(uiUrl, 60_000);
 
-    const page = await openPage(browserPort, uiUrl);
+    const initialUiUrl = onboardingMode ? uiUrl : `${uiUrl}?skipOnboarding=true`;
+    const page = await openPage(browserPort, initialUiUrl);
     try {
       logStep("running browser UI flow");
       const flow = memoryMode
@@ -1011,13 +1050,17 @@ async function main() {
               ...flow,
               screenshotPath,
               checked: [
-                "animated_tour_to_first_run",
+                "first_run_before_guided_tour",
+                "supervisor_agent_name_required",
+                "provider_title_and_intro_updated",
                 "navigation_locked_before_setup",
                 "provider_only_stage",
                 "thinking_state",
                 "tailored_role_placeholder",
                 "generated_work_options",
+                "panel_supervisor_prompt_guardrails",
                 "agent_profile_review",
+                "guided_tour_after_setup",
                 "navigation_unlocked_after_setup",
                 "sidebar_collapse"
               ]

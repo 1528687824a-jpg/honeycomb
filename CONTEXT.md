@@ -1,5 +1,105 @@
 # Honeycomb Context Checkpoint (formerly Agent OpenClaw)
 
+## 2026-06-05 New Honeycomb Logo, First Run Supervisor Agent, And Onboarding Order
+
+### Completed in this checkpoint
+
+```text
+Implemented the requested new Honeycomb branding and First Run supervisor-agent entry:
+
+1. Replaced the old geometric SVG logo in the desktop app with the new desktop PNG logo:
+   - app asset: apps/desktop-app/src/assets/honeycomb-logo.png
+   - docs/GitHub asset: docs/assets/honeycomb-logo.png
+   - README hero image now uses the new PNG logo.
+2. Updated Tauri icon assets:
+   - apps/desktop-app/src-tauri/icons/icon.png
+   - apps/desktop-app/src-tauri/icons/icon.ico
+   - docs/assets/honeycomb-icon.png
+   - docs/assets/honeycomb-mark.svg retained as an SVG fallback in the new visual style.
+3. Reworked First Run order:
+   - First Run welcome now appears before the guided tour.
+   - The central logo appears in the upper-middle of the setup page with arrival/talking animation.
+   - Confetti animation plays around the welcome title.
+   - The intro paragraph types out with a blinking cursor.
+   - User must name the supervisor agent before continuing.
+   - The Next button is dark orange while empty and switches to the normal logo-orange primary state when input is present.
+4. Updated Chinese and English First Run copy:
+   - Chinese title: 开始创造您第一个专属AI员工
+   - English title: Start creating your first dedicated AI employee
+   - Provider intro now explains dedicated prompts, workflow integration, supervisor role, no API key in generated prompt files, and later model changes.
+5. Added a generated panel-supervisor-agent:
+   - Included in the generated local cluster config and prompt bundle.
+   - Added to Agents and Models views.
+   - The prompt has hard guardrails for Honeycomb panel scope, provider/key safety, no false claims about settings changes, and cautious agent-team expansion.
+   - Built-in answers cover "where to configure AI key" and "can I add more child agents".
+6. Updated onboarding smoke coverage:
+   - verifies First Run comes before guided tour;
+   - verifies supervisor name is required;
+   - verifies updated Provider title/intro;
+   - verifies generated supervisor prompt guardrails;
+   - verifies guided tour appears after setup completion.
+7. Refreshed GitHub/README screenshot:
+   - docs/assets/honeycomb-first-run.png now shows the new centered logo welcome page with full Chinese intro text.
+8. Rebuilt the desktop release executable:
+   - apps/desktop-app/src-tauri/target/release/honeycomb.exe
+   - refreshed C:\Users\Administrator\Desktop\honeycomb.lnk.
+```
+
+### Verification evidence
+
+```text
+Passed:
+- npm run check
+- npm run check:no-secrets
+- npm --prefix apps/desktop-app run build
+- cargo check --manifest-path apps/desktop-app/src-tauri/Cargo.toml
+- npm run smoke:desktop-onboarding
+- npm --prefix apps/desktop-app exec tauri build -- --no-bundle
+- npm run smoke:tauri-shell
+
+Visual QA:
+- Viewed desktop source logo: C:\Users\Administrator\Desktop\ChatGPT Image 2026年6月4日 11_22_21.png
+- Viewed app logo asset: apps/desktop-app/src/assets/honeycomb-logo.png
+- Viewed refreshed First Run screenshot: docs/assets/honeycomb-first-run.png
+- Confirmed PNG corners are transparent.
+
+Release/shortcut:
+- rebuilt exe timestamp: 2026-06-05 06:46:12
+- refreshed shortcut timestamp: 2026-06-05 06:47:41
+```
+
+### Claude evaluation absorbed, with independent judgment
+
+```text
+Read the user-provided Claude file:
+C:\Users\Administrator\AppData\Local\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\local-agent-mode-sessions\20d984a4-bff5-4fee-8d1b-d7cb84f94ea0\9fcc6203-63e1-4bb6-98e5-063de7217ee7\local_f8d6cc4b-0943-4503-a752-3f2db911ddd6\outputs\20A062~1.MD
+
+Accepted:
+1. Weak or arbitrary user-provided LLMs are a real First Run quality risk.
+2. Honeycomb needs resident panel-level constraints, not only one-shot generated worker prompts.
+3. The panel agent should answer product-operation questions like key configuration and agent-team expansion.
+4. API auth, OpenClaw version probe, capability probe, cancel abort chain, and job concurrency control remain real alpha risks.
+
+Corrected/deprioritized for this turn:
+1. Claude's Web Panel Pivot recommendations are historically useful, but the user's current request is explicitly about the desktop operation panel, desktop logo, First Run, and shortcut/GitHub sync. I did not rename apps/desktop-app or continue a Web-only pivot.
+2. cluster.config schemaVersion is already implemented in current shared types and generated config, so it was not a useful target for this turn.
+3. A real live chat surface for panel-supervisor-agent is not implemented yet; this checkpoint creates the generated prompt/guardrail foundation and exposes the role in panel metadata.
+```
+
+### Next tasks in order
+
+```text
+1. Let the maintainer open C:\Users\Administrator\Desktop\honeycomb.lnk and visually try the new First Run flow.
+2. Add the actual panel-supervisor-agent chat/help surface inside the operation panel, backed by the generated system prompt.
+3. Add provider capability probe after API key entry:
+   JSON response probe, timeout handling, weak-model warning, and force-continue option.
+4. Add fallback safe templates and domain-keyword absorption warnings for weak planner outputs.
+5. Add post-setup provider/model settings so users can change the large model after First Run.
+6. Add API_AUTH_TOKEN for exposed API safety before public alpha.
+7. Add OpenClaw version detection and supported/tested version docs.
+8. Add real cancel abort chain and concurrent job limit/queue.
+```
+
 ## 2026-06-05 Experience Memory Candidate Loop And Claude Backend Risk Assessment
 
 ### Completed in this checkpoint
