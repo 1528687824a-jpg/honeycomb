@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -38,8 +38,34 @@ export type WorkspaceGitChange = {
 
 export type WorkspaceWriteMode = "create" | "overwrite" | "append";
 
+export type WorkspaceCommandResult = {
+  rootPath: string;
+  cwdRelativePath: string;
+  command: string;
+  args: string[];
+  displayCommand: string;
+  exitCode: number | null;
+  signal: NodeJS.Signals | null;
+  timedOut: boolean;
+  stdout: string;
+  stderr: string;
+  stdoutTruncated: boolean;
+  stderrTruncated: boolean;
+  startedAt: string;
+  completedAt: string;
+  durationMs: number;
+};
+
 function normalizeRelativePath(value: string) {
   return value.split(path.sep).join("/");
+}
+
+function quoteCommandPart(value: string) {
+  return /^[A-Za-z0-9_./:=@+-]+$/.test(value) ? value : JSON.stringify(value);
+}
+
+export function formatWorkspaceCommand(command: string, args: string[] = []) {
+  return [command, ...args].map(quoteCommandPart).join(" ");
 }
 
 function resolveInsideRoot(rootPath: string, subpath = ".") {
@@ -91,6 +117,21 @@ export async function resolveWorkspaceFileTarget(rootPath: string, subpath: stri
   };
 }
 
+export async function resolveWorkspaceDirectoryTarget(rootPath: string, subpath = ".") {
+  const { root } = await statDirectory(rootPath);
+  const { target, relative } = resolveInsideRoot(root, subpath || ".");
+  const stats = await fs.stat(target);
+  if (!stats.isDirectory()) {
+    throw new WorkspacePathError("workspace_target_not_directory");
+  }
+
+  return {
+    rootPath: root,
+    absolutePath: target,
+    relativePath: relative
+  };
+}
+
 export async function prepareWorkspaceFileWrite(
   rootPath: string,
   input: {
@@ -132,6 +173,128 @@ export async function prepareWorkspaceFileWrite(
     ...target,
     mode
   };
+}
+
+function appendLimitedOutput(
+  chunks: Buffer[],
+  state: { bytes: number; truncated: boolean },
+  chunk: Buffer,
+  maxBytes: number
+) {
+  if (state.truncated) {
+    return;
+  }
+
+  const remaining = maxBytes - state.bytes;
+  if (remaining <= 0) {
+    state.truncated = true;
+    return;
+  }
+
+  if (chunk.length > remaining) {
+    chunks.push(chunk.subarray(0, remaining));
+    state.bytes += remaining;
+    state.truncated = true;
+    return;
+  }
+
+  chunks.push(chunk);
+  state.bytes += chunk.length;
+}
+
+export async function runWorkspaceCommand(
+  rootPath: string,
+  input: {
+    cwdSubpath?: string;
+    command: string;
+    args?: string[];
+    timeoutMs?: number;
+    maxOutputBytes?: number;
+  }
+): Promise<WorkspaceCommandResult> {
+  const cwd = await resolveWorkspaceDirectoryTarget(rootPath, input.cwdSubpath ?? ".");
+  const args = input.args ?? [];
+  const timeoutMs = Math.min(Math.max(input.timeoutMs ?? 10_000, 1_000), 30_000);
+  const maxOutputBytes = Math.min(Math.max(input.maxOutputBytes ?? 64 * 1024, 1), 256 * 1024);
+  const startedAtMs = Date.now();
+  const startedAt = new Date(startedAtMs).toISOString();
+  const stdoutChunks: Buffer[] = [];
+  const stderrChunks: Buffer[] = [];
+  const stdoutState = { bytes: 0, truncated: false };
+  const stderrState = { bytes: 0, truncated: false };
+
+  return new Promise((resolve) => {
+    let timedOut = false;
+    let settled = false;
+    const child = spawn(input.command, args, {
+      cwd: cwd.absolutePath,
+      shell: false,
+      windowsHide: true
+    });
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill();
+    }, timeoutMs);
+
+    child.stdout.on("data", (chunk: Buffer) => {
+      appendLimitedOutput(stdoutChunks, stdoutState, chunk, maxOutputBytes);
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      appendLimitedOutput(stderrChunks, stderrState, chunk, maxOutputBytes);
+    });
+    child.on("error", (error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      const completedAtMs = Date.now();
+      const stderr = Buffer.concat(stderrChunks).toString("utf8");
+      resolve({
+        rootPath: cwd.rootPath,
+        cwdRelativePath: cwd.relativePath,
+        command: input.command,
+        args,
+        displayCommand: formatWorkspaceCommand(input.command, args),
+        exitCode: null,
+        signal: null,
+        timedOut,
+        stdout: Buffer.concat(stdoutChunks).toString("utf8"),
+        stderr: stderr ? `${stderr}\n${error.message}` : error.message,
+        stdoutTruncated: stdoutState.truncated,
+        stderrTruncated: stderrState.truncated,
+        startedAt,
+        completedAt: new Date(completedAtMs).toISOString(),
+        durationMs: completedAtMs - startedAtMs
+      });
+    });
+    child.on("close", (exitCode, signal) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      const completedAtMs = Date.now();
+      resolve({
+        rootPath: cwd.rootPath,
+        cwdRelativePath: cwd.relativePath,
+        command: input.command,
+        args,
+        displayCommand: formatWorkspaceCommand(input.command, args),
+        exitCode,
+        signal,
+        timedOut,
+        stdout: Buffer.concat(stdoutChunks).toString("utf8"),
+        stderr: Buffer.concat(stderrChunks).toString("utf8"),
+        stdoutTruncated: stdoutState.truncated,
+        stderrTruncated: stderrState.truncated,
+        startedAt,
+        completedAt: new Date(completedAtMs).toISOString(),
+        durationMs: completedAtMs - startedAtMs
+      });
+    });
+  });
 }
 
 async function runGit(rootPath: string, args: string[]): Promise<string | null> {

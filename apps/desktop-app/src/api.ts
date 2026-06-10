@@ -317,6 +317,37 @@ export type WorkspaceWriteFileResponse = {
   };
 };
 
+export type WorkspaceCommandRunInput = {
+  rootPath: string;
+  cwdSubpath?: string;
+  command: string;
+  args?: string[];
+  timeoutMs?: number;
+  maxOutputBytes?: number;
+  approvalId: string;
+};
+
+export type WorkspaceCommandRunResponse = {
+  approval: ToolApprovalRecord;
+  command: {
+    rootPath: string;
+    cwdRelativePath: string;
+    command: string;
+    args: string[];
+    displayCommand: string;
+    exitCode: number | null;
+    signal: string | null;
+    timedOut: boolean;
+    stdout: string;
+    stderr: string;
+    stdoutTruncated: boolean;
+    stderrTruncated: boolean;
+    startedAt: string;
+    completedAt: string;
+    durationMs: number;
+  };
+};
+
 export type WorkspaceGitStatusResponse = {
   rootPath: string;
   isRepo: boolean;
@@ -774,6 +805,13 @@ export async function readWorkspaceFile(input: WorkspaceFileInput) {
 
 export async function writeWorkspaceFile(input: WorkspaceWriteFileInput) {
   return request<WorkspaceWriteFileResponse>("/workspaces/file/write", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export async function runWorkspaceCommand(input: WorkspaceCommandRunInput) {
+  return request<WorkspaceCommandRunResponse>("/workspaces/command/run", {
     method: "POST",
     body: JSON.stringify(input)
   });

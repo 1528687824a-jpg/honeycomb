@@ -49,11 +49,14 @@ import {
   listSessions
 } from "../../../packages/db/src/runtime";
 import {
+  formatWorkspaceCommand,
   getWorkspaceGitStatus,
   inspectWorkspace,
   listWorkspaceFiles,
   prepareWorkspaceFileWrite,
   readWorkspaceFile,
+  resolveWorkspaceDirectoryTarget,
+  runWorkspaceCommand,
   writeWorkspaceFile,
   WorkspacePathError
 } from "./workspaces";
@@ -204,6 +207,16 @@ const workspaceWriteFileSchema = z.object({
   approvalId: z.string().trim().min(1).max(200)
 });
 
+const workspaceCommandRunSchema = z.object({
+  rootPath: z.string().trim().min(1).max(2000),
+  cwdSubpath: z.string().trim().max(2000).optional(),
+  command: z.string().trim().min(1).max(200),
+  args: z.array(z.string().max(2000)).max(80).optional(),
+  timeoutMs: z.number().int().min(1000).max(30000).optional(),
+  maxOutputBytes: z.number().int().min(1).max(256 * 1024).optional(),
+  approvalId: z.string().trim().min(1).max(200)
+});
+
 const listApprovalsQuerySchema = z.object({
   status: z.enum(TOOL_APPROVAL_STATUSES).optional(),
   jobId: z.string().trim().min(1).max(200).optional(),
@@ -243,12 +256,25 @@ const consumeApprovalSchema = z.object({
 
 const WORKSPACE_WRITE_TOOL_NAMES = new Set(["workspace.writeFile", "workspace.write"]);
 const WORKSPACE_WRITE_ACTION_TYPES = new Set(["file_write", "workspace_file_write"]);
+const WORKSPACE_COMMAND_TOOL_NAMES = new Set([
+  "workspace.runCommand",
+  "workspace.command",
+  "workspace.shell"
+]);
+const WORKSPACE_COMMAND_ACTION_TYPES = new Set([
+  "command_execute",
+  "workspace_command_execute"
+]);
 
 function normalizeApprovalTarget(target: string | null) {
   if (!target) {
     return null;
   }
   return target.trim().replace(/\\/g, "/").replace(/^\/+/, "").replace(/^\.\//, "");
+}
+
+function normalizeApprovalCommand(command: string | null) {
+  return command?.trim() || null;
 }
 
 const listJobsQuerySchema = z.object({
@@ -584,6 +610,113 @@ async function main() {
       response.status(201).json({
         approval: consumed.approval,
         file: result
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/workspaces/command/run", async (request, response, next) => {
+    try {
+      const input = workspaceCommandRunSchema.parse(request.body ?? {});
+      const cwd = await resolveWorkspaceDirectoryTarget(input.rootPath, input.cwdSubpath ?? ".");
+      const expectedTarget = cwd.relativePath || ".";
+      const args = input.args ?? [];
+      const displayCommand = formatWorkspaceCommand(input.command, args);
+      const approval = await getToolApproval(input.approvalId);
+
+      if (!approval) {
+        response.status(404).json({ error: "approval_not_found" });
+        return;
+      }
+
+      if (approval.status !== "approved") {
+        response.status(409).json({
+          error: "approval_not_approved",
+          approval
+        });
+        return;
+      }
+
+      if (
+        !WORKSPACE_COMMAND_TOOL_NAMES.has(approval.toolName) ||
+        !WORKSPACE_COMMAND_ACTION_TYPES.has(approval.actionType)
+      ) {
+        response.status(409).json({
+          error: "approval_not_for_workspace_command",
+          approval
+        });
+        return;
+      }
+
+      const approvalTarget = normalizeApprovalTarget(approval.target);
+      if (approvalTarget !== expectedTarget) {
+        response.status(409).json({
+          error: "approval_target_mismatch",
+          expected: expectedTarget,
+          actual: approvalTarget,
+          approval
+        });
+        return;
+      }
+
+      const approvalCommand = normalizeApprovalCommand(approval.command);
+      if (approvalCommand !== displayCommand) {
+        response.status(409).json({
+          error: "approval_command_mismatch",
+          expected: displayCommand,
+          actual: approvalCommand,
+          approval
+        });
+        return;
+      }
+
+      const consumed = await consumeToolApproval({
+        approvalId: approval.id,
+        consumedBy: "workspace.runCommand"
+      });
+      if (!consumed.changed || !consumed.approval) {
+        response.status(409).json({
+          error: "approval_not_consumable",
+          reason: consumed.reason,
+          approval: consumed.approval
+        });
+        return;
+      }
+
+      const result = await runWorkspaceCommand(input.rootPath, {
+        cwdSubpath: input.cwdSubpath,
+        command: input.command,
+        args,
+        timeoutMs: input.timeoutMs,
+        maxOutputBytes: input.maxOutputBytes
+      });
+
+      await appendJobEvent(
+        approval.jobId,
+        "tool.workspace_command_completed",
+        {
+          approvalId: approval.id,
+          cwdRelativePath: result.cwdRelativePath || ".",
+          displayCommand: result.displayCommand,
+          exitCode: result.exitCode,
+          signal: result.signal,
+          timedOut: result.timedOut,
+          durationMs: result.durationMs,
+          stdoutPreview: result.stdout.slice(0, 4000),
+          stderrPreview: result.stderr.slice(0, 4000),
+          stdoutTruncated: result.stdoutTruncated,
+          stderrTruncated: result.stderrTruncated
+        },
+        {
+          actor: "workspace.runCommand",
+          stageId: approval.stageId
+        }
+      );
+
+      response.json({
+        approval: consumed.approval,
+        command: result
       });
     } catch (error) {
       next(error);
