@@ -52,7 +52,9 @@ import {
   getWorkspaceGitStatus,
   inspectWorkspace,
   listWorkspaceFiles,
+  prepareWorkspaceFileWrite,
   readWorkspaceFile,
+  writeWorkspaceFile,
   WorkspacePathError
 } from "./workspaces";
 import {
@@ -193,6 +195,15 @@ const workspaceFileQuerySchema = workspaceRootQuerySchema.extend({
   maxBytes: z.coerce.number().int().min(1).max(1024 * 1024).optional()
 });
 
+const workspaceWriteFileSchema = z.object({
+  rootPath: z.string().trim().min(1).max(2000),
+  subpath: z.string().trim().min(1).max(2000),
+  content: z.string().max(1024 * 1024),
+  mode: z.enum(["create", "overwrite", "append"]).optional(),
+  createParents: z.boolean().optional(),
+  approvalId: z.string().trim().min(1).max(200)
+});
+
 const listApprovalsQuerySchema = z.object({
   status: z.enum(TOOL_APPROVAL_STATUSES).optional(),
   jobId: z.string().trim().min(1).max(200).optional(),
@@ -229,6 +240,16 @@ const decideApprovalSchema = z.object({
 const consumeApprovalSchema = z.object({
   consumedBy: z.string().trim().min(1).max(200).optional()
 });
+
+const WORKSPACE_WRITE_TOOL_NAMES = new Set(["workspace.writeFile", "workspace.write"]);
+const WORKSPACE_WRITE_ACTION_TYPES = new Set(["file_write", "workspace_file_write"]);
+
+function normalizeApprovalTarget(target: string | null) {
+  if (!target) {
+    return null;
+  }
+  return target.trim().replace(/\\/g, "/").replace(/^\/+/, "").replace(/^\.\//, "");
+}
 
 const listJobsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).optional(),
@@ -473,6 +494,97 @@ async function main() {
           maxBytes: query.maxBytes
         })
       );
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/workspaces/file/write", async (request, response, next) => {
+    try {
+      const input = workspaceWriteFileSchema.parse(request.body ?? {});
+      const target = await prepareWorkspaceFileWrite(input.rootPath, {
+        subpath: input.subpath,
+        mode: input.mode,
+        createParents: input.createParents
+      });
+      const approval = await getToolApproval(input.approvalId);
+
+      if (!approval) {
+        response.status(404).json({ error: "approval_not_found" });
+        return;
+      }
+
+      if (approval.status !== "approved") {
+        response.status(409).json({
+          error: "approval_not_approved",
+          approval
+        });
+        return;
+      }
+
+      if (
+        !WORKSPACE_WRITE_TOOL_NAMES.has(approval.toolName) ||
+        !WORKSPACE_WRITE_ACTION_TYPES.has(approval.actionType)
+      ) {
+        response.status(409).json({
+          error: "approval_not_for_workspace_write",
+          approval
+        });
+        return;
+      }
+
+      const approvalTarget = normalizeApprovalTarget(approval.target);
+      if (approvalTarget !== target.relativePath) {
+        response.status(409).json({
+          error: "approval_target_mismatch",
+          expected: target.relativePath,
+          actual: approvalTarget,
+          approval
+        });
+        return;
+      }
+
+      const consumed = await consumeToolApproval({
+        approvalId: approval.id,
+        consumedBy: "workspace.writeFile"
+      });
+      if (!consumed.changed || !consumed.approval) {
+        response.status(409).json({
+          error: "approval_not_consumable",
+          reason: consumed.reason,
+          approval: consumed.approval
+        });
+        return;
+      }
+
+      const result = await writeWorkspaceFile(input.rootPath, {
+        subpath: input.subpath,
+        content: input.content,
+        mode: input.mode,
+        createParents: input.createParents
+      });
+
+      await appendJobEvent(
+        approval.jobId,
+        "tool.workspace_file_written",
+        {
+          approvalId: approval.id,
+          rootPath: result.rootPath,
+          relativePath: result.relativePath,
+          mode: result.mode,
+          bytes: result.bytes,
+          size: result.size
+        },
+        {
+          actor: "workspace.writeFile",
+          stageId: approval.stageId
+        }
+      );
+
+      response.status(201).json({
+        approval: consumed.approval,
+        file: result
+      });
     } catch (error) {
       next(error);
     }

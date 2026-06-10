@@ -36,6 +36,8 @@ export type WorkspaceGitChange = {
   path: string;
 };
 
+export type WorkspaceWriteMode = "create" | "overwrite" | "append";
+
 function normalizeRelativePath(value: string) {
   return value.split(path.sep).join("/");
 }
@@ -72,6 +74,63 @@ async function statDirectory(rootPath: string) {
   return {
     root,
     stats
+  };
+}
+
+export async function resolveWorkspaceFileTarget(rootPath: string, subpath: string) {
+  const { root } = await statDirectory(rootPath);
+  const { target, relative } = resolveInsideRoot(root, subpath);
+  if (!relative) {
+    throw new WorkspacePathError("workspace_target_not_file");
+  }
+
+  return {
+    rootPath: root,
+    absolutePath: target,
+    relativePath: relative
+  };
+}
+
+export async function prepareWorkspaceFileWrite(
+  rootPath: string,
+  input: {
+    subpath: string;
+    mode?: WorkspaceWriteMode;
+    createParents?: boolean;
+  }
+) {
+  const target = await resolveWorkspaceFileTarget(rootPath, input.subpath);
+  const mode = input.mode ?? "create";
+  const parentPath = path.dirname(target.absolutePath);
+
+  if (!input.createParents) {
+    let parentStats;
+    try {
+      parentStats = await fs.stat(parentPath);
+    } catch {
+      throw new WorkspacePathError("workspace_parent_not_found");
+    }
+    if (!parentStats.isDirectory()) {
+      throw new WorkspacePathError("workspace_parent_not_directory");
+    }
+  }
+
+  let targetStats = null;
+  try {
+    targetStats = await fs.stat(target.absolutePath);
+  } catch {
+    targetStats = null;
+  }
+  if (targetStats?.isDirectory()) {
+    throw new WorkspacePathError("workspace_target_not_file");
+  }
+  if (mode === "create" && targetStats) {
+    throw new WorkspacePathError("workspace_file_exists");
+  }
+
+  return {
+    ...target,
+    mode
   };
 }
 
@@ -285,4 +344,32 @@ export async function readWorkspaceFile(
   } finally {
     await handle.close();
   }
+}
+
+export async function writeWorkspaceFile(
+  rootPath: string,
+  input: {
+    subpath: string;
+    content: string;
+    mode?: WorkspaceWriteMode;
+    createParents?: boolean;
+  }
+) {
+  const prepared = await prepareWorkspaceFileWrite(rootPath, input);
+  const { rootPath: root, absolutePath: target, relativePath: relative, mode } = prepared;
+  if (input.createParents) {
+    await fs.mkdir(path.dirname(target), { recursive: true });
+  }
+  const flag = mode === "append" ? "a" : mode === "overwrite" ? "w" : "wx";
+  await fs.writeFile(target, input.content, { encoding: "utf8", flag });
+  const stats = await fs.stat(target);
+
+  return {
+    rootPath: root,
+    relativePath: relative,
+    mode,
+    bytes: Buffer.byteLength(input.content, "utf8"),
+    size: stats.size,
+    modifiedAt: stats.mtime.toISOString()
+  };
 }

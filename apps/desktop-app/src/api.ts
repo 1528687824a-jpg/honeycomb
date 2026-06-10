@@ -245,6 +245,8 @@ export type WorkspaceGitChange = {
   path: string;
 };
 
+export type WorkspaceWriteMode = "create" | "overwrite" | "append";
+
 export type WorkspaceInspectResponse = {
   rootPath: string;
   exists: boolean;
@@ -292,6 +294,27 @@ export type WorkspaceFileResponse = {
   binary: boolean;
   encoding: "utf8" | null;
   content: string | null;
+};
+
+export type WorkspaceWriteFileInput = {
+  rootPath: string;
+  subpath: string;
+  content: string;
+  mode?: WorkspaceWriteMode;
+  createParents?: boolean;
+  approvalId: string;
+};
+
+export type WorkspaceWriteFileResponse = {
+  approval: ToolApprovalRecord;
+  file: {
+    rootPath: string;
+    relativePath: string;
+    mode: WorkspaceWriteMode;
+    bytes: number;
+    size: number;
+    modifiedAt: string;
+  };
 };
 
 export type WorkspaceGitStatusResponse = {
@@ -747,6 +770,13 @@ export async function readWorkspaceFile(input: WorkspaceFileInput) {
     params.set("maxBytes", String(input.maxBytes));
   }
   return request<WorkspaceFileResponse>(`/workspaces/file?${params.toString()}`);
+}
+
+export async function writeWorkspaceFile(input: WorkspaceWriteFileInput) {
+  return request<WorkspaceWriteFileResponse>("/workspaces/file/write", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
 }
 
 export async function getWorkspaceGitStatus(rootPath: string) {
