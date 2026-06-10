@@ -350,6 +350,13 @@ export type SessionEventsResponse = {
   limit: number;
 };
 
+export type SessionEventsStreamInput = {
+  afterSeq?: number;
+  limit?: number;
+  pollMs?: number;
+  heartbeatMs?: number;
+};
+
 export type SessionArchiveInput = {
   retentionDays?: number;
   reason?: string;
@@ -666,6 +673,23 @@ export async function listSessions(input: ListSessionsInput = {}) {
 export async function getSessionEvents(sessionId: string, limit = 500) {
   const params = new URLSearchParams({ limit: String(limit) });
   return request<SessionEventsResponse>(`/sessions/${encodeURIComponent(sessionId)}/events?${params.toString()}`);
+}
+
+export function createSessionEventsSource(
+  sessionId: string,
+  input: SessionEventsStreamInput = {}
+) {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(input)) {
+    if (value !== undefined && value !== null && value !== "") {
+      params.set(key, String(value));
+    }
+  }
+  const query = params.toString();
+  const suffix = query ? `?${query}` : "";
+  return new EventSource(
+    `${API_BASE}/sessions/${encodeURIComponent(sessionId)}/events/stream${suffix}`
+  );
 }
 
 export async function archiveSession(sessionId: string, input: SessionArchiveInput = {}) {

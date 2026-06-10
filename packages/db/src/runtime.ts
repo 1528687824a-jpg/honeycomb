@@ -523,6 +523,41 @@ export async function getSessionEvents(
   };
 }
 
+export async function getSessionEventsAfter(
+  sessionId: string,
+  input: { afterSeq?: number; limit?: number } = {}
+): Promise<{
+  sessionId: string;
+  afterSeq: number;
+  limit: number;
+  events: SessionEventRecord[];
+} | null> {
+  const session = await pool.query(`select 1 from agent.jobs where session_id = $1 limit 1`, [
+    sessionId
+  ]);
+  if (!session.rows[0]) {
+    return null;
+  }
+
+  const afterSeq = Math.max(input.afterSeq ?? 0, 0);
+  const limit = Math.min(Math.max(input.limit ?? 100, 1), 500);
+  const result = await pool.query(
+    `select *
+     from agent.agent_events
+     where session_id = $1 and seq > $2
+     order by seq asc
+     limit $3`,
+    [sessionId, afterSeq, limit]
+  );
+
+  return {
+    sessionId,
+    afterSeq,
+    limit,
+    events: result.rows.map(toSessionEventRecord)
+  };
+}
+
 export async function compressSession(
   sessionId: string,
   input: { maxEvents?: number; reason?: string } = {}

@@ -36,6 +36,7 @@ import {
   compressSession,
   getRuntimeUsage,
   getSessionEvents,
+  getSessionEventsAfter,
   listRuntimeLogs,
   listSessions
 } from "../../../packages/db/src/runtime";
@@ -93,6 +94,13 @@ const listSessionsQuerySchema = z.object({
 
 const sessionEventsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(1000).optional()
+});
+
+const sessionEventsStreamQuerySchema = z.object({
+  afterSeq: z.coerce.number().int().min(0).optional(),
+  limit: z.coerce.number().int().min(1).max(500).optional(),
+  pollMs: z.coerce.number().int().min(250).max(10000).optional(),
+  heartbeatMs: z.coerce.number().int().min(5000).max(60000).optional()
 });
 
 const archiveSessionSchema = z.object({
@@ -445,6 +453,106 @@ async function main() {
     try {
       const query = sessionEventsQuerySchema.parse(request.query);
       response.json(await getSessionEvents(request.params.sessionId, query));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/sessions/:sessionId/events/stream", async (request, response, next) => {
+    try {
+      const query = sessionEventsStreamQuerySchema.parse(request.query);
+      const pollMs = query.pollMs ?? 1000;
+      const heartbeatMs = query.heartbeatMs ?? 15000;
+      const limit = query.limit ?? 100;
+      let afterSeq = query.afterSeq ?? 0;
+      let closed = false;
+      let inFlight = false;
+
+      const initial = await getSessionEventsAfter(request.params.sessionId, {
+        afterSeq,
+        limit
+      });
+      if (!initial) {
+        response.status(404).json({ error: "session_not_found" });
+        return;
+      }
+
+      response.writeHead(200, {
+        "content-type": "text/event-stream; charset=utf-8",
+        "cache-control": "no-cache, no-transform",
+        connection: "keep-alive",
+        "x-accel-buffering": "no"
+      });
+      response.write(`retry: ${Math.max(pollMs, 1000)}\n\n`);
+
+      const writeEvent = (event: string, data: unknown, id?: string | number) => {
+        if (closed) {
+          return;
+        }
+        if (id !== undefined) {
+          response.write(`id: ${id}\n`);
+        }
+        response.write(`event: ${event}\n`);
+        response.write(`data: ${JSON.stringify(data)}\n\n`);
+      };
+
+      writeEvent("ready", {
+        sessionId: request.params.sessionId,
+        afterSeq,
+        pollMs,
+        heartbeatMs,
+        limit
+      });
+
+      const pump = async () => {
+        if (closed || inFlight) {
+          return;
+        }
+        inFlight = true;
+        try {
+          const batch = await getSessionEventsAfter(request.params.sessionId, {
+            afterSeq,
+            limit
+          });
+          if (!batch) {
+            writeEvent("closed", {
+              reason: "session_not_found",
+              sessionId: request.params.sessionId
+            });
+            response.end();
+            closed = true;
+            return;
+          }
+
+          for (const event of batch.events) {
+            afterSeq = event.seq;
+            writeEvent("session_event", event, event.seq);
+          }
+        } catch (error) {
+          writeEvent("error", {
+            message: error instanceof Error ? error.message : "unknown_error"
+          });
+        } finally {
+          inFlight = false;
+        }
+      };
+
+      await pump();
+
+      const pollTimer = setInterval(() => {
+        void pump();
+      }, pollMs);
+      const heartbeatTimer = setInterval(() => {
+        if (!closed) {
+          response.write(`: heartbeat ${new Date().toISOString()} seq=${afterSeq}\n\n`);
+        }
+      }, heartbeatMs);
+
+      request.on("close", () => {
+        closed = true;
+        clearInterval(pollTimer);
+        clearInterval(heartbeatTimer);
+      });
     } catch (error) {
       next(error);
     }
