@@ -10,6 +10,7 @@ $dockerCli = "C:\Program Files\Docker\Docker\resources\bin\docker.exe"
 $dockerDesktop = "C:\Program Files\Docker\Docker\Docker Desktop.exe"
 $desktopExe = Join-Path $root "apps\desktop-app\src-tauri\target\release\honeycomb.exe"
 $logPath = Join-Path $root "logs\desktop-launcher.log"
+$honeycombRuntimeHostDir = Join-Path ([Environment]::GetFolderPath("ApplicationData")) "io.agentopenclaw.desktop\openclaw-runtime"
 $dockerProbeTimeoutSeconds = 10
 $dockerCommandTimeoutSeconds = 90
 $apiHealthUrl = "http://localhost:3000/health"
@@ -17,6 +18,12 @@ $desktopLaunched = $false
 
 Set-Location $root
 New-Item -ItemType Directory -Force -Path "logs", ".runtime" | Out-Null
+New-Item -ItemType Directory -Force -Path $honeycombRuntimeHostDir | Out-Null
+$env:HONEYCOMB_OPENCLAW_RUNTIME_HOST_DIR = $honeycombRuntimeHostDir
+$env:AGENT_CLUSTER_CONFIG_PATH = "/app/honeycomb-runtime/cluster.config.json"
+$env:HONEYCOMB_AGENT_MODEL_CONFIG_PATH = "/app/honeycomb-runtime/agent-model-configs.json"
+$env:HONEYCOMB_FIRST_RUN_AGENTS_DIR = "/app/honeycomb-runtime/agents"
+$env:HONEYCOMB_PANEL_SUPERVISOR_AGENT_ID = "panel-supervisor-agent"
 
 function Write-LaunchLog($Message) {
   $line = "$(Get-Date -Format o) $Message"
@@ -160,6 +167,52 @@ function Test-HttpReady($Url) {
   }
 }
 
+function Get-LatestDesktopSourceWriteTimeUtc {
+  $sourcePaths = @(
+    "apps\desktop-app\index.html",
+    "apps\desktop-app\package.json",
+    "apps\desktop-app\tsconfig.json",
+    "apps\desktop-app\vite.config.ts",
+    "apps\desktop-app\src",
+    "apps\desktop-app\src-tauri\Cargo.toml",
+    "apps\desktop-app\src-tauri\tauri.conf.json",
+    "apps\desktop-app\src-tauri\src",
+    "apps\desktop-app\src-tauri\icons"
+  )
+
+  $latest = [datetime]::MinValue
+  foreach ($relativePath in $sourcePaths) {
+    $path = Join-Path $root $relativePath
+    if (-not (Test-Path -LiteralPath $path)) {
+      continue
+    }
+
+    $item = Get-Item -LiteralPath $path
+    if ($item.PSIsContainer) {
+      $children = Get-ChildItem -LiteralPath $path -Recurse -File -ErrorAction SilentlyContinue
+      foreach ($child in $children) {
+        if ($child.LastWriteTimeUtc -gt $latest) {
+          $latest = $child.LastWriteTimeUtc
+        }
+      }
+    } elseif ($item.LastWriteTimeUtc -gt $latest) {
+      $latest = $item.LastWriteTimeUtc
+    }
+  }
+
+  return $latest
+}
+
+function Test-DesktopExeNeedsBuild {
+  if (-not (Test-Path -LiteralPath $desktopExe)) {
+    return $true
+  }
+
+  $exeWriteTime = (Get-Item -LiteralPath $desktopExe).LastWriteTimeUtc
+  $sourceWriteTime = Get-LatestDesktopSourceWriteTimeUtc
+  return $sourceWriteTime -gt $exeWriteTime
+}
+
 try {
   Write-LaunchLog "Launcher started"
 
@@ -170,12 +223,14 @@ try {
     exit 0
   }
 
-  if (-not (Test-Path -LiteralPath $desktopExe)) {
-    Write-LaunchLog "Desktop exe missing; building release app without bundle"
+  if (Test-DesktopExeNeedsBuild) {
+    Write-LaunchLog "Desktop exe missing or stale; building release app without bundle"
     npm --prefix apps/desktop-app exec tauri build -- --no-bundle *> (Join-Path $root "logs\desktop-launcher-build.log")
     if ($LASTEXITCODE -ne 0) {
       throw "Tauri no-bundle build failed"
     }
+  } else {
+    Write-LaunchLog "Desktop exe is up to date"
   }
 
   if (-not $NoLaunch) {

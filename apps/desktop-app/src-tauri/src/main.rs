@@ -1,8 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 
 #[derive(Deserialize)]
@@ -21,6 +22,52 @@ struct AgentFile {
     contents: String,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderPayload {
+    provider_name: String,
+    base_url: String,
+    model: String,
+    api_key: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderConnectionResult {
+    ok: bool,
+    message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    openclaw_manifest_path: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentModelConfigPayload {
+    agent_id: String,
+    provider_name: String,
+    base_url: String,
+    model: String,
+    api_key: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SuggestionPayload {
+    provider: ProviderPayload,
+    industry: String,
+    role: String,
+    daily_work: String,
+    language: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InterviewSuggestions {
+    role_examples: Vec<String>,
+    work_options: Vec<String>,
+    quality_examples: Vec<String>,
+}
+
 fn safe_join(root: &Path, relative: &str) -> Result<PathBuf, String> {
     let normalized = relative.replace('\\', "/");
     if normalized.starts_with('/') || normalized.contains("..") {
@@ -29,18 +76,260 @@ fn safe_join(root: &Path, relative: &str) -> Result<PathBuf, String> {
     Ok(root.join(normalized))
 }
 
+fn chat_completions_url(base_url: &str) -> Result<String, String> {
+    let trimmed = base_url.trim().trim_end_matches('/');
+    if trimmed.is_empty() || !(trimmed.starts_with("https://") || trimmed.starts_with("http://")) {
+        return Err("provider_endpoint".to_string());
+    }
+    if trimmed.ends_with("/chat/completions") {
+        Ok(trimmed.to_string())
+    } else {
+        Ok(format!("{trimmed}/chat/completions"))
+    }
+}
+
+fn clean_items(items: Vec<String>, fallback: &[&str], limit: usize) -> Vec<String> {
+    let mut output: Vec<String> = Vec::new();
+    for item in items.into_iter().chain(fallback.iter().map(|item| item.to_string())) {
+        let cleaned = item
+            .trim()
+            .trim_matches(|value: char| value == '"' || value == '\'' || value == '。' || value == '.' || value == '…')
+            .to_string();
+        if cleaned.is_empty() || cleaned.chars().count() > 28 || output.iter().any(|existing| existing == &cleaned) {
+            continue;
+        }
+        output.push(cleaned);
+        if output.len() >= limit {
+            break;
+        }
+    }
+    output
+}
+
+async fn call_chat_completion(
+    provider: &ProviderPayload,
+    messages: Vec<serde_json::Value>,
+    max_tokens: u32,
+) -> Result<String, String> {
+    if provider.model.trim().is_empty() || provider.api_key.trim().is_empty() {
+        return Err("provider_missing".to_string());
+    }
+    let url = chat_completions_url(&provider.base_url)?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(45))
+        .build()
+        .map_err(|_| "provider_client".to_string())?;
+    let mut body = serde_json::json!({
+        "model": provider.model.trim(),
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "stream": false
+    });
+    if provider.base_url.contains("deepseek.com") {
+        body["thinking"] = serde_json::json!({ "type": "disabled" });
+    }
+    let response = client
+        .post(url)
+        .bearer_auth(provider.api_key.trim())
+        .json(&body)
+        .send()
+        .await
+        .map_err(|_| "provider_network".to_string())?;
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!("provider_status:{}", status.as_u16()));
+    }
+    let parsed: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|_| "provider_response".to_string())?;
+    let content = parsed
+        .get("choices")
+        .and_then(|choices| choices.get(0))
+        .and_then(|choice| choice.get("message"))
+        .and_then(|message| message.get("content"))
+        .and_then(|content| content.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if content.is_empty() {
+        return Err("provider_empty".to_string());
+    }
+    Ok(content)
+}
+
+fn parse_suggestions(content: &str) -> Result<InterviewSuggestions, String> {
+    let start = content.find('{').ok_or_else(|| "provider_json".to_string())?;
+    let end = content.rfind('}').ok_or_else(|| "provider_json".to_string())?;
+    let json_slice = &content[start..=end];
+    let parsed: InterviewSuggestions = serde_json::from_str(json_slice)
+        .map_err(|_| "provider_json".to_string())?;
+    Ok(InterviewSuggestions {
+        role_examples: clean_items(parsed.role_examples, &["业务负责人", "一线执行人员", "技术/运营人员"], 4),
+        work_options: clean_items(parsed.work_options, &["资料整理", "方案执行", "问题跟进", "交付复盘"], 4),
+        quality_examples: clean_items(parsed.quality_examples, &["准确可追溯", "能直接交付", "符合实际场景", "便于复盘"], 4),
+    })
+}
+
+fn timestamp_string() -> String {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs().to_string())
+        .unwrap_or_else(|_| "0".to_string())
+}
+
+fn first_run_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let app_data = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    Ok(app_data.join("desktop-first-run"))
+}
+
+fn read_json_object(path: &Path) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    if !path.exists() {
+        return Ok(serde_json::Map::new());
+    }
+    let content = fs::read_to_string(path).map_err(|error| error.to_string())?;
+    let parsed: serde_json::Value = serde_json::from_str(&content).map_err(|error| error.to_string())?;
+    Ok(parsed.as_object().cloned().unwrap_or_default())
+}
+
+fn copy_dir_all(source: &Path, target: &Path) -> Result<(), String> {
+    fs::create_dir_all(target).map_err(|error| error.to_string())?;
+    for entry in fs::read_dir(source).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let file_type = entry.file_type().map_err(|error| error.to_string())?;
+        let next_target = target.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_dir_all(&entry.path(), &next_target)?;
+        } else {
+            fs::copy(entry.path(), next_target).map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+fn write_openclaw_runtime_manifest(app: &AppHandle) -> Result<String, String> {
+    let app_data = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    let first_run = app_data.join("desktop-first-run");
+    let runtime_dir = app_data.join("openclaw-runtime");
+    let source_cluster_path = first_run.join("cluster.config.json");
+    let runtime_cluster_path = runtime_dir.join("cluster.config.json");
+    let source_agent_model_config_path = first_run.join("agent-model-configs.json");
+    let runtime_agent_model_config_path = runtime_dir.join("agent-model-configs.json");
+    let source_agents_dir = first_run.join("agents");
+    let runtime_agents_dir = runtime_dir.join("agents");
+    let env_path = runtime_dir.join("openclaw.env");
+    let manifest_path = runtime_dir.join("runtime-manifest.json");
+    let applied_at = timestamp_string();
+
+    fs::create_dir_all(&runtime_dir).map_err(|error| error.to_string())?;
+    if source_cluster_path.exists() {
+        fs::copy(&source_cluster_path, &runtime_cluster_path).map_err(|error| error.to_string())?;
+    }
+    if source_agent_model_config_path.exists() {
+        fs::copy(&source_agent_model_config_path, &runtime_agent_model_config_path).map_err(|error| error.to_string())?;
+    }
+    if source_agents_dir.exists() {
+        if runtime_agents_dir.exists() {
+            fs::remove_dir_all(&runtime_agents_dir).map_err(|error| error.to_string())?;
+        }
+        copy_dir_all(&source_agents_dir, &runtime_agents_dir)?;
+    }
+
+    let env_contents = format!(
+        "AGENT_CLUSTER_CONFIG_PATH={}\nHONEYCOMB_AGENT_MODEL_CONFIG_PATH={}\nHONEYCOMB_FIRST_RUN_AGENTS_DIR={}\n",
+        runtime_cluster_path.to_string_lossy(),
+        runtime_agent_model_config_path.to_string_lossy(),
+        runtime_agents_dir.to_string_lossy()
+    );
+    fs::write(&env_path, env_contents).map_err(|error| error.to_string())?;
+
+    let manifest = serde_json::json!({
+        "schemaVersion": "honeycomb.openclaw.runtime.v1",
+        "clusterConfigPath": runtime_cluster_path,
+        "agentModelConfigPath": runtime_agent_model_config_path,
+        "agentsDir": runtime_agents_dir,
+        "openclawEnvPath": env_path,
+        "appliedAt": applied_at
+    });
+    fs::write(
+        &manifest_path,
+        serde_json::to_string_pretty(&manifest).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(manifest_path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+async fn verify_provider_connection(payload: ProviderPayload) -> Result<ProviderConnectionResult, String> {
+    let provider_name = payload.provider_name.trim().to_string();
+    call_chat_completion(
+        &payload,
+        vec![
+            serde_json::json!({
+                "role": "system",
+                "content": "You verify that a model endpoint works. Reply with exactly OK."
+            }),
+            serde_json::json!({
+                "role": "user",
+                "content": "Reply OK if you can read this request."
+            }),
+        ],
+        16,
+    )
+    .await?;
+    Ok(ProviderConnectionResult {
+        ok: true,
+        message: format!("{} connection verified.", if provider_name.is_empty() { "Provider" } else { &provider_name }),
+        openclaw_manifest_path: None,
+    })
+}
+
+#[tauri::command]
+async fn generate_first_run_suggestions(payload: SuggestionPayload) -> Result<InterviewSuggestions, String> {
+    let language_name = if payload.language == "zh" { "Chinese" } else { "English" };
+    let role_line = if payload.role.trim().is_empty() {
+        "Role: unknown yet".to_string()
+    } else {
+        format!("Role: {}", payload.role.trim())
+    };
+    let work_line = if payload.daily_work.trim().is_empty() {
+        "Daily work: unknown yet".to_string()
+    } else {
+        format!("Daily work: {}", payload.daily_work.trim())
+    };
+    let content = call_chat_completion(
+        &payload.provider,
+        vec![
+            serde_json::json!({
+                "role": "system",
+                "content": "You generate concise onboarding UI suggestions for a local multi-agent work panel. Return strict JSON only. Do not include secrets."
+            }),
+            serde_json::json!({
+                "role": "user",
+                "content": format!(
+                    "Language: {language_name}\nIndustry/domain: {}\n{role_line}\n{work_line}\nReturn JSON with exactly this shape: {{\"roleExamples\":[3 or 4 short role names],\"workOptions\":[4 concrete daily work options],\"qualityExamples\":[4 short examples of excellent output for this user's role and work]}}. Make every item specific to the domain. Keep each item short.",
+                    payload.industry.trim()
+                )
+            }),
+        ],
+        260,
+    )
+    .await?;
+    parse_suggestions(&content)
+}
+
 #[tauri::command]
 fn save_first_run_setup(app: AppHandle, payload: String) -> Result<String, String> {
     let parsed: FirstRunPayload = serde_json::from_str(&payload).map_err(|error| error.to_string())?;
     let app_data = app.path().app_data_dir().map_err(|error| error.to_string())?;
     let out_dir = app_data.join("desktop-first-run");
     let agents_dir = out_dir.join("agents");
+    let provider = parsed.provider.clone();
 
     fs::create_dir_all(&agents_dir).map_err(|error| error.to_string())?;
     fs::write(
         out_dir.join("first-run-profile.json"),
         serde_json::to_string_pretty(&serde_json::json!({
-            "provider": parsed.provider,
+            "provider": provider,
             "interview": parsed.interview,
             "profile": parsed.profile
         }))
@@ -61,12 +350,157 @@ fn save_first_run_setup(app: AppHandle, payload: String) -> Result<String, Strin
         fs::write(target, agent.contents).map_err(|error| error.to_string())?;
     }
 
+    if let Ok(api_key) = fs::read_to_string(out_dir.join("provider-api-key.txt")) {
+        let trimmed_key = api_key.trim().to_string();
+        let model = parsed.provider.get("model").and_then(|value| value.as_str()).unwrap_or("").trim();
+        if !trimmed_key.is_empty() && !model.is_empty() {
+            let config_path = out_dir.join("agent-model-configs.json");
+            let mut configs = read_json_object(&config_path)?;
+            let applied_at = timestamp_string();
+            configs.insert(
+                "panel-supervisor-agent".to_string(),
+                serde_json::json!({
+                    "providerName": parsed.provider.get("providerName").and_then(|value| value.as_str()).unwrap_or("DeepSeek"),
+                    "baseUrl": parsed.provider.get("baseUrl").and_then(|value| value.as_str()).unwrap_or("https://api.deepseek.com"),
+                    "model": model,
+                    "apiKey": trimmed_key,
+                    "apiKeyConfigured": true,
+                    "verifiedAt": applied_at,
+                    "appliedAt": applied_at
+                }),
+            );
+            fs::write(
+                &config_path,
+                serde_json::to_string_pretty(&configs).map_err(|error| error.to_string())?,
+            )
+            .map_err(|error| error.to_string())?;
+        }
+    }
+
+    let _ = write_openclaw_runtime_manifest(&app);
+
     Ok(out_dir.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn load_first_run_setup(app: AppHandle) -> Result<Option<String>, String> {
+    let app_data = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    let profile_path = app_data.join("desktop-first-run").join("first-run-profile.json");
+    if !profile_path.exists() {
+        return Ok(None);
+    }
+    fs::read_to_string(profile_path)
+        .map(Some)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn load_agent_model_configs(app: AppHandle) -> Result<Option<String>, String> {
+    let config_path = first_run_dir(&app)?.join("agent-model-configs.json");
+    if !config_path.exists() {
+        return Ok(None);
+    }
+    fs::read_to_string(config_path)
+        .map(Some)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn save_agent_model_config(
+    app: AppHandle,
+    payload: AgentModelConfigPayload,
+) -> Result<ProviderConnectionResult, String> {
+    let provider = ProviderPayload {
+        provider_name: payload.provider_name.trim().to_string(),
+        base_url: payload.base_url.trim().to_string(),
+        model: payload.model.trim().to_string(),
+        api_key: payload.api_key.trim().to_string(),
+    };
+    let provider_name = provider.provider_name.clone();
+    call_chat_completion(
+        &provider,
+        vec![
+            serde_json::json!({
+                "role": "system",
+                "content": "You verify that a model endpoint works. Reply with exactly OK."
+            }),
+            serde_json::json!({
+                "role": "user",
+                "content": "Reply OK if this agent model configuration is valid."
+            }),
+        ],
+        16,
+    )
+    .await?;
+
+    let out_dir = first_run_dir(&app)?;
+    fs::create_dir_all(&out_dir).map_err(|error| error.to_string())?;
+    let config_path = out_dir.join("agent-model-configs.json");
+    let mut configs = read_json_object(&config_path)?;
+    let applied_at = timestamp_string();
+    configs.insert(
+        payload.agent_id.trim().to_string(),
+        serde_json::json!({
+            "providerName": provider.provider_name,
+            "baseUrl": provider.base_url,
+            "model": provider.model,
+            "apiKey": provider.api_key,
+            "apiKeyConfigured": true,
+            "verifiedAt": applied_at,
+            "appliedAt": applied_at
+        }),
+    );
+    fs::write(
+        &config_path,
+        serde_json::to_string_pretty(&configs).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    let manifest_path = write_openclaw_runtime_manifest(&app)?;
+    Ok(ProviderConnectionResult {
+        ok: true,
+        message: format!("{} connection verified.", if provider_name.is_empty() { "Provider" } else { &provider_name }),
+        openclaw_manifest_path: Some(manifest_path),
+    })
+}
+
+#[tauri::command]
+fn apply_openclaw_agent_setup(app: AppHandle) -> Result<String, String> {
+    write_openclaw_runtime_manifest(&app)
+}
+
+#[tauri::command]
+fn save_provider_api_key(app: AppHandle, payload: String) -> Result<(), String> {
+    let app_data = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    let out_dir = app_data.join("desktop-first-run");
+    fs::create_dir_all(&out_dir).map_err(|error| error.to_string())?;
+    fs::write(out_dir.join("provider-api-key.txt"), payload).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn load_provider_api_key(app: AppHandle) -> Result<Option<String>, String> {
+    let app_data = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    let key_path = app_data.join("desktop-first-run").join("provider-api-key.txt");
+    if !key_path.exists() {
+        return Ok(None);
+    }
+    fs::read_to_string(key_path)
+        .map(Some)
+        .map_err(|error| error.to_string())
 }
 
 fn main() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![save_first_run_setup])
+        .invoke_handler(tauri::generate_handler![
+            verify_provider_connection,
+            generate_first_run_suggestions,
+            save_first_run_setup,
+            load_first_run_setup,
+            load_agent_model_configs,
+            save_agent_model_config,
+            apply_openclaw_agent_setup,
+            save_provider_api_key,
+            load_provider_api_key
+        ])
         .run(tauri::generate_context!())
         .expect("error while running Honeycomb desktop shell");
 }

@@ -157,6 +157,35 @@ const statements = [
     rejected_at timestamptz,
     unique(source_job_id, kind, scope, scope_key)
   )`,
+  `create table if not exists agent.task_plans (
+    id text primary key,
+    job_id text not null references agent.jobs(id),
+    title text not null,
+    summary text,
+    status text not null default 'active',
+    source text not null default 'manual',
+    source_artifact_id text references agent.artifacts(id),
+    metadata jsonb not null default '{}',
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now()
+  )`,
+  `create table if not exists agent.task_plan_items (
+    id text primary key,
+    plan_id text not null references agent.task_plans(id) on delete cascade,
+    position int not null,
+    title text not null,
+    body text,
+    status text not null default 'pending',
+    agent_id text,
+    stage_id text references agent.job_stages(id),
+    artifact_id text references agent.artifacts(id),
+    acceptance_criteria jsonb not null default '[]',
+    metadata jsonb not null default '{}',
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    completed_at timestamptz,
+    unique(plan_id, position)
+  )`,
   `alter table agent.artifacts
     drop constraint if exists artifacts_stage_id_fkey`,
   `alter table agent.artifacts
@@ -200,7 +229,15 @@ const statements = [
   `create index if not exists experience_candidates_status_updated_at_idx
     on agent.experience_candidates(status, updated_at desc)`,
   `create index if not exists experience_candidates_scope_idx
-    on agent.experience_candidates(scope, scope_key, status)`
+    on agent.experience_candidates(scope, scope_key, status)`,
+  `create index if not exists task_plans_job_id_updated_at_idx
+    on agent.task_plans(job_id, updated_at desc)`,
+  `create index if not exists task_plans_status_updated_at_idx
+    on agent.task_plans(status, updated_at desc)`,
+  `create index if not exists task_plan_items_plan_position_idx
+    on agent.task_plan_items(plan_id, position)`,
+  `create index if not exists task_plan_items_status_idx
+    on agent.task_plan_items(status, updated_at desc)`
 ];
 
 async function main() {

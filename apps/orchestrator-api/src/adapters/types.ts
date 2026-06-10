@@ -7,6 +7,7 @@ import type {
 
 export type CreateJobForIngressInput = {
   rawPrompt: string;
+  workdir?: string;
   routingMode?: RoutingMode;
   maxModelCalls?: number;
   classicFinalGateEnabled?: boolean;

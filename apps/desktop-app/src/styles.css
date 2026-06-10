@@ -496,9 +496,42 @@ select {
 
 .composerControls {
   display: grid;
-  grid-template-columns: 72px minmax(220px, 1fr) 64px 96px 130px;
+  grid-template-columns: minmax(260px, 1fr) 64px 96px 130px;
   align-items: center;
   gap: 10px;
+}
+
+.smartRoutingBadge {
+  min-height: 46px;
+  display: grid;
+  align-content: center;
+  gap: 3px;
+  padding: 8px 10px;
+  border: 1px solid #303641;
+  border-radius: 6px;
+  background: #11151c;
+}
+
+.smartRoutingBadge strong {
+  color: #ffffff;
+  font-size: 13px;
+}
+
+.smartRoutingBadge span {
+  color: #8c97a7;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.smartRoutingBadge em {
+  width: fit-content;
+  margin-top: 2px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  background: #292316;
+  color: #f5b942;
+  font-size: 11px;
+  font-style: normal;
 }
 
 .error {
@@ -1006,6 +1039,82 @@ select {
   font-size: 11px;
 }
 
+.agentModelTag.pending {
+  border-color: #3b4654;
+  background: #11151c;
+  color: #9aa5b5;
+}
+
+.agentConfigHint {
+  margin-top: 0 !important;
+  color: #9aa5b5 !important;
+  line-height: 1.4;
+}
+
+.agentConfigureButton {
+  justify-self: start;
+  min-height: 34px;
+}
+
+.agentPanel.expanded {
+  grid-column: 1 / -1;
+}
+
+.agentConfigPanel {
+  display: grid;
+  gap: 14px;
+  margin-top: 8px;
+  padding-top: 16px;
+  border-top: 1px solid #303641;
+}
+
+.agentConfigPanel h3 {
+  margin: 0;
+  color: #ffffff;
+  font-size: 18px;
+}
+
+.agentConfigFields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.agentConfigFields label {
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.agentConfigFields input,
+.agentConfigFields .apiKeyInputShell {
+  min-height: 42px;
+  border-color: #4d3920;
+  background: #151a22;
+  color: #e4e8ef;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.agentConfigFields input:focus,
+.agentConfigFields .apiKeyInputShell:focus-within {
+  outline: 1px solid #ffffff;
+  outline-offset: 0;
+  border-color: #ffffff;
+}
+
+.agentConfigFields .apiKeyInputShell input,
+.agentConfigFields .apiKeyToggle {
+  min-height: 40px;
+}
+
+.agentConfigActions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .routingList {
   display: grid;
   gap: 8px;
@@ -1013,13 +1122,15 @@ select {
 
 .routingOption {
   display: grid;
-  gap: 4px;
-  justify-content: flex-start;
-  text-align: left;
+  place-items: center;
+  min-height: 48px;
+  text-align: center;
 }
 
 .routingOption span {
   color: #e7ebf2;
+  font-size: 13px;
+  font-weight: 700;
 }
 
 .routingOption small {
@@ -1034,8 +1145,67 @@ select {
 
 .modelLayout {
   display: grid;
-  grid-template-columns: minmax(270px, 0.7fr) minmax(420px, 1.3fr);
   gap: 14px;
+}
+
+.modelRoutingList {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.routingFlowPanel {
+  display: grid;
+  gap: 14px;
+}
+
+.routingFlowChart {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.routingFlowChart article {
+  position: relative;
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  padding: 14px;
+  border: 1px solid #2f3744;
+  border-radius: 6px;
+  background: #11151c;
+}
+
+.routingFlowChart article:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: 28px;
+  right: -10px;
+  width: 10px;
+  height: 1px;
+  background: #d39a33;
+}
+
+.routingFlowChart article > span {
+  width: fit-content;
+  padding: 3px 6px;
+  border-radius: 4px;
+  background: #292316;
+  color: #f5b942;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.routingFlowChart strong {
+  color: #ffffff;
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+.routingFlowChart p {
+  margin: 0;
+  color: #aab4c3;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .modelRoleList {
@@ -1239,6 +1409,272 @@ select {
 .securityPanel {
   display: grid;
   gap: 12px;
+}
+
+.securityActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.recoveryManagePanel {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #303641;
+  border-radius: 6px;
+  background: #11151c;
+}
+
+.recoveryManagePanel p,
+.resetPanel p {
+  margin: 0;
+  color: #9aa5b5;
+  line-height: 1.5;
+}
+
+.resetPanel {
+  display: grid;
+  gap: 12px;
+}
+
+.resetActions {
+  display: grid;
+  gap: 10px;
+}
+
+.resetActionButton {
+  min-height: 58px;
+  justify-content: flex-start;
+  padding: 10px 12px;
+  text-align: left;
+  white-space: normal;
+}
+
+.resetActionButton span {
+  display: grid;
+  gap: 3px;
+}
+
+.resetActionButton strong {
+  color: #ffffff;
+  font-size: 13px;
+}
+
+.resetActionButton small {
+  color: #8c97a7;
+  line-height: 1.35;
+}
+
+.capabilityPanel {
+  margin-top: 14px;
+}
+
+.capabilityGrid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.capabilityCard {
+  min-height: 128px;
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  padding: 13px;
+  border: 1px solid #303641;
+  border-radius: 6px;
+  background: #11151c;
+}
+
+.capabilityCard > span {
+  width: fit-content;
+  padding: 3px 7px;
+  border: 1px solid #514425;
+  border-radius: 999px;
+  background: #201b11;
+  color: #e7bf6d;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.capabilityCard strong {
+  color: #ffffff;
+  font-size: 14px;
+}
+
+.capabilityCard p {
+  margin: 0;
+  color: #d7dde7;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.supervisorWorkbenchGrid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.workbenchCard {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  padding: 13px;
+  border: 1px solid #303641;
+  border-radius: 6px;
+  background: #11151c;
+}
+
+.workbenchCard strong {
+  color: #ffffff;
+  font-size: 14px;
+}
+
+.workbenchStatusPill {
+  width: fit-content;
+  padding: 3px 7px;
+  border: 1px solid #514425;
+  border-radius: 999px;
+  background: #201b11;
+  color: #e7bf6d;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.runtimeCard,
+.streamCard,
+.planCard {
+  grid-column: span 2;
+}
+
+.configCard,
+.permissionCard,
+.toolsCard {
+  grid-column: span 2;
+}
+
+.workbenchRows,
+.streamSnapshot {
+  display: grid;
+  gap: 1px;
+  border: 1px solid #252a32;
+  background: #252a32;
+}
+
+.workbenchRows div,
+.streamSnapshot div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 9px;
+  background: #151922;
+}
+
+.workbenchRows span,
+.streamSnapshot span {
+  color: #7f8998;
+  font-size: 10px;
+}
+
+.workbenchRows em,
+.streamSnapshot em {
+  color: #eef1f5;
+  font-size: 12px;
+  font-style: normal;
+  overflow-wrap: anywhere;
+}
+
+.workbenchPlanList {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.planStep {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  gap: 9px;
+  align-items: start;
+}
+
+.planStep > span {
+  width: 10px;
+  height: 10px;
+  margin-top: 4px;
+  border: 1px solid #465061;
+  border-radius: 999px;
+  background: #171c24;
+}
+
+.planStep.done > span {
+  border-color: #315d46;
+  background: #77d9a5;
+}
+
+.planStep.active > span {
+  border-color: #d39a33;
+  background: #f5b942;
+  box-shadow: 0 0 12px rgba(245, 185, 66, 0.34);
+}
+
+.planStep.blocked > span {
+  border-color: #744343;
+  background: #ff8f8f;
+}
+
+.planStep.pending {
+  opacity: 0.74;
+}
+
+.planStep p {
+  margin: 3px 0 0;
+  color: #9aa5b5;
+  font-size: 11px;
+  line-height: 1.42;
+}
+
+.configCard input,
+.workbenchTextareas textarea {
+  border-color: #303641;
+  background: #151a22;
+}
+
+.workbenchTextareas {
+  display: grid;
+  gap: 8px;
+}
+
+.workbenchTextareas textarea {
+  min-height: 58px;
+  font-size: 12px;
+}
+
+.permissionToggleGrid {
+  display: grid;
+  gap: 7px;
+}
+
+.permissionToggle {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  color: #d7dde7;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.permissionToggle input {
+  width: 14px;
+  min-height: 14px;
+  padding: 0;
+  accent-color: #d39a33;
 }
 
 .status {
@@ -1469,6 +1905,29 @@ select {
   background:
     radial-gradient(circle at 50% 20%, rgba(245, 185, 66, 0.14), transparent 30%),
     #0f1115;
+  overflow: hidden;
+}
+
+.onboardingWelcome.transitioning {
+  overflow: hidden;
+}
+
+.setupSharedStage {
+  width: min(760px, 100%);
+  display: grid;
+  justify-items: center;
+  gap: 22px;
+  box-sizing: border-box;
+  padding: 0 22px;
+  text-align: center;
+  transform: translateY(-42px);
+}
+
+.setupSharedIntro {
+  display: grid;
+  justify-items: center;
+  gap: 18px;
+  width: 100%;
 }
 
 .welcomeStage {
@@ -1482,10 +1941,43 @@ select {
   animation: focusArrive 520ms ease-out both;
 }
 
+.welcomeStage.slidingOut {
+  animation: welcomeSlideOutLeft 560ms cubic-bezier(0.22, 0.72, 0.24, 1) forwards;
+}
+
+.setupFormViewport {
+  width: min(560px, 100%);
+  height: 190px;
+  display: grid;
+  padding: 2px;
+  overflow: hidden;
+}
+
+.supervisorForm,
+.setupFormCard {
+  grid-area: 1 / 1;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.supervisorForm {
+  display: grid;
+  justify-items: center;
+  gap: 18px;
+}
+
+.supervisorForm.slidingOut {
+  animation: welcomeSlideOutLeft 560ms cubic-bezier(0.22, 0.72, 0.24, 1) forwards;
+}
+
+.supervisorForm.entering {
+  animation: supervisorSlideInLeft 560ms cubic-bezier(0.22, 0.72, 0.24, 1) both;
+}
+
 .welcomeLogoScene {
   position: relative;
   width: 220px;
-  height: 176px;
+  height: 150px;
   display: grid;
   place-items: center;
 }
@@ -1542,7 +2034,8 @@ select {
 .confettiBurst span:nth-child(17) { --angle: 153deg; --distance: 84px; animation-delay: 740ms; }
 .confettiBurst span:nth-child(18) { --angle: 171deg; --distance: 108px; animation-delay: 600ms; }
 
-.welcomeStage h1 {
+.welcomeStage h1,
+.setupSharedIntro h1 {
   max-width: 680px;
   margin: -10px 0 0;
   color: #ffffff;
@@ -1573,7 +2066,7 @@ select {
 }
 
 .supervisorNameField {
-  width: min(460px, 100%);
+  width: min(420px, 100%);
   justify-items: center;
   gap: 11px;
   color: #e9eef6;
@@ -1585,15 +2078,23 @@ select {
 }
 
 .supervisorNameField input {
-  min-height: 48px;
+  height: 42px;
+  min-height: 0;
+  padding: 0 10px;
   border-color: #4d3920;
   background: #151a22;
   text-align: center;
   font-size: 15px;
+  line-height: 42px;
 }
 
 .supervisorNext {
-  justify-self: center;
+  justify-self: end;
+  box-sizing: border-box;
+  height: 42px;
+  min-height: 0;
+  padding-block: 0;
+  padding-inline: 14px;
 }
 
 .supervisorNext:disabled {
@@ -1621,8 +2122,31 @@ select {
   animation: focusArrive 420ms ease-out both;
 }
 
-.setupFocusCard.leaving {
+.setupFormCard {
+  display: grid;
+  gap: 18px;
+  align-content: start;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.setupFocusCard.leaving,
+.setupFormCard.leaving {
   animation: providerLeave 560ms ease-in forwards;
+}
+
+.providerFocus.entering {
+  animation: providerSlideInRight 560ms cubic-bezier(0.22, 0.72, 0.24, 1) both;
+}
+
+.providerFocus.settled {
+  animation: none;
+}
+
+.providerFocus.returning {
+  animation: providerSlideOutRight 560ms cubic-bezier(0.22, 0.72, 0.24, 1) forwards;
 }
 
 .setupLogoWrap {
@@ -1655,13 +2179,129 @@ select {
 .providerFields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
+  gap: 18px;
+  align-items: end;
+}
+
+.providerFields label {
+  color: #ffffff;
+  font-size: 18px;
+  font-weight: 750;
+  justify-items: center;
+}
+
+.providerFields input,
+.apiKeyInputShell {
+  min-height: 48px;
+  border-color: #4d3920;
+  background: #151a22;
+  color: #e4e8ef;
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.providerFields input::placeholder {
+  color: #747d8b;
+  font-weight: 650;
+}
+
+.providerFields input:focus,
+.apiKeyInputShell:focus-within {
+  outline: 1px solid #ffffff;
+  outline-offset: 0;
+  border-color: #ffffff;
+}
+
+.apiKeyInputShell {
+  width: 100%;
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 38px;
+  align-items: center;
+  border: 1px solid #4d3920;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.apiKeyInputShell input {
+  min-height: 46px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  outline: 0;
+}
+
+.apiKeyInputShell input:focus {
+  outline: 0;
+}
+
+.apiKeyToggle {
+  width: 38px;
+  min-height: 46px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #aab4c3;
+  cursor: pointer;
+}
+
+.apiKeyToggle:hover {
+  color: #ffffff;
+  background: rgba(245, 185, 66, 0.1);
+}
+
+.providerActions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.setupInlineActions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.supervisorForm > .setupInlineActions {
+  justify-content: flex-end;
+}
+
+.providerStatus {
+  margin: -4px 0 0;
+  color: #88d99f;
+  font-size: 12px;
+  text-align: center;
+}
+
+.providerReuseHint {
+  margin-top: 5px;
+  color: #9aa5b5;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+  line-height: 1.35;
+}
+
+.setupBack,
+.providerActions .setupPrimary {
+  min-height: 42px;
+  padding-inline: 18px;
 }
 
 .setupPrimary {
   min-height: 42px;
   justify-self: end;
   padding-inline: 18px;
+}
+
+.supervisorForm .supervisorNext {
+  box-sizing: border-box;
+  height: 42px;
+  min-height: 0;
+  padding-block: 0;
+  padding-inline: 14px;
 }
 
 .thinkingStage {
@@ -1692,6 +2332,238 @@ select {
 .thinkingDots i:nth-child(3) {
   animation-delay: 300ms;
 }
+
+.openclawInviteStage {
+  position: relative;
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 50% 45%, rgba(245, 185, 66, 0.16), transparent 30%),
+    #0f1115;
+  color: #ffffff;
+}
+
+.openclawInviteStage.sad {
+  background:
+    radial-gradient(circle at 50% 44%, rgba(145, 151, 162, 0.22), transparent 31%),
+    linear-gradient(180deg, #15171b 0%, #0f1115 100%);
+}
+
+.openclawInviteStage.happy {
+  background:
+    radial-gradient(circle at 50% 44%, rgba(245, 185, 66, 0.24), transparent 32%),
+    #0f1115;
+}
+
+.logoLineField {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  animation: lineFieldFade 1900ms ease-out forwards;
+}
+
+.logoLineField span {
+  --start-x: -48vw;
+  --start-y: -42vh;
+  --line-w: 92px;
+  --line-h: 3px;
+  --angle: 0deg;
+  position: absolute;
+  left: 50%;
+  top: 45%;
+  width: var(--line-w);
+  height: var(--line-h);
+  border-radius: 999px;
+  background: linear-gradient(90deg, transparent, #ffe08a 14%, #f5b942 48%, #f28a2e 78%, transparent);
+  box-shadow: 0 0 18px rgba(245, 185, 66, 0.48), 0 0 34px rgba(255, 224, 138, 0.2);
+  opacity: 0;
+  transform: translate(var(--start-x), var(--start-y)) rotate(var(--angle));
+  animation: lightLineGather 1420ms cubic-bezier(0.15, 0.86, 0.22, 1) both;
+}
+
+.logoLineField span:nth-child(3n + 1) {
+  --line-w: 48px;
+  --line-h: 2px;
+  background: linear-gradient(90deg, transparent, #fff1b8, #ffcc4d, transparent);
+}
+
+.logoLineField span:nth-child(3n + 2) {
+  --line-w: 128px;
+  --line-h: 4px;
+  background: linear-gradient(90deg, transparent, #f28a2e, #f5b942, transparent);
+}
+
+.logoLineField span:nth-child(4n + 1) { --start-x: -56vw; --start-y: -44vh; --angle: 18deg; animation-delay: 20ms; }
+.logoLineField span:nth-child(4n + 2) { --start-x: 56vw; --start-y: -40vh; --angle: -20deg; animation-delay: 70ms; }
+.logoLineField span:nth-child(4n + 3) { --start-x: -58vw; --start-y: 42vh; --angle: -16deg; animation-delay: 110ms; }
+.logoLineField span:nth-child(4n + 4) { --start-x: 58vw; --start-y: 46vh; --angle: 18deg; animation-delay: 150ms; }
+.logoLineField span:nth-child(5n) { --start-y: 0vh; --angle: 0deg; --line-w: 76px; }
+.logoLineField span:nth-child(7n) { --start-x: 0vw; --start-y: -58vh; --angle: 90deg; --line-w: 108px; }
+.logoLineField span:nth-child(9n) { --start-x: 0vw; --start-y: 58vh; --angle: 90deg; --line-w: 108px; }
+.logoLineField span:nth-child(11n) { --start-x: -20vw; --start-y: -58vh; --angle: 76deg; }
+.logoLineField span:nth-child(13n) { --start-x: 24vw; --start-y: 58vh; --angle: 104deg; }
+
+.openclawInviteStage.sad .logoLineField,
+.openclawInviteStage.happy .logoLineField {
+  opacity: 0;
+}
+
+.inviteLightOrb {
+  position: absolute;
+  left: 50%;
+  top: 45%;
+  width: 210px;
+  height: 210px;
+  border-radius: 999px;
+  background:
+    radial-gradient(circle, rgba(255, 248, 206, 0.95) 0 10%, rgba(255, 224, 138, 0.72) 22%, rgba(245, 185, 66, 0.38) 46%, transparent 72%);
+  filter: blur(1px);
+  opacity: 0;
+  transform: translate(-50%, -50%) scale(0.2);
+  pointer-events: none;
+  animation: inviteOrbBloom 1900ms cubic-bezier(0.16, 0.84, 0.28, 1) both;
+}
+
+.openclawInviteStage.sad .inviteLightOrb,
+.openclawInviteStage.happy .inviteLightOrb {
+  display: none;
+}
+
+.openclawLogoScene {
+  position: relative;
+  z-index: 1;
+  width: min(620px, calc(100vw - 40px));
+  display: grid;
+  justify-items: center;
+  gap: 22px;
+  text-align: center;
+}
+
+.inviteLogoWrap {
+  position: relative;
+  display: grid;
+  place-items: center;
+  animation: logoRevealFromOrb 1500ms cubic-bezier(0.16, 0.84, 0.28, 1) 720ms both, inviteBreathe 2.4s ease-in-out 2100ms infinite;
+}
+
+.inviteLogo {
+  filter: drop-shadow(0 0 28px rgba(245, 185, 66, 0.52));
+}
+
+.inviteDialogue {
+  min-height: 58px;
+  margin: 0;
+  color: #e8edf5;
+  font-size: 20px;
+  font-weight: 750;
+  line-height: 1.55;
+}
+
+.inviteActions {
+  display: flex;
+  gap: 14px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.inviteNo,
+.inviteYes {
+  min-width: 118px;
+  min-height: 42px;
+}
+
+.inviteTears {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 180ms ease;
+}
+
+.inviteTears i {
+  position: absolute;
+  left: 50%;
+  top: 40%;
+  width: 6px;
+  height: 48px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(175, 231, 255, 0), rgba(159, 216, 255, 0.95) 20%, rgba(94, 178, 232, 0.86) 70%, rgba(94, 178, 232, 0));
+  box-shadow: 0 0 12px rgba(118, 208, 255, 0.72);
+  transform-origin: top;
+  animation: tearStream 1.25s ease-in-out infinite;
+}
+
+.inviteTears i:first-child {
+  transform: translate(-38px, 6px) rotate(8deg) scaleY(0.85);
+}
+
+.inviteTears i:nth-child(2) {
+  transform: translate(31px, 8px) rotate(-8deg) scaleY(0.9);
+  animation-delay: 180ms;
+}
+
+.inviteTears i:last-child {
+  width: 4px;
+  height: 34px;
+  transform: translate(-2px, 26px) scaleY(0.65);
+  animation-delay: 360ms;
+}
+
+.openclawInviteStage.sad .inviteTears {
+  opacity: 1;
+}
+
+.inviteConfetti {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.inviteConfetti span {
+  --angle: -62deg;
+  --distance: 170px;
+  --origin-x: -160px;
+  --origin-y: 76px;
+  --burst-x: -88px;
+  --burst-y: -172px;
+  position: absolute;
+  left: 50%;
+  top: 37%;
+  width: 7px;
+  height: 18px;
+  border-radius: 2px;
+  background: #ffe08a;
+  opacity: 0;
+  transform: translate(var(--origin-x), var(--origin-y)) rotate(var(--angle)) scale(0.35);
+}
+
+.inviteConfetti span:nth-child(3n + 1) {
+  background: #f5b942;
+  width: 5px;
+  height: 14px;
+}
+
+.inviteConfetti span:nth-child(3n + 2) {
+  background: #f28a2e;
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+}
+
+.openclawInviteStage.happy .inviteConfetti span {
+  animation: confettiCannon 1080ms cubic-bezier(0.16, 0.82, 0.3, 1) 160ms both;
+}
+
+.inviteConfetti span:nth-child(2n) { --origin-x: 150px; --angle: 58deg; --burst-x: 92px; --burst-y: -174px; }
+.inviteConfetti span:nth-child(4n) { --origin-y: 104px; --burst-x: 36px; --burst-y: -212px; }
+.inviteConfetti span:nth-child(5n) { --angle: -28deg; --burst-x: -128px; --burst-y: -118px; animation-delay: 220ms; }
+.inviteConfetti span:nth-child(7n) { --angle: 24deg; --burst-x: 122px; --burst-y: -126px; animation-delay: 280ms; }
+.inviteConfetti span:nth-child(1) { --angle: -78deg; --burst-x: -42px; --burst-y: -198px; }
+.inviteConfetti span:nth-child(2) { --angle: 74deg; --burst-x: 48px; --burst-y: -196px; }
+.inviteConfetti span:nth-child(3) { --angle: -52deg; --burst-x: -116px; --burst-y: -142px; animation-delay: 230ms; }
+.inviteConfetti span:nth-child(4) { --angle: 48deg; --burst-x: 112px; --burst-y: -148px; animation-delay: 250ms; }
 
 .interviewStage,
 .reviewStage {
@@ -1762,6 +2634,12 @@ select {
   font-size: 14px;
 }
 
+.questionCard input::placeholder,
+.questionCard textarea::placeholder {
+  color: #747d8b;
+  opacity: 1;
+}
+
 .questionCard textarea {
   min-height: 100px;
 }
@@ -1790,6 +2668,22 @@ select {
   border-color: #d39a33;
   background: #292316;
   color: #f2d99e;
+}
+
+.questionActions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.questionActions .setupBack,
+.questionActions .setupPrimary {
+  box-sizing: border-box;
+  height: 42px;
+  min-height: 0;
+  padding-block: 0;
+  padding-inline: 18px;
 }
 
 .privacyNote {
@@ -1856,6 +2750,54 @@ select {
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@keyframes welcomeSlideOutLeft {
+  from {
+    opacity: 1;
+    transform: translateX(0);
+  }
+
+  to {
+    opacity: 0;
+    transform: translateX(-112%);
+  }
+}
+
+@keyframes supervisorSlideInLeft {
+  from {
+    opacity: 1;
+    transform: translateX(-112%);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes providerSlideInRight {
+  from {
+    opacity: 1;
+    transform: translateX(112%);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes providerSlideOutRight {
+  from {
+    opacity: 1;
+    transform: translateX(0);
+  }
+
+  to {
+    opacity: 0;
+    transform: translateX(112%);
   }
 }
 
@@ -1927,6 +2869,132 @@ select {
   }
 }
 
+@keyframes lightLineGather {
+  0% {
+    opacity: 0;
+    transform: translate(var(--start-x), var(--start-y)) rotate(var(--angle)) scaleX(0.42);
+  }
+
+  18% {
+    opacity: 1;
+    filter: brightness(1.25);
+  }
+
+  72% {
+    opacity: 0.92;
+    transform: translate(calc(var(--start-x) * 0.14), calc(var(--start-y) * 0.14)) rotate(calc(var(--angle) + 24deg)) scaleX(0.8);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) rotate(calc(var(--angle) + 120deg)) scaleX(0.04);
+  }
+}
+
+@keyframes lineFieldFade {
+  0%,
+  74% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes inviteOrbBloom {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.08);
+  }
+
+  48% {
+    opacity: 0.95;
+    transform: translate(-50%, -50%) scale(0.72);
+  }
+
+  72% {
+    opacity: 0.78;
+    transform: translate(-50%, -50%) scale(1);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(1.36);
+  }
+}
+
+@keyframes logoRevealFromOrb {
+  0% {
+    opacity: 0;
+    transform: translateY(12px) scale(0.78);
+    filter: blur(8px) brightness(1.8);
+  }
+
+  64% {
+    opacity: 1;
+    transform: translateY(0) scale(1.04);
+    filter: blur(0) brightness(1.08);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0) brightness(1);
+  }
+}
+
+@keyframes inviteBreathe {
+  0%,
+  100% {
+    transform: scale(1);
+    filter: drop-shadow(0 0 10px rgba(245, 185, 66, 0.32));
+  }
+
+  50% {
+    transform: scale(1.045);
+    filter: drop-shadow(0 0 34px rgba(245, 185, 66, 0.78));
+  }
+}
+
+@keyframes tearStream {
+  0% {
+    opacity: 0;
+    clip-path: inset(0 0 100% 0);
+  }
+
+  22% {
+    opacity: 0.95;
+    clip-path: inset(0 0 25% 0);
+  }
+
+  72% {
+    opacity: 0.88;
+    clip-path: inset(18% 0 0 0);
+  }
+
+  100% {
+    opacity: 0;
+    clip-path: inset(100% 0 0 0);
+  }
+}
+
+@keyframes confettiCannon {
+  0% {
+    opacity: 0;
+    transform: translate(var(--origin-x), var(--origin-y)) rotate(var(--angle)) scale(0.3);
+  }
+
+  14% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0;
+    transform: translate(calc(var(--origin-x) + var(--burst-x)), calc(var(--origin-y) + var(--burst-y))) rotate(calc(var(--angle) + 240deg)) scale(1);
+  }
+}
+
 @media (max-width: 760px) {
   .darkShell {
     grid-template-columns: 46px minmax(0, 1fr);
@@ -1940,6 +3008,10 @@ select {
   .dashboardContent,
   .settingsGrid,
   .modelLayout,
+  .modelRoutingList,
+  .routingFlowChart,
+  .capabilityGrid,
+  .supervisorWorkbenchGrid,
   .jobWorkspace,
   .composerControls,
   .customTimeFilters,
@@ -1950,10 +3022,20 @@ select {
   .profileSummary,
   .promptPreviewGrid,
   .agentGrid,
+  .agentConfigFields,
   .providerFields,
   .workOptions,
   .agentReviewGrid {
     grid-template-columns: 1fr;
+  }
+
+  .runtimeCard,
+  .streamCard,
+  .planCard,
+  .configCard,
+  .permissionCard,
+  .toolsCard {
+    grid-column: auto;
   }
 
   .interviewPanel,
@@ -1967,6 +3049,10 @@ select {
 
   .timelineItem {
     gap: 6px;
+  }
+
+  .routingFlowChart article::after {
+    display: none;
   }
 
   .welcomeLogoScene {
@@ -1986,5 +3072,10 @@ select {
   .interviewHeader,
   .reviewHeading {
     align-items: flex-start;
+  }
+
+  .providerActions {
+    align-items: stretch;
+    flex-direction: column-reverse;
   }
 }

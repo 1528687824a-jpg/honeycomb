@@ -6,6 +6,7 @@ const createJobSchema = z
   .object({
     rawPrompt: z.string().min(1).optional(),
     prompt: z.string().min(1).optional(),
+    workdir: z.string().max(1000).optional(),
     routingMode: z.enum(ROUTING_MODES).optional(),
     maxModelCalls: z.number().int().min(1).max(100).optional(),
     classicFinalGateEnabled: z.boolean().optional(),
@@ -26,6 +27,7 @@ export const httpIngressAdapter: ExpressIngressAdapter = {
         const input = createJobSchema.parse(request.body);
         const job = await deps.createJob({
           rawPrompt: input.rawPrompt ?? input.prompt ?? "",
+          workdir: input.workdir,
           ingressOrigin: "http",
           routingMode: input.routingMode,
           maxModelCalls: input.maxModelCalls,

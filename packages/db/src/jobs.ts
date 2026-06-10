@@ -148,12 +148,13 @@ export async function createJob(input: CreateJobInput): Promise<JobRecord> {
       requester_id,
       ingress_origin,
       raw_prompt,
+      workdir,
       routing_mode,
       max_model_calls,
       classic_final_gate_enabled,
       discussion_rounds,
       status
-    ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'created')
+    ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'created')
     returning *`,
     [
       id,
@@ -163,6 +164,7 @@ export async function createJob(input: CreateJobInput): Promise<JobRecord> {
       input.requesterId ?? null,
       input.ingressOrigin ?? "http",
       input.rawPrompt,
+      input.workdir?.trim() || null,
       input.routingMode ?? DEFAULT_ROUTING_MODE,
       input.maxModelCalls ?? DEFAULT_MAX_MODEL_CALLS,
       input.classicFinalGateEnabled ?? false,
@@ -173,6 +175,7 @@ export async function createJob(input: CreateJobInput): Promise<JobRecord> {
   await appendJobEvent(id, "job.created", {
     requesterId: input.requesterId ?? null,
     ingressOrigin: input.ingressOrigin ?? "http",
+    workdir: input.workdir?.trim() || null,
     routingMode: input.routingMode ?? DEFAULT_ROUTING_MODE,
     maxModelCalls: input.maxModelCalls ?? DEFAULT_MAX_MODEL_CALLS,
     classicFinalGateEnabled: input.classicFinalGateEnabled ?? false,
@@ -184,6 +187,11 @@ export async function createJob(input: CreateJobInput): Promise<JobRecord> {
 
 export async function getJob(jobId: string): Promise<JobRecord | null> {
   const result = await pool.query(`select * from agent.jobs where id = $1`, [jobId]);
+  return result.rows[0] ? toJobRecord(result.rows[0]) : null;
+}
+
+export async function getJobBySessionId(sessionId: string): Promise<JobRecord | null> {
+  const result = await pool.query(`select * from agent.jobs where session_id = $1`, [sessionId]);
   return result.rows[0] ? toJobRecord(result.rows[0]) : null;
 }
 
@@ -533,6 +541,43 @@ export async function archiveJobSession(input: {
     }
   );
 
+  return job;
+}
+
+export async function restoreJobSession(input: {
+  sessionId: string;
+  reason?: string;
+  requesterId?: string;
+}): Promise<JobRecord | null> {
+  const result = await pool.query(
+    `update agent.jobs
+     set archived_at = null,
+         retention_until = null,
+         cleanup_status = 'active',
+         retention_policy = '{}'::jsonb,
+         updated_at = now()
+     where session_id = $1
+     returning *`,
+    [input.sessionId]
+  );
+
+  if (!result.rows[0]) {
+    return null;
+  }
+
+  const job = toJobRecord(result.rows[0]);
+  await appendJobEvent(
+    job.id,
+    "session.restored",
+    {
+      sessionId: input.sessionId,
+      reason: input.reason ?? null,
+      requesterId: input.requesterId ?? null
+    },
+    {
+      actor: "session-ledger"
+    }
+  );
   return job;
 }
 

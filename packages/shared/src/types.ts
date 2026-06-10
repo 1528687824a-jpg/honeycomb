@@ -65,6 +65,53 @@ export type JobRecord = {
   updatedAt: string;
 };
 
+export const TASK_PLAN_STATUSES = ["draft", "active", "completed", "archived"] as const;
+export type TaskPlanStatus = (typeof TASK_PLAN_STATUSES)[number];
+
+export const TASK_PLAN_ITEM_STATUSES = [
+  "pending",
+  "in_progress",
+  "blocked",
+  "completed",
+  "cancelled"
+] as const;
+export type TaskPlanItemStatus = (typeof TASK_PLAN_ITEM_STATUSES)[number];
+
+export type TaskPlanRecord = {
+  id: string;
+  jobId: string;
+  title: string;
+  summary: string | null;
+  status: TaskPlanStatus;
+  source: string;
+  sourceArtifactId: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type TaskPlanItemRecord = {
+  id: string;
+  planId: string;
+  position: number;
+  title: string;
+  body: string | null;
+  status: TaskPlanItemStatus;
+  agentId: string | null;
+  stageId: string | null;
+  artifactId: string | null;
+  acceptanceCriteria: string[];
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+};
+
+export type TaskPlanWithItems = {
+  plan: TaskPlanRecord;
+  items: TaskPlanItemRecord[];
+};
+
 export const EXPERIENCE_STATUSES = ["candidate", "adopted", "rejected"] as const;
 export type ExperienceStatus = (typeof EXPERIENCE_STATUSES)[number];
 
@@ -94,6 +141,7 @@ export type ExperienceRecord = {
 
 export type CreateJobInput = {
   rawPrompt: string;
+  workdir?: string;
   ingressOrigin?: IngressOrigin;
   routingMode?: RoutingMode;
   maxModelCalls?: number;
@@ -131,6 +179,7 @@ export type ArtifactType =
   | "state_json"
   | "test_report"
   | "discussion_synthesis"
+  | "session_summary"
   | "final_output"
   | "group_message"
   | "log";

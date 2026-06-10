@@ -26,6 +26,13 @@ function toOpenClawSessionId(sessionId: string) {
   return sessionId.replace(/[^A-Za-z0-9._-]/g, "-");
 }
 
+function resolveOpenClawAgentId(agentId: string) {
+  if (agentId === "main-agent") {
+    return process.env.HONEYCOMB_PANEL_SUPERVISOR_AGENT_ID?.trim() || "panel-supervisor-agent";
+  }
+  return agentId;
+}
+
 function extractText(raw: unknown): string {
   if (typeof raw === "string") {
     return raw;
@@ -68,6 +75,7 @@ export async function runOpenClawAgent(input: {
   if (!openClawRealMode()) {
     return null;
   }
+  const agentId = resolveOpenClawAgentId(input.agentId);
 
   const args = [
     "-d",
@@ -76,7 +84,7 @@ export async function runOpenClawAgent(input: {
     getOpenClawCommand(),
     "agent",
     "--agent",
-    input.agentId,
+    agentId,
     "--session-id",
     toOpenClawSessionId(input.sessionId),
     "--message",

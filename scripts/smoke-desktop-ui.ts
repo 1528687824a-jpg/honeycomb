@@ -420,18 +420,34 @@ async function runUiFlow(page: CdpClient) {
       };
 
       window.__agentOpenClawFetchUrls = [];
+      window.__agentOpenClawJobRequests = [];
       const originalFetch = window.fetch.bind(window);
       window.fetch = (...args) => {
         const target = args[0];
-        window.__agentOpenClawFetchUrls.push(
-          typeof target === "string" ? target : target?.url ?? String(target)
-        );
+        const url = typeof target === "string" ? target : target?.url ?? String(target);
+        window.__agentOpenClawFetchUrls.push(url);
+        const method = (args[1]?.method || target?.method || "GET").toUpperCase();
+        const body = args[1]?.body;
+        if (url.endsWith("/jobs") && method === "POST" && typeof body === "string") {
+          try {
+            window.__agentOpenClawJobRequests.push(JSON.parse(body));
+          } catch {
+            window.__agentOpenClawJobRequests.push({ parseFailed: true, body });
+          }
+        }
         return originalFetch(...args);
       };
 
       const englishButton = Array.from(document.querySelectorAll(".languageButton"))
         .find((candidate) => candidate.textContent.trim() === "English");
       englishButton?.click();
+      await waitFor(() => document.querySelector(".supervisorWorkbenchGrid"), "supervisor workbench missing before job creation");
+      setNativeValue(document.querySelector(".configCard input"), "C:\\Users\\Administrator\\Desktop\\Smoke Workspace");
+      const skillAreas = Array.from(document.querySelectorAll(".toolsCard textarea"));
+      setNativeValue(skillAreas[0], "writing, test review, routing");
+      setNativeValue(skillAreas[1], "filesystem, git, browser");
+      document.querySelector(".toolsCard button").click();
+      await waitFor(() => document.body.textContent.includes("Workbench config saved locally."), "workbench config was not saved before job creation");
       const consoleTab = await waitFor(
         () => document.querySelector('[data-testid="console-view-tab"]'),
         "console tab missing"
@@ -439,6 +455,9 @@ async function runUiFlow(page: CdpClient) {
       consoleTab.click();
       await sleep(100);
       await waitFor(() => document.querySelector("#prompt"), "prompt field missing");
+      const smartRoutingVisible = Boolean(document.querySelector('[data-testid="smart-routing-badge"]')) &&
+        document.body.textContent.includes("Smart routing");
+      const manualRoutingHidden = !document.querySelector("#routingMode");
 
       const beforeJobIds = new Set(
         Array.from(document.querySelectorAll(".jobRow strong"))
@@ -447,16 +466,27 @@ async function runUiFlow(page: CdpClient) {
       );
 
       const prompt = document.querySelector("#prompt");
-      const routingMode = document.querySelector("#routingMode");
       const maxModelCalls = document.querySelector("#maxModelCalls");
       setNativeValue(prompt, "Desktop UI smoke: create a cancellable mock job and show the timeline.");
-      setNativeValue(routingMode, "supervisor_pipeline");
       setNativeValue(maxModelCalls, "20");
+      if (!smartRoutingVisible || !manualRoutingHidden) {
+        throw new Error("smart routing UI did not replace manual routing select");
+      }
       const submitButton = await waitFor(() => {
         const button = document.querySelector('[data-testid="start-job-button"]');
         return button && !button.disabled ? button : null;
       }, "start job button was not enabled");
       submitButton.click();
+      await waitFor(() => window.__agentOpenClawJobRequests.length > 0, "job request body was not captured");
+      const jobRequest = window.__agentOpenClawJobRequests.at(-1) || {};
+      const jobRequestIncludesWorkbench =
+        jobRequest.workdir === "C:\\Users\\Administrator\\Desktop\\Smoke Workspace" &&
+        jobRequest.prompt.includes("[Honeycomb supervisor workbench context]") &&
+        jobRequest.prompt.includes("Available skills: writing, test review, routing") &&
+        jobRequest.prompt.includes("Available MCP: filesystem, git, browser");
+      if (!jobRequestIncludesWorkbench) {
+        throw new Error("job request did not include supervisor workbench context");
+      }
 
       const jobId = await waitFor(() => {
         const rows = Array.from(document.querySelectorAll(".jobRow"));
@@ -554,6 +584,9 @@ async function runUiFlow(page: CdpClient) {
         jobId,
         terminalStatus,
         cancelAttempted,
+        jobRequestIncludesWorkbench,
+        smartRoutingVisible,
+        manualRoutingHidden,
         statusVisible: document.body.textContent.includes(terminalStatus),
         filteredJobVisible: Array.from(document.querySelectorAll(".jobRow"))
           .some((row) => row.querySelector("strong")?.textContent?.trim() === jobId),
@@ -582,6 +615,9 @@ async function runUiFlow(page: CdpClient) {
     jobId: string;
     terminalStatus: "cancelled" | "succeeded";
     cancelAttempted: boolean;
+    jobRequestIncludesWorkbench: boolean;
+    smartRoutingVisible: boolean;
+    manualRoutingHidden: boolean;
     statusVisible: boolean;
     filteredJobVisible: boolean;
     filteredStatuses: string[];
@@ -644,55 +680,254 @@ async function runOnboardingFlow(page: CdpClient) {
         element.dispatchEvent(new Event("change", { bubbles: true }));
       };
 
-      await waitFor(() => document.querySelector(".welcomeStage"), "welcome setup did not appear");
+      await waitFor(() => document.querySelector(".supervisorForm"), "welcome setup did not appear");
       const welcomeTitleVisible = document.body.textContent.includes("开始创造您第一个专属AI员工");
-      const nameNext = await waitFor(() => document.querySelector(".welcomeStage .supervisorNext"), "supervisor next button missing");
+      const nameNext = await waitFor(() => document.querySelector(".supervisorForm .supervisorNext"), "supervisor next button missing");
       const nameButtonDisabledBeforeInput = nameNext.disabled;
       const supervisorNameInput = document.querySelector(".supervisorNameField input");
+      const supervisorInputHeight = supervisorNameInput.getBoundingClientRect().height;
+      const supervisorNextHeight = nameNext.getBoundingClientRect().height;
       setNativeValue(supervisorNameInput, "蜂巢主管");
-      await waitFor(() => !document.querySelector(".welcomeStage .supervisorNext").disabled, "supervisor next button did not enable");
-      const nameButtonEnabledAfterInput = !document.querySelector(".welcomeStage .supervisorNext").disabled;
-      document.querySelector(".welcomeStage .supervisorNext").click();
+      await waitFor(() => !document.querySelector(".supervisorForm .supervisorNext").disabled, "supervisor next button did not enable");
+      const nameButtonEnabledAfterInput = !document.querySelector(".supervisorForm .supervisorNext").disabled;
+      document.querySelector(".supervisorForm .supervisorNext").click();
 
       await waitFor(() => document.querySelector(".providerFocus"), "provider setup did not appear");
+      await waitFor(() => document.querySelector(".providerFocus.settled"), "provider setup did not settle after slide transition");
       const providerTitleUpdated = document.body.textContent.includes("开始创造您第一个专属AI员工");
       const providerIntroUpdated = document.body.textContent.includes("定制专属提示词") &&
         document.body.textContent.includes("大模型之后可以随时更改");
+      const providerLabelText = Array.from(document.querySelectorAll(".providerFocus label"))
+        .map((label) => label.textContent.trim())
+        .join("|");
+      const providerFieldsSimplified = providerLabelText.includes("模型") &&
+        providerLabelText.includes("API Key") &&
+        !providerLabelText.includes("模型服务商") &&
+        !providerLabelText.includes("接口地址");
+      const providerInputHeight = document.querySelector(".providerFocus input")?.getBoundingClientRect().height ?? 0;
+      const modelPlaceholderVisible = document.querySelector(".providerFocus input")?.placeholder === "例如：deepseek-v4-pro" &&
+        document.querySelector(".providerFocus input")?.value === "";
+      const supervisorControlsCompact = supervisorInputHeight <= providerInputHeight + 4 &&
+        supervisorNextHeight <= providerInputHeight + 4;
+      const providerBackButtonVisible = document.querySelector(".providerFocus .setupBack")?.textContent.includes("上一步");
+      document.querySelector(".providerFocus .setupBack").click();
+      await waitFor(() => document.querySelector(".supervisorForm:not(.entering) .supervisorNext"), "provider back button did not return to welcome");
+      document.querySelector(".supervisorForm .supervisorNext").click();
+      await waitFor(() => document.querySelector(".providerFocus.settled"), "provider setup did not reappear after back navigation");
 
       const navLocked = !document.querySelector('[data-testid="console-view-tab"]');
-      const apiKey = document.querySelector('.providerFocus input[type="password"]');
+      const apiKeyToggleVisible = Boolean(document.querySelector(".providerFocus .apiKeyToggle"));
+      const apiKeyHiddenByDefault = document.querySelector(".providerFocus .apiKeyInputShell input")?.type === "password";
+      document.querySelector(".providerFocus .apiKeyToggle").click();
+      await waitFor(() => document.querySelector(".providerFocus .apiKeyInputShell input")?.type === "text", "API key did not become visible");
+      const apiKeyVisibleAfterToggle = document.querySelector(".providerFocus .apiKeyInputShell input")?.type === "text";
+      document.querySelector(".providerFocus .apiKeyToggle").click();
+      await waitFor(() => document.querySelector(".providerFocus .apiKeyInputShell input")?.type === "password", "API key did not hide again");
+      const apiKeyHiddenAfterToggle = document.querySelector(".providerFocus .apiKeyInputShell input")?.type === "password";
+      const apiKey = document.querySelector(".providerFocus .apiKeyInputShell input");
       setNativeValue(apiKey, "smoke-private-key");
+      setNativeValue(document.querySelector(".providerFocus input"), "deepseek-v4-pro");
       document.querySelector(".providerFocus .setupPrimary").click();
 
       await waitFor(() => document.querySelector(".interviewStage"), "interview did not appear");
       const firstQuestion = document.querySelector(".questionCard input");
-      setNativeValue(firstQuestion, "科技领域");
+      const firstQuestionPlaceholderVisible =
+        firstQuestion.placeholder === "例如：科技领域、绘画领域、摄影领域……" &&
+        firstQuestion.value === "";
+      const firstInterviewBackVisible = document.querySelector(".questionCard .interviewBack")?.textContent.includes("上一步");
+      const interviewNextHeight = document.querySelector(".questionCard .interviewNext")?.getBoundingClientRect().height ?? 0;
+      const interviewNextCompact = interviewNextHeight <= providerInputHeight + 4;
+      setNativeValue(firstQuestion, "农业领域");
       document.querySelector(".questionCard .setupPrimary").click();
 
       await waitFor(() => document.body.textContent.includes("Agent 正在思考中"), "first thinking state missing");
-      await waitFor(() => document.querySelector(".questionCard input")?.placeholder.includes("产品经理"), "tailored role placeholder missing");
+      await waitFor(() => {
+        const placeholder = document.querySelector(".questionCard input")?.placeholder || "";
+        return placeholder.includes("农场主") || placeholder.includes("农业技术员");
+      }, "tailored agriculture role placeholder missing");
       const role = document.querySelector(".questionCard input");
       const tailoredPlaceholder = role.placeholder;
-      setNativeValue(role, "产品经理");
+      const interviewBackVisibleOnRole = document.querySelector(".questionCard .interviewBack")?.textContent.includes("上一步");
+      document.querySelector(".questionCard .interviewBack").click();
+      await waitFor(() => document.querySelector(".questionCard input")?.value === "农业领域", "interview back did not return to domain question");
+      document.querySelector(".questionCard .setupPrimary").click();
+      await waitFor(() => {
+        const placeholder = document.querySelector(".questionCard input")?.placeholder || "";
+        return placeholder.includes("农场主") || placeholder.includes("农业技术员");
+      }, "tailored agriculture placeholder missing after interview back");
+      setNativeValue(document.querySelector(".questionCard input"), "农场主");
       document.querySelector(".questionCard .setupPrimary").click();
 
       await waitFor(() => document.body.textContent.includes("Agent 正在思考中"), "second thinking state missing");
       await waitFor(() => document.querySelectorAll(".workOption").length >= 4, "generated work options missing");
+      const interviewBackVisibleOnWork = document.querySelector(".questionCard .interviewBack")?.textContent.includes("上一步");
+      const workOptionText = Array.from(document.querySelectorAll(".workOption")).map((option) => option.textContent).join("|");
+      const agricultureWorkOptions = workOptionText.includes("农事") || workOptionText.includes("病虫害") || workOptionText.includes("农资");
       document.querySelector(".workOption").click();
       await sleep(80);
       document.querySelector(".questionCard .setupPrimary").click();
 
       const quality = await waitFor(() => document.querySelector(".questionCard textarea"), "quality question missing");
+      const qualityPlaceholder = quality.placeholder || "";
+      const qualityPlaceholderTailored =
+        qualityPlaceholder.includes("农事") ||
+        qualityPlaceholder.includes("成本") ||
+        qualityPlaceholder.includes("复盘") ||
+        qualityPlaceholder.includes("可追溯");
+      const interviewBackVisibleOnQuality = document.querySelector(".questionCard .interviewBack")?.textContent.includes("上一步");
       setNativeValue(quality, "准确、简洁、可以直接交付");
       document.querySelector(".questionCard .setupPrimary").click();
 
       await waitFor(() => document.querySelector(".reviewStage"), "review stage missing");
+      const reviewText = document.querySelector(".reviewStage")?.textContent || "";
+      const reviewRoutingTranslated =
+        !reviewText.includes("master_slave_discussion") &&
+        !reviewText.includes("classic_master_slave") &&
+        !reviewText.includes("supervisor_pipeline") &&
+        !reviewText.includes("pipeline");
       const generatedAgentCount = document.querySelectorAll(".agentReviewGrid article").length;
+      const generatedTeamHasVideoAndNoMain = document.querySelector(".agentReviewGrid")?.textContent.includes("video-agent") === true &&
+        document.querySelector(".agentReviewGrid")?.textContent.includes("main-agent") === false;
       document.querySelector(".reviewStage .setupPrimary").click();
-      await waitFor(() => document.querySelector(".dashboardPage"), "dashboard did not appear after setup completion");
+      await waitFor(() => document.querySelector(".openclawInviteStage"), "openclaw invite stage did not appear after setup completion");
+      await waitFor(() => document.body.textContent.includes("蜂巢主管:那我们开始在openclaw上配置多个agent来为你打工吧？"), "openclaw invite text missing");
+      const inviteTextVisible = document.body.textContent.includes("蜂巢主管:那我们开始在openclaw上配置多个agent来为你打工吧？");
+      const inviteLightAnimationVisible =
+        document.querySelectorAll(".logoLineField span").length >= 60 &&
+        Boolean(document.querySelector(".inviteLightOrb"));
+      document.querySelector(".inviteNo").click();
+      await waitFor(() => document.body.textContent.includes("可是不配置多个agent的话就没办法工作了QAQ"), "openclaw sad response missing");
+      const inviteSadState = document.querySelector(".openclawInviteStage")?.classList.contains("sad") === true &&
+        Boolean(document.querySelector(".inviteTears")) &&
+        !document.querySelector(".inviteFaceSad");
+      document.querySelector(".inviteYes").click();
+      await waitFor(() => document.querySelector(".openclawInviteStage")?.classList.contains("happy"), "openclaw happy state did not appear");
+      const inviteHappyCannonVisible = document.querySelector(".openclawInviteStage")?.classList.contains("happy") === true &&
+        document.querySelectorAll(".inviteConfetti span").length >= 24 &&
+        !document.querySelector(".inviteFlowers") &&
+        !document.querySelector(".inviteFaceHappy");
+      await waitFor(() => document.querySelector(".agentGrid"), "agent page did not appear after accepting openclaw invite");
 
       const consoleVisibleAfterComplete = Boolean(document.querySelector('[data-testid="console-view-tab"]'));
+      const setupTabHiddenAfterComplete =
+        !document.querySelector('[data-testid="setup-view-tab"]') &&
+        !document.querySelector('[data-testid="setup-view-tab-secondary"]');
       const tourVisibleAfterSetup = Boolean(document.querySelector(".tourOverlay"));
+      const tourCornerLogoRemoved = !document.querySelector(".tourCornerLogo");
+      document.querySelector(".tourClose")?.click();
+      await sleep(120);
+
+      document.querySelector('button[aria-label="仪表盘"]')?.click();
+      await waitFor(() => document.querySelector(".supervisorWorkbenchGrid"), "supervisor workbench grid missing");
+      const supervisorWorkbenchVisible =
+        document.body.textContent.includes("主管工作台") &&
+        document.body.textContent.includes("运行时配置") &&
+        document.body.textContent.includes("流式反馈") &&
+        document.body.textContent.includes("计划与 Todo") &&
+        document.body.textContent.includes("项目工作区") &&
+        document.body.textContent.includes("权限控制") &&
+        document.body.textContent.includes("Skills 与 MCP");
+      setNativeValue(document.querySelector(".configCard input"), "C:\\Users\\Administrator\\Desktop\\农业项目");
+      const permissionToggle = document.querySelector(".permissionToggle input");
+      permissionToggle.click();
+      const skillAreas = Array.from(document.querySelectorAll(".toolsCard textarea"));
+      setNativeValue(skillAreas[0], "写作, 农业调研, 评审");
+      setNativeValue(skillAreas[1], "filesystem, git, browser");
+      document.querySelector(".toolsCard button").click();
+      await waitFor(() => document.body.textContent.includes("工作台配置已保存在本地。"), "workbench save confirmation missing");
+      const workbenchConfig = JSON.parse(localStorage.getItem("honeycomb.supervisorWorkbench") || "{}");
+      const workbenchConfigSaved =
+        workbenchConfig.workspacePath === "C:\\Users\\Administrator\\Desktop\\农业项目" &&
+        workbenchConfig.skills.includes("农业调研") &&
+        workbenchConfig.mcpServers.includes("filesystem") &&
+        typeof workbenchConfig.permissions?.readWorkspace === "boolean";
+
+      document.querySelector('button[aria-label="设置"]')?.click();
+      await waitFor(() => document.querySelector(".resetPanel"), "settings reset panel missing");
+      const resetPanelVisible = document.body.textContent.includes("重新设置你的面板agent") &&
+        document.body.textContent.includes("重新设置你的职业");
+      const securityIntroUpdated = document.body.textContent.includes("设置本地面板密码和密保问题。");
+      const recoverySelect = document.querySelector(".securityPanel select");
+      const recoveryOptionsText = Array.from(recoverySelect?.querySelectorAll("option") || [])
+        .map((option) => option.textContent || "")
+        .join("|");
+      const localizedRecoveryQuestions = recoveryOptionsText.includes("你第一次准备用这个面板处理什么项目？") &&
+        recoveryOptionsText.includes("其他");
+      const securityPasswords = Array.from(document.querySelectorAll(".securityPanel input[type='password']"));
+      setNativeValue(securityPasswords[0], "old-panel-pass");
+      setNativeValue(securityPasswords[1], "old-panel-pass");
+      setNativeValue(securityPasswords[2], "panel-recovery-answer");
+      document.querySelector(".securityPanel .primaryButton").click();
+      await waitFor(() => document.body.textContent.includes("修改密码或密保问题前"), "configured security panel did not appear");
+      const configuredSecurityLocked = document.body.textContent.includes("面板密码") &&
+        !document.body.textContent.includes("修改密保问题") &&
+        !document.body.textContent.includes("取消本地面板密码") &&
+        !document.body.textContent.includes("取消密保问题");
+      setNativeValue(document.querySelector(".securityPanel input[type='password']"), "old-panel-pass");
+      document.querySelector(".securityPanel .primaryButton").click();
+      await waitFor(() => document.body.textContent.includes("修改密保问题"), "security edit controls did not appear after password confirmation");
+      const configuredSecurityRequiresCurrent = configuredSecurityLocked &&
+        document.body.textContent.includes("修改密保问题") &&
+        document.body.textContent.includes("取消本地面板密码") &&
+        document.body.textContent.includes("取消修改") &&
+        !document.body.textContent.includes("取消密保问题");
+      Array.from(document.querySelectorAll(".securityPanel button"))
+        .find((button) => button.textContent.includes("取消修改"))
+        ?.click();
+      await waitFor(() => document.body.textContent.includes("面板密码") && !document.body.textContent.includes("修改密保问题"), "cancel modification did not return to locked security view");
+      const cancelModifyReturnsLocked = document.body.textContent.includes("面板密码") &&
+        !document.body.textContent.includes("修改密保问题");
+
+      document.querySelector('button[aria-label="模型"]')?.click();
+      await waitFor(() => document.querySelector(".routingFlowChart"), "model routing flow chart missing");
+      const modelFlowVisible = document.querySelectorAll(".routingFlowChart article").length >= 5 &&
+        !document.body.textContent.includes("编排配置");
+
+      document.querySelector('button[aria-label="Agent"]')?.click();
+      await waitFor(() => document.querySelector(".agentGrid"), "agent page missing");
+      const agentPageUsesSupervisorName = document.body.textContent.includes("蜂巢主管");
+      const agentPageHasNoDuplicateMain = !document.body.textContent.includes("main-agent");
+      const videoAgentVisible = document.body.textContent.includes("video-agent");
+      const specialistAgentsPending = document.querySelectorAll(".agentModelTag.pending").length >= 5 &&
+        document.body.textContent.includes("配置模型与 Key");
+      const agentConfigButton = Array.from(document.querySelectorAll(".agentConfigureButton"))
+        .find((button) => button.textContent.includes("配置模型与 Key"));
+      const agentConfigButtonStyle = agentConfigButton ? getComputedStyle(agentConfigButton) : null;
+      const agentConfigButtonOrange = Boolean(agentConfigButtonStyle?.backgroundColor && agentConfigButtonStyle.backgroundColor !== "rgba(0, 0, 0, 0)");
+      agentConfigButton?.click();
+      await waitFor(() => document.querySelector(".agentPanel.expanded .agentConfigPanel"), "expanded agent config panel missing");
+      const expandedAgentConfigVisible =
+        document.querySelector(".agentPanel.expanded")?.getBoundingClientRect().width > document.querySelector(".agentGrid")?.getBoundingClientRect().width * 0.9 &&
+        document.body.textContent.includes("Agent 模型配置") &&
+        document.body.textContent.includes("保存配置");
+      const agentConfigLabelText = Array.from(document.querySelectorAll(".agentPanel.expanded .agentConfigFields label"))
+        .map((label) => label.textContent.trim())
+        .join(" ");
+      const agentConfigFieldsSimplified = agentConfigLabelText.includes("模型") &&
+        agentConfigLabelText.includes("API Key") &&
+        !agentConfigLabelText.includes("模型服务商") &&
+        !agentConfigLabelText.includes("接口地址") &&
+        !agentConfigLabelText.includes("Provider") &&
+        !agentConfigLabelText.includes("Base URL");
+      const agentConfigApiKeyRetained = document.querySelector(".agentPanel.expanded .apiKeyInputShell input")?.value === "smoke-private-key";
+
+      document.querySelector('button[aria-label="设置"]')?.click();
+      await waitFor(() => document.querySelector(".resetPanel"), "settings panel missing after agent page");
+      const englishButton = Array.from(document.querySelectorAll(".languageButton"))
+        .find((candidate) => candidate.textContent.trim() === "English");
+      englishButton?.click();
+      await waitFor(() => document.body.textContent.includes("Panel agent"), "english reset panel text missing");
+      const englishResetButtonsFit = Array.from(document.querySelectorAll(".resetActionButton"))
+        .every((button) => button.scrollWidth <= button.clientWidth + 2);
+      const panelAgentResetButton = Array.from(document.querySelectorAll(".resetActionButton"))
+        .find((button) => button.textContent.includes("Panel agent"));
+      panelAgentResetButton?.click();
+      await waitFor(() => document.querySelector(".supervisorForm"), "panel agent reset name step missing");
+      document.querySelector(".supervisorForm .supervisorNext").click();
+      await waitFor(() => document.querySelector(".providerFocus.settled"), "panel agent reset provider step missing");
+      const resetApiKeyRetained = document.querySelector(".providerFocus .apiKeyInputShell input")?.value === "smoke-private-key";
+      document.querySelector(".providerFocus .setupBack + .setupBack")?.click();
+      await waitFor(() => document.querySelector(".resetPanel"), "cancel setup did not return to settings");
       const savedPreview = JSON.parse(localStorage.getItem("honeycomb.firstRunPreview") || "{}");
       const supervisorPrompt = savedPreview.agents?.find((agent) => agent.path.includes("panel-supervisor-agent"))?.contents || "";
       const supervisorPromptHasGuardrails =
@@ -707,8 +942,52 @@ async function runOnboardingFlow(page: CdpClient) {
       if (!nameButtonDisabledBeforeInput) throw new Error("supervisor next button was not disabled before input");
       if (!nameButtonEnabledAfterInput) throw new Error("supervisor next button was not enabled after input");
       if (!providerTitleUpdated || !providerIntroUpdated) throw new Error("provider copy was not updated");
+      if (!modelPlaceholderVisible) throw new Error("model input placeholder did not show the gray example");
+      if (!providerFieldsSimplified) throw new Error("provider fields were not simplified to model and API key");
+      if (!firstQuestionPlaceholderVisible) throw new Error("first work interview question did not use a gray placeholder");
+      if (!supervisorControlsCompact) {
+        throw new Error(
+          "supervisor input/button are taller than provider inputs: input=" +
+            supervisorInputHeight +
+            ", button=" +
+            supervisorNextHeight +
+            ", provider=" +
+            providerInputHeight
+        );
+      }
+      if (!providerBackButtonVisible) throw new Error("provider back button was not visible");
+      if (!interviewNextCompact) {
+        throw new Error("interview next button is too tall: " + interviewNextHeight + ", provider=" + providerInputHeight);
+      }
+      if (!firstInterviewBackVisible || !interviewBackVisibleOnRole || !interviewBackVisibleOnWork || !interviewBackVisibleOnQuality) {
+        throw new Error("interview back button was not visible on every question");
+      }
+      if (!agricultureWorkOptions) throw new Error("agriculture work options were not tailored: " + workOptionText);
+      if (!qualityPlaceholderTailored) throw new Error("quality placeholder was not tailored to agriculture work: " + qualityPlaceholder);
+      if (!reviewRoutingTranslated) throw new Error("review routing mode leaked a raw id: " + reviewText);
+      if (generatedAgentCount !== 6 || !generatedTeamHasVideoAndNoMain) throw new Error("generated team did not contain panel + five specialists without main-agent");
+      if (!inviteTextVisible || !inviteLightAnimationVisible || !inviteSadState || !inviteHappyCannonVisible) {
+        throw new Error("openclaw invite animation did not match light gather / tears / confetti requirements");
+      }
+      if (!setupTabHiddenAfterComplete) throw new Error("first-run setup tab was still visible after setup completion");
+      if (!supervisorWorkbenchVisible || !workbenchConfigSaved) throw new Error("supervisor workbench modules were missing or did not save config");
+      if (!resetPanelVisible) throw new Error("settings reset panel was not visible");
+      if (!securityIntroUpdated) throw new Error("security intro copy was not updated");
+      if (!localizedRecoveryQuestions) throw new Error("localized recovery question select was not available: " + recoveryOptionsText);
+      if (!configuredSecurityRequiresCurrent) throw new Error("configured security panel did not require current password or exposed wrong cancel action");
+      if (!cancelModifyReturnsLocked) throw new Error("cancel modification did not return to password confirmation state");
+      if (!modelFlowVisible) throw new Error("model routing flow chart was not visible or old config label leaked");
+      if (!agentPageUsesSupervisorName || !specialistAgentsPending || !agentPageHasNoDuplicateMain || !videoAgentVisible) throw new Error("agent page did not show supervisor name, video agent, and pending specialists without duplicate main-agent");
+      if (!agentConfigButtonOrange || !expandedAgentConfigVisible) throw new Error("agent config button was not orange or expanded panel was not visible");
+      if (!agentConfigFieldsSimplified || !agentConfigApiKeyRetained) throw new Error("agent config fields were not simplified or retained the supervisor API key");
+      if (!englishResetButtonsFit) throw new Error("english reset panel buttons overflowed their containers");
+      if (!resetApiKeyRetained) throw new Error("panel agent reset did not retain the configured API key");
+      if (!apiKeyToggleVisible || !apiKeyHiddenByDefault || !apiKeyVisibleAfterToggle || !apiKeyHiddenAfterToggle) {
+        throw new Error("API key visibility toggle did not work");
+      }
       if (!supervisorPromptHasGuardrails) throw new Error("panel supervisor prompt guardrails missing");
       if (!tourVisibleAfterSetup) throw new Error("guided tour did not appear after setup");
+      if (!tourCornerLogoRemoved) throw new Error("guided tour corner logo was still visible");
 
       return {
         navLocked,
@@ -717,9 +996,51 @@ async function runOnboardingFlow(page: CdpClient) {
         nameButtonEnabledAfterInput,
         providerTitleUpdated,
         providerIntroUpdated,
+        providerFieldsSimplified,
+        modelPlaceholderVisible,
+        firstQuestionPlaceholderVisible,
+        supervisorControlsCompact,
+        supervisorInputHeight,
+        supervisorNextHeight,
+        providerInputHeight,
+        providerBackButtonVisible,
+        apiKeyToggleVisible,
+        apiKeyHiddenByDefault,
+        apiKeyVisibleAfterToggle,
+        apiKeyHiddenAfterToggle,
         tailoredPlaceholder,
+        interviewNextHeight,
+        interviewNextCompact,
+        firstInterviewBackVisible,
+        interviewBackVisibleOnRole,
+        interviewBackVisibleOnWork,
+        interviewBackVisibleOnQuality,
+        agricultureWorkOptions,
+        qualityPlaceholder,
+        qualityPlaceholderTailored,
+        reviewRoutingTranslated,
         generatedAgentCount,
+        inviteTextVisible,
+        inviteLightAnimationVisible,
+        inviteSadState,
+        inviteHappyCannonVisible,
         tourVisibleAfterSetup,
+        tourCornerLogoRemoved,
+        setupTabHiddenAfterComplete,
+        supervisorWorkbenchVisible,
+        workbenchConfigSaved,
+        resetPanelVisible,
+        securityIntroUpdated,
+        localizedRecoveryQuestions,
+        configuredSecurityRequiresCurrent,
+        cancelModifyReturnsLocked,
+        modelFlowVisible,
+        agentPageUsesSupervisorName,
+        specialistAgentsPending,
+        agentConfigButtonOrange,
+        expandedAgentConfigVisible,
+        englishResetButtonsFit,
+        resetApiKeyRetained,
         supervisorPromptHasGuardrails,
         consoleVisibleAfterComplete,
         collapsed,
@@ -745,9 +1066,51 @@ async function runOnboardingFlow(page: CdpClient) {
     nameButtonEnabledAfterInput: boolean;
     providerTitleUpdated: boolean;
     providerIntroUpdated: boolean;
+    providerFieldsSimplified: boolean;
+    modelPlaceholderVisible: boolean;
+    firstQuestionPlaceholderVisible: boolean;
+    supervisorControlsCompact: boolean;
+    supervisorInputHeight: number;
+    supervisorNextHeight: number;
+    providerInputHeight: number;
+    providerBackButtonVisible: boolean;
+    apiKeyToggleVisible: boolean;
+    apiKeyHiddenByDefault: boolean;
+    apiKeyVisibleAfterToggle: boolean;
+    apiKeyHiddenAfterToggle: boolean;
     tailoredPlaceholder: string;
+    interviewNextHeight: number;
+    interviewNextCompact: boolean;
+    firstInterviewBackVisible: boolean;
+    interviewBackVisibleOnRole: boolean;
+    interviewBackVisibleOnWork: boolean;
+    interviewBackVisibleOnQuality: boolean;
+    agricultureWorkOptions: boolean;
+    qualityPlaceholder: string;
+    qualityPlaceholderTailored: boolean;
+    reviewRoutingTranslated: boolean;
     generatedAgentCount: number;
+    inviteTextVisible: boolean;
+    inviteLightAnimationVisible: boolean;
+    inviteSadState: boolean;
+    inviteHappyCannonVisible: boolean;
     tourVisibleAfterSetup: boolean;
+    tourCornerLogoRemoved: boolean;
+    setupTabHiddenAfterComplete: boolean;
+    supervisorWorkbenchVisible: boolean;
+    workbenchConfigSaved: boolean;
+    resetPanelVisible: boolean;
+    securityIntroUpdated: boolean;
+    localizedRecoveryQuestions: boolean;
+    configuredSecurityRequiresCurrent: boolean;
+    cancelModifyReturnsLocked: boolean;
+    modelFlowVisible: boolean;
+    agentPageUsesSupervisorName: boolean;
+    specialistAgentsPending: boolean;
+    agentConfigButtonOrange: boolean;
+    expandedAgentConfigVisible: boolean;
+    englishResetButtonsFit: boolean;
+    resetApiKeyRetained: boolean;
     supervisorPromptHasGuardrails: boolean;
     consoleVisibleAfterComplete: boolean;
     collapsed: boolean;
@@ -1053,15 +1416,26 @@ async function main() {
                 "first_run_before_guided_tour",
                 "supervisor_agent_name_required",
                 "provider_title_and_intro_updated",
+                "provider_fields_simplified",
+                "supervisor_controls_compact",
+                "provider_back_navigation",
+                "api_key_visibility_toggle",
+                "interview_back_navigation",
+                "interview_next_compact",
                 "navigation_locked_before_setup",
                 "provider_only_stage",
                 "thinking_state",
                 "tailored_role_placeholder",
                 "generated_work_options",
+                "unseeded_domain_tailoring",
                 "panel_supervisor_prompt_guardrails",
                 "agent_profile_review",
                 "guided_tour_after_setup",
                 "navigation_unlocked_after_setup",
+                "security_requires_current_password",
+                "model_page_routing_flow_chart",
+                "agent_page_pending_specialist_keys",
+                "english_reset_panel_fits",
                 "sidebar_collapse"
               ]
             },
@@ -1083,6 +1457,9 @@ async function main() {
             jobId: jobFlow.jobId,
             terminalStatus: jobFlow.terminalStatus,
             cancelAttempted: jobFlow.cancelAttempted,
+            jobRequestIncludesWorkbench: jobFlow.jobRequestIncludesWorkbench,
+            smartRoutingVisible: jobFlow.smartRoutingVisible,
+            manualRoutingHidden: jobFlow.manualRoutingHidden,
             statusVisible: jobFlow.statusVisible,
             filteredJobVisible: jobFlow.filteredJobVisible,
             filteredStatuses: jobFlow.filteredStatuses,
@@ -1094,6 +1471,8 @@ async function main() {
             checked: [
               "desktop_ui_load",
               mode === "prod" ? "prod_bundle_served" : "vite_dev_server",
+              "smart_routing_replaces_manual_select",
+              "supervisor_workbench_context_sent_to_job",
               "create_job_from_ui",
               "job_list_selection",
               jobFlow.cancelAttempted ? "cancel_job_from_ui" : "skip_cancel_already_terminal",

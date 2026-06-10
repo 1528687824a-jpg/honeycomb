@@ -2,13 +2,16 @@ import "dotenv/config";
 import express from "express";
 import { z } from "zod";
 import {
+  archiveJobSession,
   appendJobEvent,
   cancelJob,
   createJob,
   getJob,
   getJobByFeishuMessageId,
+  getJobBySessionId,
   InvalidJobListCursorError,
-  listJobs
+  listJobs,
+  restoreJobSession
 } from "../../../packages/db/src/jobs";
 import { markModelCallFailedUnknownOutcome } from "../../../packages/db/src/model-calls";
 import {
@@ -22,9 +25,34 @@ import {
   InvalidTimelineCursorError
 } from "../../../packages/db/src/pipeline";
 import {
+  createPlanForJob,
+  createPlanItem,
+  getPlan,
+  listPlans,
+  updatePlan,
+  updatePlanItem
+} from "../../../packages/db/src/plans";
+import {
+  compressSession,
+  getRuntimeUsage,
+  getSessionEvents,
+  listRuntimeLogs,
+  listSessions
+} from "../../../packages/db/src/runtime";
+import {
+  getWorkspaceGitStatus,
+  inspectWorkspace,
+  listWorkspaceFiles,
+  readWorkspaceFile,
+  WorkspacePathError
+} from "./workspaces";
+import {
   EXPERIENCE_STATUSES,
   INGRESS_ORIGINS,
   JOB_STATUSES,
+  ROUTING_MODES,
+  TASK_PLAN_ITEM_STATUSES,
+  TASK_PLAN_STATUSES,
   type ExperienceStatus
 } from "../../../packages/shared/src/types";
 import { launchDbos, startJobWorkflow } from "./dbos-runtime";
@@ -41,6 +69,110 @@ const timelineQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(1000).optional(),
   since: z.string().datetime({ offset: true }).optional(),
   cursor: z.string().min(1).max(2000).optional()
+});
+
+const runtimeLogsQuerySchema = z.object({
+  source: z.enum(["job_event", "agent_event", "model_call"]).optional(),
+  jobId: z.string().trim().min(1).max(200).optional(),
+  sessionId: z.string().trim().min(1).max(300).optional(),
+  since: z.string().datetime({ offset: true }).optional(),
+  until: z.string().datetime({ offset: true }).optional(),
+  limit: z.coerce.number().int().min(1).max(500).optional()
+});
+
+const runtimeUsageQuerySchema = z.object({
+  since: z.string().datetime({ offset: true }).optional(),
+  until: z.string().datetime({ offset: true }).optional()
+});
+
+const listSessionsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+  status: z.enum(JOB_STATUSES).optional(),
+  prompt: z.string().trim().min(1).max(300).optional()
+});
+
+const sessionEventsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(1000).optional()
+});
+
+const archiveSessionSchema = z.object({
+  retentionDays: z.number().int().min(1).max(3650).optional(),
+  reason: z.string().max(500).optional(),
+  requesterId: z.string().max(200).optional()
+});
+
+const restoreSessionSchema = z.object({
+  reason: z.string().max(500).optional(),
+  requesterId: z.string().max(200).optional()
+});
+
+const forkSessionSchema = z.object({
+  prompt: z.string().min(1).optional(),
+  inheritWorkdir: z.boolean().optional().default(true),
+  startWorkflow: z.boolean().optional().default(true),
+  routingMode: z.enum(ROUTING_MODES).optional(),
+  maxModelCalls: z.number().int().min(1).max(100).optional(),
+  classicFinalGateEnabled: z.boolean().optional(),
+  discussionRounds: z.number().int().min(1).max(10).optional(),
+  requesterId: z.string().max(200).optional()
+});
+
+const compressSessionSchema = z.object({
+  maxEvents: z.number().int().min(10).max(300).optional(),
+  reason: z.string().max(500).optional()
+});
+
+const listPlansQuerySchema = z.object({
+  jobId: z.string().trim().min(1).max(200).optional(),
+  status: z.enum(TASK_PLAN_STATUSES).optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional()
+});
+
+const createJobPlanSchema = z.object({
+  title: z.string().trim().min(1).max(200).optional(),
+  summary: z.string().trim().max(2000).optional(),
+  source: z.string().trim().min(1).max(80).optional(),
+  sourceArtifactId: z.string().trim().min(1).max(240).nullable().optional(),
+  metadata: z.record(z.unknown()).optional(),
+  syncItems: z.boolean().optional()
+});
+
+const updatePlanSchema = z.object({
+  title: z.string().trim().min(1).max(200).optional(),
+  summary: z.string().trim().max(2000).nullable().optional(),
+  status: z.enum(TASK_PLAN_STATUSES).optional(),
+  metadata: z.record(z.unknown()).optional()
+});
+
+const createPlanItemSchema = z.object({
+  title: z.string().trim().min(1).max(300),
+  body: z.string().trim().max(4000).nullable().optional(),
+  status: z.enum(TASK_PLAN_ITEM_STATUSES).optional(),
+  agentId: z.string().trim().min(1).max(200).nullable().optional(),
+  stageId: z.string().trim().min(1).max(240).nullable().optional(),
+  artifactId: z.string().trim().min(1).max(240).nullable().optional(),
+  acceptanceCriteria: z.array(z.string().trim().min(1).max(500)).max(30).optional(),
+  metadata: z.record(z.unknown()).optional()
+});
+
+const updatePlanItemSchema = createPlanItemSchema.partial().extend({
+  title: z.string().trim().min(1).max(300).optional()
+});
+
+const workspaceRootQuerySchema = z.object({
+  rootPath: z.string().trim().min(1).max(2000)
+});
+
+const workspaceFilesQuerySchema = workspaceRootQuerySchema.extend({
+  subpath: z.string().trim().max(2000).optional(),
+  depth: z.coerce.number().int().min(0).max(8).optional(),
+  limit: z.coerce.number().int().min(1).max(5000).optional(),
+  includeHidden: z.coerce.boolean().optional()
+});
+
+const workspaceFileQuerySchema = workspaceRootQuerySchema.extend({
+  subpath: z.string().trim().min(1).max(2000),
+  maxBytes: z.coerce.number().int().min(1).max(1024 * 1024).optional()
 });
 
 const listJobsQuerySchema = z.object({
@@ -140,7 +272,7 @@ async function main() {
     if (origin && corsOrigins.includes(origin)) {
       response.header("access-control-allow-origin", origin);
       response.header("vary", "Origin");
-      response.header("access-control-allow-methods", "GET,POST,OPTIONS");
+      response.header("access-control-allow-methods", "GET,POST,PATCH,OPTIONS");
       response.header("access-control-allow-headers", "content-type,x-admin-token");
     }
 
@@ -230,6 +362,255 @@ async function main() {
         return;
       }
 
+      next(error);
+    }
+  });
+
+  app.get("/runtime/logs", async (request, response, next) => {
+    try {
+      const query = runtimeLogsQuerySchema.parse(request.query);
+      response.json(await listRuntimeLogs(query));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/runtime/usage", async (request, response, next) => {
+    try {
+      const query = runtimeUsageQuerySchema.parse(request.query);
+      response.json(await getRuntimeUsage(query));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/workspaces/inspect", async (request, response, next) => {
+    try {
+      const query = workspaceRootQuerySchema.parse(request.query);
+      response.json(await inspectWorkspace(query.rootPath));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/workspaces/files", async (request, response, next) => {
+    try {
+      const query = workspaceFilesQuerySchema.parse(request.query);
+      response.json(
+        await listWorkspaceFiles(query.rootPath, {
+          subpath: query.subpath,
+          depth: query.depth,
+          limit: query.limit,
+          includeHidden: query.includeHidden
+        })
+      );
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/workspaces/file", async (request, response, next) => {
+    try {
+      const query = workspaceFileQuerySchema.parse(request.query);
+      response.json(
+        await readWorkspaceFile(query.rootPath, {
+          subpath: query.subpath,
+          maxBytes: query.maxBytes
+        })
+      );
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/workspaces/git/status", async (request, response, next) => {
+    try {
+      const query = workspaceRootQuerySchema.parse(request.query);
+      response.json(await getWorkspaceGitStatus(query.rootPath));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/sessions", async (request, response, next) => {
+    try {
+      const query = listSessionsQuerySchema.parse(request.query);
+      response.json(await listSessions(query));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/sessions/:sessionId/events", async (request, response, next) => {
+    try {
+      const query = sessionEventsQuerySchema.parse(request.query);
+      response.json(await getSessionEvents(request.params.sessionId, query));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/sessions/:sessionId/archive", async (request, response, next) => {
+    try {
+      const input = archiveSessionSchema.parse(request.body ?? {});
+      const job = await getJobBySessionId(request.params.sessionId);
+      if (!job) {
+        response.status(404).json({ error: "session_not_found" });
+        return;
+      }
+      const archived = await archiveJobSession({
+        jobId: job.id,
+        retentionDays: input.retentionDays,
+        reason: input.reason ?? "session_archived"
+      });
+      response.json({
+        ok: true,
+        changed: !job.archivedAt,
+        sessionId: request.params.sessionId,
+        job: archived
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/sessions/:sessionId/restore", async (request, response, next) => {
+    try {
+      const input = restoreSessionSchema.parse(request.body ?? {});
+      const job = await restoreJobSession({
+        sessionId: request.params.sessionId,
+        reason: input.reason ?? "session_restored",
+        requesterId: input.requesterId
+      });
+      if (!job) {
+        response.status(404).json({ error: "session_not_found" });
+        return;
+      }
+      response.json({
+        ok: true,
+        sessionId: request.params.sessionId,
+        job
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/sessions/:sessionId/fork", async (request, response, next) => {
+    try {
+      const input = forkSessionSchema.parse(request.body ?? {});
+      const source = await getJobBySessionId(request.params.sessionId);
+      if (!source) {
+        response.status(404).json({ error: "session_not_found" });
+        return;
+      }
+      const forked = await createJob({
+        rawPrompt: input.prompt ?? source.rawPrompt,
+        workdir: input.inheritWorkdir ? source.workdir ?? undefined : undefined,
+        ingressOrigin: "http",
+        routingMode: input.routingMode ?? source.routingMode,
+        maxModelCalls: input.maxModelCalls ?? source.maxModelCalls,
+        classicFinalGateEnabled: input.classicFinalGateEnabled ?? source.classicFinalGateEnabled,
+        discussionRounds: input.discussionRounds ?? source.discussionRounds,
+        requesterId: input.requesterId ?? "session-fork"
+      });
+      await appendJobEvent(forked.id, "session.forked", {
+        sourceSessionId: source.sessionId,
+        sourceJobId: source.id,
+        inheritedWorkdir: input.inheritWorkdir
+      }, {
+        actor: "session-ledger"
+      });
+      const workflowId = input.startWorkflow ? await startJobWorkflow(forked.id) : null;
+      response.status(201).json({
+        ok: true,
+        sourceSessionId: source.sessionId,
+        sessionId: forked.sessionId,
+        job: forked,
+        workflowId
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/sessions/:sessionId/compress", async (request, response, next) => {
+    try {
+      const input = compressSessionSchema.parse(request.body ?? {});
+      const result = await compressSession(request.params.sessionId, input);
+      if (!result) {
+        response.status(404).json({ error: "session_not_found" });
+        return;
+      }
+      response.json({
+        ok: true,
+        ...result
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/plans", async (request, response, next) => {
+    try {
+      const query = listPlansQuerySchema.parse(request.query);
+      response.json(await listPlans(query));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/plans/:planId", async (request, response, next) => {
+    try {
+      const plan = await getPlan(request.params.planId);
+      if (!plan) {
+        response.status(404).json({ error: "plan_not_found" });
+        return;
+      }
+      response.json(plan);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.patch("/plans/:planId", async (request, response, next) => {
+    try {
+      const input = updatePlanSchema.parse(request.body ?? {});
+      const plan = await updatePlan(request.params.planId, input);
+      if (!plan) {
+        response.status(404).json({ error: "plan_not_found" });
+        return;
+      }
+      response.json(plan);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/plans/:planId/items", async (request, response, next) => {
+    try {
+      const input = createPlanItemSchema.parse(request.body ?? {});
+      const item = await createPlanItem(request.params.planId, input);
+      if (!item) {
+        response.status(404).json({ error: "plan_not_found" });
+        return;
+      }
+      response.status(201).json(item);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.patch("/plans/:planId/items/:itemId", async (request, response, next) => {
+    try {
+      const input = updatePlanItemSchema.parse(request.body ?? {});
+      const item = await updatePlanItem(request.params.planId, request.params.itemId, input);
+      if (!item) {
+        response.status(404).json({ error: "plan_item_not_found" });
+        return;
+      }
+      response.json(item);
+    } catch (error) {
       next(error);
     }
   });
@@ -329,6 +710,20 @@ async function main() {
     }
   });
 
+  app.post("/jobs/:jobId/plan", async (request, response, next) => {
+    try {
+      const input = createJobPlanSchema.parse(request.body ?? {});
+      const plan = await createPlanForJob(request.params.jobId, input);
+      if (!plan) {
+        response.status(404).json({ error: "job_not_found" });
+        return;
+      }
+      response.status(201).json(plan);
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.get("/jobs/:jobId/details", async (request, response, next) => {
     try {
       const details = await getJobDetails(request.params.jobId);
@@ -372,6 +767,11 @@ async function main() {
   app.use((error: unknown, _request: express.Request, response: express.Response, _next: express.NextFunction) => {
     if (error instanceof z.ZodError) {
       response.status(400).json({ error: "invalid_request", issues: error.issues });
+      return;
+    }
+
+    if (error instanceof WorkspacePathError) {
+      response.status(400).json({ error: error.message });
       return;
     }
 
