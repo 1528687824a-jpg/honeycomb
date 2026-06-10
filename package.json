@@ -41,6 +41,7 @@
     "prepare:public-ingress": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-public-ingress-bundle.ps1",
     "maintenance:cleanup-sessions": "tsx scripts/cleanup-expired-sessions.ts",
     "maintenance:repair-cancelled-archives": "tsx scripts/repair-cancelled-archives.ts",
+    "check:package-layout": "tsx scripts/check-package-layout.ts",
     "check:no-secrets": "tsx scripts/check-no-secrets.ts",
     "check": "tsc --noEmit"
   },
