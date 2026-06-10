@@ -186,6 +186,30 @@ const statements = [
     completed_at timestamptz,
     unique(plan_id, position)
   )`,
+  `create table if not exists agent.tool_approval_requests (
+    id text primary key,
+    job_id text not null references agent.jobs(id),
+    session_id text not null,
+    stage_id text references agent.job_stages(id),
+    agent_id text not null,
+    requester_actor text not null default 'tool-gateway',
+    tool_name text not null,
+    action_type text not null,
+    risk_level text not null default 'medium',
+    reason text,
+    command text,
+    target text,
+    input jsonb not null default '{}',
+    policy jsonb not null default '{}',
+    status text not null default 'pending',
+    decision_reason text,
+    decided_by text,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    expires_at timestamptz,
+    decided_at timestamptz,
+    consumed_at timestamptz
+  )`,
   `alter table agent.artifacts
     drop constraint if exists artifacts_stage_id_fkey`,
   `alter table agent.artifacts
@@ -237,7 +261,16 @@ const statements = [
   `create index if not exists task_plan_items_plan_position_idx
     on agent.task_plan_items(plan_id, position)`,
   `create index if not exists task_plan_items_status_idx
-    on agent.task_plan_items(status, updated_at desc)`
+    on agent.task_plan_items(status, updated_at desc)`,
+  `create index if not exists tool_approval_requests_status_updated_at_idx
+    on agent.tool_approval_requests(status, updated_at desc)`,
+  `create index if not exists tool_approval_requests_job_created_at_idx
+    on agent.tool_approval_requests(job_id, created_at desc)`,
+  `create index if not exists tool_approval_requests_session_created_at_idx
+    on agent.tool_approval_requests(session_id, created_at desc)`,
+  `create index if not exists tool_approval_requests_stage_created_at_idx
+    on agent.tool_approval_requests(stage_id, created_at desc)
+    where stage_id is not null`
 ];
 
 async function main() {

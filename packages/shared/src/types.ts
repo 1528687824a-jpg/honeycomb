@@ -112,6 +112,44 @@ export type TaskPlanWithItems = {
   items: TaskPlanItemRecord[];
 };
 
+export const TOOL_APPROVAL_STATUSES = [
+  "pending",
+  "approved",
+  "rejected",
+  "consumed",
+  "expired",
+  "cancelled"
+] as const;
+export type ToolApprovalStatus = (typeof TOOL_APPROVAL_STATUSES)[number];
+
+export const TOOL_RISK_LEVELS = ["low", "medium", "high", "critical"] as const;
+export type ToolRiskLevel = (typeof TOOL_RISK_LEVELS)[number];
+
+export type ToolApprovalRecord = {
+  id: string;
+  jobId: string;
+  sessionId: string;
+  stageId: string | null;
+  agentId: string;
+  requesterActor: string;
+  toolName: string;
+  actionType: string;
+  riskLevel: ToolRiskLevel;
+  reason: string | null;
+  command: string | null;
+  target: string | null;
+  input: Record<string, unknown>;
+  policy: Record<string, unknown>;
+  status: ToolApprovalStatus;
+  decisionReason: string | null;
+  decidedBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+  expiresAt: string | null;
+  decidedAt: string | null;
+  consumedAt: string | null;
+};
+
 export const EXPERIENCE_STATUSES = ["candidate", "adopted", "rejected"] as const;
 export type ExperienceStatus = (typeof EXPERIENCE_STATUSES)[number];
 

@@ -13,6 +13,14 @@ import {
   listJobs,
   restoreJobSession
 } from "../../../packages/db/src/jobs";
+import {
+  consumeToolApproval,
+  createToolApprovalRequest,
+  decideToolApproval,
+  expirePendingToolApprovals,
+  getToolApproval,
+  listToolApprovals
+} from "../../../packages/db/src/approvals";
 import { markModelCallFailedUnknownOutcome } from "../../../packages/db/src/model-calls";
 import {
   listExperiences,
@@ -54,6 +62,8 @@ import {
   ROUTING_MODES,
   TASK_PLAN_ITEM_STATUSES,
   TASK_PLAN_STATUSES,
+  TOOL_APPROVAL_STATUSES,
+  TOOL_RISK_LEVELS,
   type ExperienceStatus
 } from "../../../packages/shared/src/types";
 import { launchDbos, startJobWorkflow } from "./dbos-runtime";
@@ -181,6 +191,43 @@ const workspaceFilesQuerySchema = workspaceRootQuerySchema.extend({
 const workspaceFileQuerySchema = workspaceRootQuerySchema.extend({
   subpath: z.string().trim().min(1).max(2000),
   maxBytes: z.coerce.number().int().min(1).max(1024 * 1024).optional()
+});
+
+const listApprovalsQuerySchema = z.object({
+  status: z.enum(TOOL_APPROVAL_STATUSES).optional(),
+  jobId: z.string().trim().min(1).max(200).optional(),
+  sessionId: z.string().trim().min(1).max(300).optional(),
+  agentId: z.string().trim().min(1).max(200).optional(),
+  riskLevel: z.enum(TOOL_RISK_LEVELS).optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional()
+});
+
+const createApprovalSchema = z.object({
+  jobId: z.string().trim().min(1).max(200).optional(),
+  sessionId: z.string().trim().min(1).max(300).optional(),
+  stageId: z.string().trim().min(1).max(240).nullable().optional(),
+  agentId: z.string().trim().min(1).max(200),
+  requesterActor: z.string().trim().min(1).max(200).optional(),
+  toolName: z.string().trim().min(1).max(200),
+  actionType: z.string().trim().min(1).max(200),
+  riskLevel: z.enum(TOOL_RISK_LEVELS).optional(),
+  reason: z.string().trim().max(2000).nullable().optional(),
+  command: z.string().trim().max(4000).nullable().optional(),
+  target: z.string().trim().max(2000).nullable().optional(),
+  input: z.record(z.unknown()).optional(),
+  policy: z.record(z.unknown()).optional(),
+  expiresAt: z.string().datetime({ offset: true }).nullable().optional()
+}).refine((value) => Boolean(value.jobId || value.sessionId), {
+  message: "jobId_or_sessionId_required"
+});
+
+const decideApprovalSchema = z.object({
+  decidedBy: z.string().trim().min(1).max(200).optional(),
+  decisionReason: z.string().trim().max(2000).nullable().optional()
+});
+
+const consumeApprovalSchema = z.object({
+  consumedBy: z.string().trim().min(1).max(200).optional()
 });
 
 const listJobsQuerySchema = z.object({
@@ -435,6 +482,125 @@ async function main() {
     try {
       const query = workspaceRootQuerySchema.parse(request.query);
       response.json(await getWorkspaceGitStatus(query.rootPath));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/approvals", async (request, response, next) => {
+    try {
+      await expirePendingToolApprovals();
+      const query = listApprovalsQuerySchema.parse(request.query);
+      response.json(await listToolApprovals(query));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/approvals", async (request, response, next) => {
+    try {
+      const input = createApprovalSchema.parse(request.body ?? {});
+      const approval = await createToolApprovalRequest(input);
+      if (!approval) {
+        response.status(404).json({ error: "job_or_session_not_found" });
+        return;
+      }
+      response.status(201).json(approval);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/approvals/:approvalId", async (request, response, next) => {
+    try {
+      await expirePendingToolApprovals();
+      const approval = await getToolApproval(request.params.approvalId);
+      if (!approval) {
+        response.status(404).json({ error: "approval_not_found" });
+        return;
+      }
+      response.json(approval);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  async function respondWithApprovalDecision(
+    request: express.Request,
+    response: express.Response,
+    status: "approved" | "rejected" | "cancelled"
+  ) {
+    const input = decideApprovalSchema.parse(request.body ?? {});
+    const approvalId = String(request.params.approvalId ?? "");
+    const result = await decideToolApproval({
+      approvalId,
+      status,
+      decidedBy: input.decidedBy ?? "desktop-app",
+      decisionReason: input.decisionReason
+    });
+
+    if (!result.approval) {
+      response.status(404).json({ error: "approval_not_found" });
+      return;
+    }
+
+    if (result.reason === "not_pending") {
+      response.status(409).json({
+        error: "approval_not_pending",
+        approval: result.approval
+      });
+      return;
+    }
+
+    response.json(result);
+  }
+
+  app.post("/approvals/:approvalId/approve", async (request, response, next) => {
+    try {
+      await respondWithApprovalDecision(request, response, "approved");
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/approvals/:approvalId/reject", async (request, response, next) => {
+    try {
+      await respondWithApprovalDecision(request, response, "rejected");
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/approvals/:approvalId/cancel", async (request, response, next) => {
+    try {
+      await respondWithApprovalDecision(request, response, "cancelled");
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/approvals/:approvalId/consume", async (request, response, next) => {
+    try {
+      const input = consumeApprovalSchema.parse(request.body ?? {});
+      const result = await consumeToolApproval({
+        approvalId: request.params.approvalId,
+        consumedBy: input.consumedBy ?? "tool-gateway"
+      });
+
+      if (!result.approval) {
+        response.status(404).json({ error: "approval_not_found" });
+        return;
+      }
+
+      if (result.reason === "not_approved") {
+        response.status(409).json({
+          error: "approval_not_approved",
+          approval: result.approval
+        });
+        return;
+      }
+
+      response.json(result);
     } catch (error) {
       next(error);
     }
