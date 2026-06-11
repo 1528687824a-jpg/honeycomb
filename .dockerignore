@@ -1,5 +1,8 @@
 node_modules
+**/node_modules
 dist
+apps/desktop-app/dist
+apps/desktop-app/src-tauri/target
 .runtime
 logs
 data
