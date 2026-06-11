@@ -9,7 +9,11 @@ import {
   type AgentConfigRecord,
   type ModelProviderRecord
 } from "../../../packages/shared/src/types";
-import { discoverOpenClawRuntime } from "./openclaw-runtime";
+import {
+  discoverOpenClawRuntime,
+  inspectOpenClawCandidate,
+  type OpenClawRuntimeCandidate
+} from "./openclaw-runtime";
 
 export type OpenClawAgentSyncItem = {
   honeycombAgentId: string;
@@ -39,6 +43,7 @@ export type OpenClawNativeConfigPaths = {
 export type OpenClawSyncPlan = {
   generatedAt: string;
   rootPath: string;
+  rootSource: string;
   configPath: string;
   nativeConfigPaths: OpenClawNativeConfigPaths;
   agents: OpenClawAgentSyncItem[];
@@ -87,6 +92,29 @@ export type OpenClawValidationResult = {
   ok: boolean;
 };
 
+export class OpenClawSyncSafetyError extends Error {
+  readonly code = "openclaw_sync_requires_explicit_runtime";
+  readonly details: Record<string, unknown>;
+
+  constructor(details: Record<string, unknown>) {
+    super("OpenClaw sync apply requires an explicit or Honeycomb-managed runtime path.");
+    this.details = details;
+  }
+}
+
+const autoWriteAllowedSources = new Set([
+  "query",
+  "HONEYCOMB_OPENCLAW_RUNTIME_DIR",
+  "AGENT_CLUSTER_CONFIG_PATH",
+  "HONEYCOMB_AGENT_MODEL_CONFIG_PATH",
+  "HONEYCOMB_FIRST_RUN_AGENTS_DIR",
+  "OPENCLAW_HOME",
+  "OPENCLAW_ROOT",
+  "OPENCLAW_CONFIG_DIR",
+  "desktop-runtime",
+  "workspace-runtime"
+]);
+
 function templateRoot() {
   return path.resolve("platform-assets", "openclaw-agent-templates", "agents");
 }
@@ -105,12 +133,15 @@ async function exists(filePath: string) {
   }
 }
 
-async function resolveRootPath(rootPath?: string) {
+async function resolveRootCandidate(rootPath?: string): Promise<OpenClawRuntimeCandidate | null> {
   if (rootPath) {
-    return path.resolve(rootPath);
+    return inspectOpenClawCandidate({
+      rootPath: path.resolve(rootPath),
+      source: "query"
+    });
   }
   const discovery = await discoverOpenClawRuntime();
-  return discovery.selected?.rootPath ? path.resolve(discovery.selected.rootPath) : null;
+  return discovery.selected;
 }
 
 function redactedProvider(provider: ModelProviderRecord): OpenClawSyncPlan["providers"][number] {
@@ -276,10 +307,11 @@ function buildRuntimeManifest(plan: OpenClawSyncPlan) {
 export async function buildOpenClawSyncPlan(input: {
   rootPath?: string;
 } = {}): Promise<OpenClawSyncPlan | null> {
-  const rootPath = await resolveRootPath(input.rootPath);
-  if (!rootPath) {
+  const rootCandidate = await resolveRootCandidate(input.rootPath);
+  if (!rootCandidate?.rootPath) {
     return null;
   }
+  const rootPath = path.resolve(rootCandidate.rootPath);
 
   const [agents, providers] = await Promise.all([listAgentConfigs(), listModelProviders()]);
   const enabledAgents = agents.filter((agent) => agent.enabled);
@@ -287,6 +319,9 @@ export async function buildOpenClawSyncPlan(input: {
   const warnings: string[] = [];
   if (enabledAgents.length === 0) {
     warnings.push("no_enabled_agents");
+  }
+  if (!input.rootPath && !autoWriteAllowedSources.has(rootCandidate.source)) {
+    warnings.push(`runtime_write_requires_explicit_confirmation:${rootCandidate.source}`);
   }
 
   const agentItems = await Promise.all(
@@ -322,6 +357,7 @@ export async function buildOpenClawSyncPlan(input: {
   return {
     generatedAt: new Date().toISOString(),
     rootPath,
+    rootSource: rootCandidate.source,
     configPath: path.join(rootPath, "config", "honeycomb.generated.json"),
     nativeConfigPaths: nativeConfigPaths(rootPath),
     agents: agentItems,
@@ -352,10 +388,23 @@ async function readPromptTemplate(agent: OpenClawAgentSyncItem) {
 
 export async function applyOpenClawSyncPlan(input: {
   rootPath?: string;
+  allowDiscoveredUserRuntime?: boolean;
 } = {}): Promise<OpenClawSyncApplyResult | null> {
   const plan = await buildOpenClawSyncPlan(input);
   if (!plan) {
     return null;
+  }
+  if (
+    !input.rootPath &&
+    !input.allowDiscoveredUserRuntime &&
+    !autoWriteAllowedSources.has(plan.rootSource)
+  ) {
+    throw new OpenClawSyncSafetyError({
+      rootPath: plan.rootPath,
+      rootSource: plan.rootSource,
+      allowedSources: [...autoWriteAllowedSources],
+      fix: "Pass rootPath explicitly, configure HONEYCOMB_OPENCLAW_RUNTIME_DIR, or set allowDiscoveredUserRuntime=true after user confirmation."
+    });
   }
   const providers = await listModelProviders();
 

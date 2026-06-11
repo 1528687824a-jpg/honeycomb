@@ -116,6 +116,7 @@ import {
 import {
   applyOpenClawSyncPlan,
   buildOpenClawSyncPlan,
+  OpenClawSyncSafetyError,
   validateOpenClawSync
 } from "./openclaw-sync";
 import {
@@ -164,7 +165,8 @@ const openClawRuntimeQuerySchema = z.object({
 });
 
 const openClawSyncSchema = z.object({
-  rootPath: z.string().trim().min(1).max(2000).optional()
+  rootPath: z.string().trim().min(1).max(2000).optional(),
+  allowDiscoveredUserRuntime: z.boolean().optional()
 });
 
 const openClawRuntimeActionSchema = z.object({
@@ -2017,6 +2019,15 @@ async function main() {
 
     if (error instanceof WorkspacePathError) {
       response.status(400).json({ error: error.message });
+      return;
+    }
+
+    if (error instanceof OpenClawSyncSafetyError) {
+      response.status(409).json({
+        error: error.code,
+        message: error.message,
+        details: error.details
+      });
       return;
     }
 
