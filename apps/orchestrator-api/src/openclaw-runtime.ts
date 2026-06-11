@@ -31,6 +31,17 @@ export type OpenClawRuntimeDiscovery = {
   nextActions: string[];
 };
 
+const configuredSources = new Set([
+  "query",
+  "HONEYCOMB_OPENCLAW_RUNTIME_DIR",
+  "AGENT_CLUSTER_CONFIG_PATH",
+  "HONEYCOMB_AGENT_MODEL_CONFIG_PATH",
+  "HONEYCOMB_FIRST_RUN_AGENTS_DIR",
+  "OPENCLAW_HOME",
+  "OPENCLAW_ROOT",
+  "OPENCLAW_CONFIG_DIR"
+]);
+
 async function pathExists(target: string) {
   try {
     await fs.stat(target);
@@ -67,12 +78,32 @@ function uniqueCandidates(candidates: Array<{ rootPath?: string | null; source: 
   return result;
 }
 
+function parentFromFileEnv(value?: string | null) {
+  const trimmed = value?.trim();
+  return trimmed ? path.dirname(trimmed) : null;
+}
+
 function buildCandidates(rootPath?: string) {
   const home = os.homedir();
   const appData = process.env.APPDATA || path.join(home, "AppData", "Roaming");
   const userName = process.env.USERNAME || "administrator";
   return uniqueCandidates([
     { rootPath, source: "query" },
+    { rootPath: process.env.HONEYCOMB_OPENCLAW_RUNTIME_DIR, source: "HONEYCOMB_OPENCLAW_RUNTIME_DIR" },
+    {
+      rootPath: parentFromFileEnv(process.env.AGENT_CLUSTER_CONFIG_PATH),
+      source: "AGENT_CLUSTER_CONFIG_PATH"
+    },
+    {
+      rootPath: parentFromFileEnv(process.env.HONEYCOMB_AGENT_MODEL_CONFIG_PATH),
+      source: "HONEYCOMB_AGENT_MODEL_CONFIG_PATH"
+    },
+    {
+      rootPath: process.env.HONEYCOMB_FIRST_RUN_AGENTS_DIR
+        ? path.dirname(process.env.HONEYCOMB_FIRST_RUN_AGENTS_DIR)
+        : null,
+      source: "HONEYCOMB_FIRST_RUN_AGENTS_DIR"
+    },
     { rootPath: process.env.OPENCLAW_HOME, source: "OPENCLAW_HOME" },
     { rootPath: process.env.OPENCLAW_ROOT, source: "OPENCLAW_ROOT" },
     { rootPath: process.env.OPENCLAW_CONFIG_DIR, source: "OPENCLAW_CONFIG_DIR" },
@@ -114,8 +145,13 @@ export async function inspectOpenClawCandidate(input: {
     "config.json",
     "settings.json",
     "models.json",
+    "cluster.config.json",
+    "agent-model-configs.json",
+    "runtime-manifest.json",
+    "openclaw.env",
     path.join("config", "openclaw.json"),
-    path.join("config", "models.json")
+    path.join("config", "models.json"),
+    path.join("config", "honeycomb.generated.json")
   ].map((relativePath) => path.join(input.rootPath, relativePath));
 
   const [agentsExists, workspaceExists, ...configExists] = await Promise.all([
@@ -169,7 +205,13 @@ export async function inspectOpenClawCandidate(input: {
 
 export async function discoverOpenClawRuntime(rootPath?: string): Promise<OpenClawRuntimeDiscovery> {
   const candidates = await Promise.all(buildCandidates(rootPath).map(inspectOpenClawCandidate));
+  const explicitQuery = rootPath ? candidates.find((candidate) => candidate.source === "query") : null;
+  const configuredCandidate = candidates.find(
+    (candidate) => configuredSources.has(candidate.source) && candidate.exists
+  );
   const selected =
+    explicitQuery ??
+    configuredCandidate ??
     candidates.find((candidate) => candidate.status === "ready") ??
     candidates.find((candidate) => candidate.status === "partial") ??
     null;

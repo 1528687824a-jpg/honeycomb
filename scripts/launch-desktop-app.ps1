@@ -24,6 +24,7 @@ New-Item -ItemType Directory -Force -Path $honeycombRuntimeHostDir | Out-Null
 New-Item -ItemType Directory -Force -Path $honeycombSecretHostDir | Out-Null
 $env:HONEYCOMB_OPENCLAW_RUNTIME_HOST_DIR = $honeycombRuntimeHostDir
 $env:HONEYCOMB_SECRET_HOST_DIR = $honeycombSecretHostDir
+$env:HONEYCOMB_OPENCLAW_RUNTIME_DIR = "/app/honeycomb-runtime"
 $env:AGENT_CLUSTER_CONFIG_PATH = "/app/honeycomb-runtime/cluster.config.json"
 $env:HONEYCOMB_AGENT_MODEL_CONFIG_PATH = "/app/honeycomb-runtime/agent-model-configs.json"
 $env:HONEYCOMB_FIRST_RUN_AGENTS_DIR = "/app/honeycomb-runtime/agents"

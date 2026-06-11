@@ -36,6 +36,7 @@ services:
       FEISHU_DRY_RUN: "true"
       OPENCLAW_AGENT_MODE: mock
       HONEYCOMB_SECRET_DIR: /app/honeycomb-secrets
+      HONEYCOMB_OPENCLAW_RUNTIME_DIR: /app/honeycomb-runtime
       AGENT_CLUSTER_CONFIG_PATH: ${AGENT_CLUSTER_CONFIG_PATH:-}
       HONEYCOMB_AGENT_MODEL_CONFIG_PATH: ${HONEYCOMB_AGENT_MODEL_CONFIG_PATH:-}
       HONEYCOMB_FIRST_RUN_AGENTS_DIR: ${HONEYCOMB_FIRST_RUN_AGENTS_DIR:-}
@@ -45,7 +46,7 @@ services:
     volumes:
       - job-data:/app/data/jobs
       - ${HONEYCOMB_SECRET_HOST_DIR:-./.runtime/honeycomb-secrets}:/app/honeycomb-secrets
-      - ${HONEYCOMB_OPENCLAW_RUNTIME_HOST_DIR:-./.runtime/honeycomb-empty}:/app/honeycomb-runtime:ro
+      - ${HONEYCOMB_OPENCLAW_RUNTIME_HOST_DIR:-./.runtime/honeycomb-empty}:/app/honeycomb-runtime
     healthcheck:
       test:
         [
@@ -73,6 +74,7 @@ services:
       FEISHU_DRY_RUN: "true"
       OPENCLAW_AGENT_MODE: mock
       HONEYCOMB_SECRET_DIR: /app/honeycomb-secrets
+      HONEYCOMB_OPENCLAW_RUNTIME_DIR: /app/honeycomb-runtime
       AGENT_CLUSTER_CONFIG_PATH: ${AGENT_CLUSTER_CONFIG_PATH:-}
       HONEYCOMB_AGENT_MODEL_CONFIG_PATH: ${HONEYCOMB_AGENT_MODEL_CONFIG_PATH:-}
       HONEYCOMB_FIRST_RUN_AGENTS_DIR: ${HONEYCOMB_FIRST_RUN_AGENTS_DIR:-}
@@ -80,7 +82,7 @@ services:
     volumes:
       - job-data:/app/data/jobs
       - ${HONEYCOMB_SECRET_HOST_DIR:-./.runtime/honeycomb-secrets}:/app/honeycomb-secrets
-      - ${HONEYCOMB_OPENCLAW_RUNTIME_HOST_DIR:-./.runtime/honeycomb-empty}:/app/honeycomb-runtime:ro
+      - ${HONEYCOMB_OPENCLAW_RUNTIME_HOST_DIR:-./.runtime/honeycomb-empty}:/app/honeycomb-runtime
 
 volumes:
   job-data:

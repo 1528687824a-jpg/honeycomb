@@ -188,9 +188,11 @@ const capabilities: RuntimeCapability[] = [
     id: "openclaw_sync",
     title: "OpenClaw real-agent sync",
     status: "partial",
-    summary: "Runtime discovery, sync plan/apply/validate APIs, workflow shape, templates, and worker agent routing exist; native OpenClaw launch/config integration is still partial.",
+    summary: "Runtime discovery, sync plan/apply/validate APIs, native Honeycomb/OpenClaw config writing, workflow shape, templates, and worker agent routing exist; real launch/restart command wiring is still deployment-dependent.",
     routes: [
       "GET /openclaw/runtime",
+      "GET /openclaw/runtime/control",
+      "POST /openclaw/runtime/:action",
       "POST /openclaw/sync/plan",
       "POST /openclaw/sync/apply",
       "POST /openclaw/sync/validate"
@@ -202,17 +204,20 @@ const capabilities: RuntimeCapability[] = [
       "OpenClaw agent presence validation API",
       "Agent prompt templates",
       "Example OpenClaw multi-agent config",
+      "Native cluster.config.json writer",
+      "Native agent-model-configs.json writer with redacted API key status",
+      "OpenClaw runtime manifest and env file writer",
+      "Configurable OpenClaw status/start/restart/stop command API",
       "Worker workflow shape",
       "Worker resolves Honeycomb agents to OpenClaw agent IDs before real CLI calls",
       "OpenClaw real smoke scripts"
     ],
     missing: [
-      "Native OpenClaw provider config format writer",
-      "OpenClaw launch/restart integration",
+      "Host-provided OpenClaw launch/restart command defaults for packaged desktop runtime",
       "Real-agent workflow replacement for remaining mock activities"
     ],
     nextActions: [
-      "Add native OpenClaw provider config writer and launch/restart integration"
+      "Add packaged desktop defaults for OpenClaw launch/restart commands"
     ]
   },
   {
@@ -234,14 +239,14 @@ const capabilities: RuntimeCapability[] = [
       "Redacted key configured/fingerprint status",
       "OpenAI-compatible provider verification endpoint",
       "API and worker share provider secrets through a Docker secret volume",
-      "Worker passes provider base URL, model, and API key to real OpenClaw CLI calls as runtime env"
+      "Worker passes provider base URL, model, and API key to real OpenClaw CLI calls as runtime env",
+      "OpenClaw agent-model config is generated without writing plaintext API keys"
     ],
     missing: [
-      "Native OpenClaw provider config format writer",
       "Real provider end-to-end regression against installed OpenClaw"
     ],
     nextActions: [
-      "Write native OpenClaw provider config and restart/validate the runtime"
+      "Run real provider end-to-end regression against installed OpenClaw"
     ]
   },
   {
@@ -413,7 +418,7 @@ export function getRuntimeCapabilities(): RuntimeCapabilitiesResponse {
     recommendedNext: [
       "Approval-gated MCP/Web tool calls",
       "Schedule configuration UI",
-      "Native OpenClaw provider config and launch/restart integration"
+      "Packaged OpenClaw launch/restart command defaults and real E2E regression"
     ]
   };
 }

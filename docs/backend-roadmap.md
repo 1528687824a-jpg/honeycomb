@@ -75,6 +75,17 @@ changes land.
      metadata into job events.
    - Docker API and worker containers share a local-only provider secret volume.
 
+12. OpenClaw native runtime config writer
+   - `/openclaw/sync/apply` writes `cluster.config.json`,
+     `agent-model-configs.json`, `openclaw.env`, and `runtime-manifest.json`
+     into the selected runtime.
+   - Generated provider config records API key configured/fingerprint status but
+     never writes plaintext API keys.
+   - Docker API and worker containers now discover `/app/honeycomb-runtime` and
+     the launcher-provided runtime config paths.
+   - Runtime control API exposes status/start/restart/stop hooks when explicit
+     host commands are configured.
+
 ## Partial Or Not Yet Real Enough
 
 1. OpenClaw real-agent orchestration
@@ -82,11 +93,15 @@ changes land.
    - Runtime discovery is now available through `GET /openclaw/runtime`.
    - Sync plan/apply/validate APIs now write Honeycomb prompt/config files into
      the selected runtime.
+   - Sync apply now also writes native runtime files: `cluster.config.json`,
+     `agent-model-configs.json`, `openclaw.env`, and `runtime-manifest.json`.
+   - Runtime control now has configurable status/start/restart/stop command
+     endpoints.
    - Worker execution now resolves Honeycomb agents to OpenClaw agent IDs and
      supplies provider/model/key runtime environment variables for real CLI
      calls.
-   - Native OpenClaw provider config writing, OpenClaw launch/restart, and real
-     OpenClaw end-to-end regression are still not complete.
+   - Packaged default OpenClaw launch/restart command wiring and real OpenClaw
+     end-to-end regression are still not complete.
 
 2. Model/provider configuration center
    - First-run UI can collect model and API key.
@@ -95,8 +110,11 @@ changes land.
      expose configured/fingerprint status.
    - Worker routing consumes provider base URL, model, and API key from this
      registry.
-   - Native generated OpenClaw provider config still needs the exact OpenClaw
-     format and restart/validation path.
+   - Native generated OpenClaw provider config now writes redacted model/provider
+     records for each agent; plaintext keys still stay in the local secret
+     boundary.
+   - Real provider end-to-end regression against installed OpenClaw is still
+     pending.
 
 3. Agent registry
    - Product concept needs panel supervisor, research, writer, image, video,
@@ -109,7 +127,8 @@ changes land.
    - OpenClaw prompt/config sync and validation exist.
    - Worker maps panel/main aliases through the registry before calling
      OpenClaw.
-   - Native OpenClaw launch/restart validation after sync is still missing.
+   - Native OpenClaw config writing exists; packaged launch/restart validation
+     after sync is still missing.
 
 4. Skills and MCP registry
    - Backend persists skills and MCP servers through `/skills` and
@@ -186,8 +205,9 @@ changes land.
    - Generate or update model/provider config.
    - Validate that OpenClaw can see the agents.
    - Status: partial done. The backend can plan/apply/validate Honeycomb prompt
-     and redacted generated config files. It still needs the exact native
-     OpenClaw provider config writer and launch/restart integration.
+     files, generated config, native runtime config, redacted model/provider
+     config, env file, and runtime manifest. It still needs packaged default
+     launch/restart command wiring and real OpenClaw E2E validation.
 
 ### Phase C: Make Tooling Useful And Safe
 

@@ -109,6 +109,11 @@ import { ingressAdapters } from "./adapters";
 import { getRuntimeCapabilities } from "./capabilities";
 import { discoverOpenClawRuntime } from "./openclaw-runtime";
 import {
+  getOpenClawRuntimeControlStatus,
+  runOpenClawRuntimeCommand,
+  type OpenClawRuntimeAction
+} from "./openclaw-runtime-control";
+import {
   applyOpenClawSyncPlan,
   buildOpenClawSyncPlan,
   validateOpenClawSync
@@ -160,6 +165,14 @@ const openClawRuntimeQuerySchema = z.object({
 
 const openClawSyncSchema = z.object({
   rootPath: z.string().trim().min(1).max(2000).optional()
+});
+
+const openClawRuntimeActionSchema = z.object({
+  action: z.enum(["status", "start", "restart", "stop"])
+});
+
+const openClawRuntimeCommandSchema = z.object({
+  timeoutMs: z.number().int().min(1000).max(300000).optional()
 });
 
 const providerSchema = z.object({
@@ -701,6 +714,33 @@ async function main() {
     try {
       const query = openClawRuntimeQuerySchema.parse(request.query);
       response.json(await discoverOpenClawRuntime(query.rootPath));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/openclaw/runtime/control", async (request, response, next) => {
+    try {
+      const query = openClawRuntimeQuerySchema.parse(request.query);
+      response.json(await getOpenClawRuntimeControlStatus(query));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/openclaw/runtime/:action", async (request, response, next) => {
+    try {
+      const params = openClawRuntimeActionSchema.parse(request.params);
+      const input = openClawRuntimeCommandSchema.parse(request.body ?? {});
+      const result = await runOpenClawRuntimeCommand(
+        params.action as OpenClawRuntimeAction,
+        input
+      );
+      if (!result.configured) {
+        response.status(501).json(result);
+        return;
+      }
+      response.status(result.ok ? 200 : 500).json(result);
     } catch (error) {
       next(error);
     }
