@@ -1,11 +1,15 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 
 #[derive(Deserialize)]
@@ -217,7 +221,8 @@ fn run_dpapi(action: &str, input: &str) -> Result<String, String> {
         _ => return Err("unsupported_dpapi_action".to_string()),
     };
 
-    let mut child = Command::new("powershell")
+    let mut command = Command::new("powershell");
+    command
         .args([
             "-NoProfile",
             "-NonInteractive",
@@ -228,9 +233,14 @@ fn run_dpapi(action: &str, input: &str) -> Result<String, String> {
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| error.to_string())?;
+        .stderr(Stdio::piped());
+    // Without CREATE_NO_WINDOW every DPAPI call flashes a console window over
+    // the GUI app, because a windows-subsystem process has no console for the
+    // child to inherit.
+    #[cfg(windows)]
+    command.creation_flags(0x0800_0000);
+
+    let mut child = command.spawn().map_err(|error| error.to_string())?;
 
     if let Some(stdin) = child.stdin.as_mut() {
         stdin
@@ -246,9 +256,40 @@ fn run_dpapi(action: &str, input: &str) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+const DPAPI_CACHE_TTL: Duration = Duration::from_secs(300);
+
+fn dpapi_unprotect_cache() -> &'static Mutex<HashMap<String, (String, Instant)>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, (String, Instant)>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn dpapi_cache_insert(ciphertext: &str, plaintext: &str) {
+    if let Ok(mut cache) = dpapi_unprotect_cache().lock() {
+        cache.retain(|_, (_, cached_at)| cached_at.elapsed() < DPAPI_CACHE_TTL);
+        cache.insert(
+            ciphertext.to_string(),
+            (plaintext.to_string(), Instant::now()),
+        );
+    }
+}
+
+fn dpapi_unprotect_cached(ciphertext: &str) -> Result<String, String> {
+    if let Ok(cache) = dpapi_unprotect_cache().lock() {
+        if let Some((plaintext, cached_at)) = cache.get(ciphertext) {
+            if cached_at.elapsed() < DPAPI_CACHE_TTL {
+                return Ok(plaintext.clone());
+            }
+        }
+    }
+    let plaintext = run_dpapi("unprotect", ciphertext)?;
+    dpapi_cache_insert(ciphertext, &plaintext);
+    Ok(plaintext)
+}
+
 fn encrypt_provider_api_key(api_key: &str) -> Result<String, String> {
     if cfg!(windows) {
         let ciphertext = run_dpapi("protect", api_key)?;
+        dpapi_cache_insert(&ciphertext, api_key);
         return serde_json::to_string_pretty(&serde_json::json!({
             "format": "dpapi-user-v1",
             "ciphertext": ciphertext
@@ -267,7 +308,7 @@ fn decrypt_provider_api_key(raw: &str) -> Result<Option<String>, String> {
     if let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) {
         if value.get("format").and_then(|item| item.as_str()) == Some("dpapi-user-v1") {
             if let Some(ciphertext) = value.get("ciphertext").and_then(|item| item.as_str()) {
-                return run_dpapi("unprotect", ciphertext).map(Some);
+                return dpapi_unprotect_cached(ciphertext).map(Some);
             }
         }
         if value.get("format").and_then(|item| item.as_str()) == Some("plaintext-local-v1") {
@@ -449,7 +490,7 @@ async fn generate_first_run_suggestions(payload: SuggestionPayload) -> Result<In
 }
 
 #[tauri::command]
-fn save_first_run_setup(app: AppHandle, payload: String) -> Result<String, String> {
+async fn save_first_run_setup(app: AppHandle, payload: String) -> Result<String, String> {
     let parsed: FirstRunPayload = serde_json::from_str(&payload).map_err(|error| error.to_string())?;
     let app_data = app.path().app_data_dir().map_err(|error| error.to_string())?;
     let out_dir = app_data.join("desktop-first-run");
@@ -481,7 +522,7 @@ fn save_first_run_setup(app: AppHandle, payload: String) -> Result<String, Strin
         fs::write(target, agent.contents).map_err(|error| error.to_string())?;
     }
 
-    if let Ok(Some(api_key)) = load_provider_api_key(app.clone()) {
+    if let Ok(Some(api_key)) = load_provider_api_key_inner(&app) {
         let model = parsed.provider.get("model").and_then(|value| value.as_str()).unwrap_or("").trim();
         if !model.is_empty() {
             save_agent_api_key(&app, "panel-supervisor-agent", &api_key)?;
@@ -525,7 +566,7 @@ fn load_first_run_setup(app: AppHandle) -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
-fn load_agent_model_configs(app: AppHandle) -> Result<Option<String>, String> {
+async fn load_agent_model_configs(app: AppHandle) -> Result<Option<String>, String> {
     let config_path = first_run_dir(&app)?.join("agent-model-configs.json");
     if !config_path.exists() {
         return Ok(None);
@@ -655,18 +696,22 @@ fn apply_openclaw_agent_setup(app: AppHandle) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn save_provider_api_key(app: AppHandle, payload: String) -> Result<(), String> {
+async fn save_provider_api_key(app: AppHandle, payload: String) -> Result<(), String> {
     let key_path = provider_api_key_path(&app)?;
     save_encrypted_api_key(&key_path, payload.trim())
 }
 
-#[tauri::command]
-fn load_provider_api_key(app: AppHandle) -> Result<Option<String>, String> {
-    let key_path = provider_api_key_path(&app)?;
+fn load_provider_api_key_inner(app: &AppHandle) -> Result<Option<String>, String> {
+    let key_path = provider_api_key_path(app)?;
     if !key_path.exists() {
         return Ok(None);
     }
     load_encrypted_api_key(&key_path)
+}
+
+#[tauri::command]
+async fn load_provider_api_key(app: AppHandle) -> Result<Option<String>, String> {
+    load_provider_api_key_inner(&app)
 }
 
 #[tauri::command]
