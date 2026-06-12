@@ -1,5 +1,4 @@
 import "dotenv/config";
-import path from "node:path";
 import express from "express";
 import { z } from "zod";
 import {
@@ -100,6 +99,12 @@ import {
   writeWorkspaceFile,
   WorkspacePathError
 } from "./workspaces";
+import {
+  normalizeWorkspaceRegistrationTarget,
+  normalizeWorkspaceRootPath,
+  workspaceApprovalTarget,
+  workspaceRootKey
+} from "./workspace-security";
 import {
   formatWebFetchCommand,
   normalizeWebFetchUrl,
@@ -573,33 +578,6 @@ function normalizeApprovalTarget(target: string | null) {
 
 function normalizeApprovalCommand(command: string | null) {
   return command?.trim() || null;
-}
-
-function normalizeWorkspaceRootPath(rootPath: string) {
-  return path.resolve(rootPath);
-}
-
-function workspaceRootKey(rootPath: string) {
-  const resolved = normalizeWorkspaceRootPath(rootPath);
-  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-}
-
-function workspaceApprovalTarget(rootPathKey: string) {
-  return `workspace://${rootPathKey}`;
-}
-
-function normalizeWorkspaceRegistrationTarget(target: string | null) {
-  const trimmed = target?.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  const withoutScheme = trimmed.startsWith("workspace://")
-    ? trimmed.slice("workspace://".length)
-    : trimmed.startsWith("workspace:")
-      ? trimmed.slice("workspace:".length)
-      : trimmed;
-  return workspaceRootKey(withoutScheme);
 }
 
 async function requireRegisteredWorkspaceRoot(rootPath: string, response: express.Response) {

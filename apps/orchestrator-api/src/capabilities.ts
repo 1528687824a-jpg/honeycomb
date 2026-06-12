@@ -434,19 +434,24 @@ const capabilities: RuntimeCapability[] = [
     id: "source_hygiene",
     title: "Source hygiene and tests",
     status: "partial",
-    summary: "Worker-to-API reverse imports are removed for runtime/secret helpers, and the first unit test entry covers web fetch safety behavior.",
+    summary: "Worker-to-API reverse imports are removed for runtime/secret helpers, review notes are in-repo, and unit tests now cover several security boundaries.",
     routes: [],
     implemented: [
       "Shared local secret helpers live in packages/runtime",
+      "Local secret reads have an in-process TTL cache",
+      "Recognized encrypted secret envelopes do not fall back to plaintext migration after decrypt failure",
       "Worker DBOS launch helpers live with the worker runtime",
       "Worker source no longer imports orchestrator-api/src",
       "node:test unit script exists",
-      "Web fetch unit tests cover URL normalization, private blocking, and explicit private fetch"
+      "Web fetch unit tests cover URL normalization, private blocking, and explicit private fetch",
+      "Security policy unit tests cover approvals, API auth, workspace targets, MCP policy matching, and secret cache/corruption behavior",
+      "CI runs unit tests and Docker quickstart uses the local API token model",
+      "HONEYC review notes are tracked under docs/reviews"
     ],
     missing: [
       "server.ts route modules are still too large",
       "desktop main.tsx is still too large",
-      "Broader unit coverage for approvals, workspaces, providers, and sync"
+      "Broader unit coverage for provider registry and OpenClaw sync"
     ],
     nextActions: [
       "Split server routes by domain and add focused unit tests around each extracted module"
@@ -493,10 +498,11 @@ export function getRuntimeCapabilities(): RuntimeCapabilitiesResponse {
     summary,
     capabilities,
     recommendedNext: [
-      "Approval-gated search/browser tool calls, MCP session reuse, and per-agent network policy",
-      "Schedule configuration UI",
-      "Packaged OpenClaw launch/restart command defaults and real E2E regression",
-      "Split the large API/desktop modules into smaller tested modules"
+      "Phase 17E: MCP long-lived session reuse",
+      "Phase 18: approval-gated search/browser tool calls and per-agent network policy",
+      "Phase 18.5: split the large API/desktop modules into smaller tested modules",
+      "Phase 19: packaged OpenClaw launch/restart command defaults and real provider E2E regression",
+      "Phase 20: schedule configuration UI after the real OpenClaw loop is proven"
     ]
   };
 }

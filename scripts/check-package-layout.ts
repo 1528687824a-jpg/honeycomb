@@ -131,7 +131,7 @@ const result = {
   },
   topLevelSizes: getTopLevelSizes().slice(0, 12),
   layout: {
-    sourceRoots: ["apps", "packages", "config", "platform-assets", "scripts", "docs"],
+    sourceRoots: ["apps", "packages", "config", "platform-assets", "scripts", "docs", "tests"],
     generatedOrLocalOnly: [".runtime", "logs", "data", "dist", "node_modules", "apps/desktop-app/src-tauri/target"],
     desktopRuntimeState: [
       "%APPDATA%/io.agentopenclaw.desktop/desktop-first-run",

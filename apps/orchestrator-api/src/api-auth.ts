@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import type express from "express";
 
-function timingSafeEqualString(a: string, b: string) {
+export function timingSafeEqualString(a: string, b: string) {
   const left = Buffer.from(a);
   const right = Buffer.from(b);
   if (left.length !== right.length) {
@@ -10,12 +10,12 @@ function timingSafeEqualString(a: string, b: string) {
   return crypto.timingSafeEqual(left, right);
 }
 
-function bearerToken(value: string | undefined) {
+export function bearerToken(value: string | undefined) {
   const match = value?.match(/^Bearer\s+(.+)$/i);
   return match?.[1]?.trim() || null;
 }
 
-function requestToken(request: express.Request) {
+export function requestToken(request: express.Request) {
   const headerToken =
     bearerToken(request.header("authorization")) || request.header("x-honeycomb-token")?.trim();
   if (headerToken) {
@@ -26,7 +26,7 @@ function requestToken(request: express.Request) {
   return typeof queryToken === "string" && queryToken.trim() ? queryToken.trim() : null;
 }
 
-function isPublicRequest(request: express.Request) {
+export function isPublicRequest(request: express.Request) {
   return request.method === "OPTIONS" || request.path === "/health";
 }
 

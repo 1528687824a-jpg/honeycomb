@@ -27,6 +27,9 @@ jobs:
       - name: Type check
         run: npm run check
 
+      - name: Unit tests
+        run: npm run test:unit
+
       - name: Secret hygiene check
         run: npm run check:no-secrets
 
@@ -55,12 +58,16 @@ jobs:
         run: npm ci --prefix apps/desktop-app
 
       - name: Start HTTP-only stack
+        env:
+          HONEYCOMB_API_TOKEN: ci-honeycomb-token
         run: docker compose up -d --build
 
       - name: Smoke HTTP job
         run: |
           node <<'NODE'
           const baseUrl = "http://localhost:3000";
+          const token = "ci-honeycomb-token";
+          const authHeaders = { authorization: `Bearer ${token}` };
 
           async function sleep(ms) {
             return new Promise((resolve) => setTimeout(resolve, ms));
@@ -83,7 +90,7 @@ jobs:
 
           const createResponse = await fetch(`${baseUrl}/jobs`, {
             method: "POST",
-            headers: { "content-type": "application/json" },
+            headers: { ...authHeaders, "content-type": "application/json" },
             body: JSON.stringify({
               prompt: "CI Docker quickstart smoke",
               requesterId: "ci"
@@ -96,7 +103,9 @@ jobs:
 
           let job;
           for (let attempt = 0; attempt < 120; attempt++) {
-            const response = await fetch(`${baseUrl}/jobs/${created.jobId}`);
+            const response = await fetch(`${baseUrl}/jobs/${created.jobId}`, {
+              headers: authHeaders
+            });
             if (!response.ok) {
               throw new Error(`GET /jobs failed: ${response.status}`);
             }
@@ -114,7 +123,9 @@ jobs:
             throw new Error(`Expected HTTP ingress origin, got ${job.ingressOrigin}`);
           }
 
-          const messagesResponse = await fetch(`${baseUrl}/jobs/${created.jobId}/messages`);
+          const messagesResponse = await fetch(`${baseUrl}/jobs/${created.jobId}/messages`, {
+            headers: authHeaders
+          });
           if (!messagesResponse.ok) {
             throw new Error(`GET /jobs/:id/messages failed: ${messagesResponse.status}`);
           }
@@ -135,6 +146,8 @@ jobs:
       - name: Desktop UI production smoke
         env:
           DESKTOP_UI_SMOKE_PORT: "5173"
+          HONEYCOMB_API_TOKEN: ci-honeycomb-token
+          VITE_HONEYCOMB_API_TOKEN: ci-honeycomb-token
         run: npm run smoke:desktop-ui-prod -- --skip-api-start
 
       - name: Stop HTTP-only stack

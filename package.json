@@ -46,7 +46,7 @@
     "maintenance:repair-cancelled-archives": "tsx scripts/repair-cancelled-archives.ts",
     "check:package-layout": "tsx scripts/check-package-layout.ts",
     "check:no-secrets": "tsx scripts/check-no-secrets.ts",
-    "test:unit": "node --import tsx --test tests/web-tools.test.ts",
+    "test:unit": "node --import tsx --test tests/*.test.ts",
     "check": "tsc --noEmit"
   },
   "dependencies": {

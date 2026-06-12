@@ -23,6 +23,37 @@ function providerSecretPath(providerId: string) {
   return path.join(secretRoot(), "providers", `${safeName(providerId)}.key`);
 }
 
+const DEFAULT_SECRET_CACHE_TTL_MS = 5 * 60 * 1000;
+const secretCache = new Map<string, { value: string; expiresAt: number }>();
+
+function secretCacheTtlMs() {
+  const value = Number(process.env.HONEYCOMB_SECRET_CACHE_TTL_MS ?? DEFAULT_SECRET_CACHE_TTL_MS);
+  return Number.isFinite(value) && value > 0 ? value : DEFAULT_SECRET_CACHE_TTL_MS;
+}
+
+function readCachedSecret(filePath: string) {
+  const cached = secretCache.get(filePath);
+  if (!cached) {
+    return null;
+  }
+  if (cached.expiresAt <= Date.now()) {
+    secretCache.delete(filePath);
+    return null;
+  }
+  return cached.value;
+}
+
+function writeCachedSecret(filePath: string, value: string) {
+  secretCache.set(filePath, {
+    value,
+    expiresAt: Date.now() + secretCacheTtlMs()
+  });
+}
+
+export function clearProviderApiKeyCache() {
+  secretCache.clear();
+}
+
 function runPowerShellDpapi(action: "protect" | "unprotect", base64Input: string) {
   const script =
     action === "protect"
@@ -87,6 +118,14 @@ async function decryptSecret(payload: unknown) {
   return null;
 }
 
+function hasRecognizedSecretEnvelope(payload: unknown) {
+  if (!payload || typeof payload !== "object") {
+    return false;
+  }
+  const format = (payload as Record<string, unknown>).format;
+  return format === "dpapi-user-v1" || format === "plaintext-local-v1";
+}
+
 export function fingerprintSecret(secret: string) {
   return createHash("sha256").update(secret, "utf8").digest("hex").slice(0, 16);
 }
@@ -98,6 +137,7 @@ export async function saveProviderApiKey(providerId: string, apiKey: string) {
     encoding: "utf8",
     mode: 0o600
   });
+  writeCachedSecret(filePath, apiKey);
   return {
     configured: true,
     fingerprint: fingerprintSecret(apiKey)
@@ -106,15 +146,34 @@ export async function saveProviderApiKey(providerId: string, apiKey: string) {
 
 export async function readProviderApiKey(providerId: string) {
   const filePath = providerSecretPath(providerId);
+  const cached = readCachedSecret(filePath);
+  if (cached) {
+    return cached;
+  }
+
   try {
     const raw = await fs.readFile(filePath, "utf8");
+    let parsed: unknown = null;
     try {
-      const decrypted = await decryptSecret(JSON.parse(raw));
+      parsed = JSON.parse(raw);
+    } catch {
+      parsed = null;
+    }
+
+    if (parsed !== null) {
+      let decrypted: string | null;
+      try {
+        decrypted = await decryptSecret(parsed);
+      } catch {
+        return null;
+      }
       if (decrypted !== null) {
+        writeCachedSecret(filePath, decrypted);
         return decrypted;
       }
-    } catch {
-      // Fall through to legacy plaintext migration.
+      if (hasRecognizedSecretEnvelope(parsed)) {
+        return null;
+      }
     }
 
     const legacy = raw.trim();
@@ -122,6 +181,7 @@ export async function readProviderApiKey(providerId: string) {
       return null;
     }
     await saveProviderApiKey(providerId, legacy);
+    writeCachedSecret(filePath, legacy);
     return legacy;
   } catch {
     return null;

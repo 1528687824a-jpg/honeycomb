@@ -109,6 +109,9 @@ changes land.
    - Provider and agent API keys are stored outside JSON config through a local
      secret boundary; Windows uses DPAPI and legacy plaintext files are migrated
      on read.
+   - Local provider secret reads have a process-local TTL cache, and recognized
+     encrypted envelopes do not fall back to legacy plaintext migration if
+     decryption fails.
    - Tool approvals now receive a default expiry, approved requests expire
      before consumption, and API approval decisions record the desktop approval
      boundary instead of trusting the client-provided decider.
@@ -120,8 +123,12 @@ changes land.
    - Worker no longer imports source files from the orchestrator API app.
    - Shared local secret handling now lives in `packages/runtime`.
    - DBOS workflow launch helpers live with the worker runtime.
-   - A first `node:test` unit test entry covers web fetch URL normalization,
-     private-network blocking, and approved private fetch behavior.
+   - `node:test` unit coverage now covers web fetch safety, approval expiry
+     policy, API auth token parsing, workspace registration target
+     normalization, MCP policy matching, and secret cache/corruption behavior.
+   - HONEYC review notes are now tracked under `docs/reviews/`.
+   - GitHub Actions runs `npm run test:unit`, and Docker quickstart CI uses the
+     local API token model.
 
 ## Partial Or Not Yet Real Enough
 
@@ -225,6 +232,15 @@ changes land.
    - Unit test coverage has started with web fetch safety behavior; the large
      API and desktop modules still need further extraction into tested units.
 
+11. Follow-up notes from `HONEYC~3.MD`
+   - Review notes are now stored in `docs/reviews/`.
+   - Local secret reads now have TTL caching and safer corrupted-envelope
+     behavior.
+   - Second unit-test batch and CI wiring are implemented.
+   - Remote/iOS still needs short-lived SSE tickets or cookie auth, plus
+     per-device token issuance/revocation.
+   - OpenClaw real provider E2E should happen before Schedule UI investment.
+
 ## Work Order
 
 ### Phase A: Make Product State Inspectable
@@ -327,9 +343,12 @@ changes land.
 ## Current Next Step
 
 The `HONEYC~2.MD` P0 Windows-local security hardening is now closed for S1,
-S2, S4, S5, and S6. Next, implement approval-gated search/browser calls, MCP
-session reuse, schedule configuration UI, packaged OpenClaw launch/restart
-integration, and the server/module test split called out by the review. The
+S2, S4, S5, and S6, and the first `HONEYC~3.MD` follow-ups are underway:
+review docs are in-repo, local secrets have TTL caching, unit tests expanded,
+and CI runs them. Next, finish Phase 17E MCP long-lived session reuse, then
+Phase 18 approval-gated search/browser calls, Phase 18.5 architecture cleanup,
+and Phase 19 packaged OpenClaw launch/restart plus real provider E2E before
+Schedule UI. The
 backend approval ledger, approval-gated local tools, approval-gated web fetch,
 approval-gated MCP tools/list/resources/list/tools/call, desktop approval queue,
 provider registry, agent registry, worker provider/agent routing, OpenClaw

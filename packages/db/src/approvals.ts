@@ -6,10 +6,12 @@ import {
   type ToolApprovalStatus,
   type ToolRiskLevel
 } from "../../shared/src/types";
+import {
+  defaultApprovalExpiresAt,
+  isApprovalExpired
+} from "./approval-policy";
 import { appendJobEvent, getJob, getJobBySessionId } from "./jobs";
 import { pool } from "./pool";
-
-const DEFAULT_APPROVAL_TTL_MS = Number(process.env.HONEYCOMB_APPROVAL_TTL_MS ?? 15 * 60 * 1000);
 
 function normalizeApprovalStatus(value: unknown): ToolApprovalStatus {
   return typeof value === "string" && (TOOL_APPROVAL_STATUSES as readonly string[]).includes(value)
@@ -60,17 +62,6 @@ async function resolveJob(input: { jobId?: string; sessionId?: string }) {
   }
 
   return null;
-}
-
-function defaultExpiresAt() {
-  const ttlMs = Number.isFinite(DEFAULT_APPROVAL_TTL_MS) && DEFAULT_APPROVAL_TTL_MS > 0
-    ? DEFAULT_APPROVAL_TTL_MS
-    : 15 * 60 * 1000;
-  return new Date(Date.now() + ttlMs).toISOString();
-}
-
-function isApprovalExpired(approval: ToolApprovalRecord, now = new Date()) {
-  return approval.expiresAt ? Date.parse(approval.expiresAt) <= now.getTime() : false;
 }
 
 async function markToolApprovalExpired(approvalId: string): Promise<ToolApprovalRecord | null> {
@@ -167,7 +158,7 @@ export async function createToolApprovalRequest(input: {
       input.target ?? null,
       JSON.stringify(input.input ?? {}),
       JSON.stringify(input.policy ?? {}),
-      input.expiresAt ?? defaultExpiresAt()
+      input.expiresAt ?? defaultApprovalExpiresAt()
     ]
   );
 
