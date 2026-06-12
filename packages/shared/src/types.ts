@@ -223,6 +223,20 @@ export type McpServerRecord = {
   updatedAt: string;
 };
 
+export type AgentMcpPolicyRecord = {
+  id: string;
+  agentId: string;
+  serverId: string;
+  enabled: boolean;
+  allowToolsList: boolean;
+  allowResourcesList: boolean;
+  allowAllTools: boolean;
+  allowedTools: string[];
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export const SCHEDULE_TYPES = ["manual", "once", "daily", "interval"] as const;
 export type ScheduleType = (typeof SCHEDULE_TYPES)[number];
 

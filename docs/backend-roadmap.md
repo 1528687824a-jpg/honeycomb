@@ -56,6 +56,8 @@ changes land.
      audit events.
    - Approval-gated MCP stdio `tools/list` and `resources/list` discovery with
      results cached into MCP server config for UI use.
+   - Per-agent MCP access policy API and enforcement for tools/list,
+     resources/list, and tools/call.
 
 9. Scheduled task foundation
    - Schedule table and CRUD API.
@@ -141,8 +143,9 @@ changes land.
    - Minimal approval-gated stdio MCP `tools/call` execution exists.
    - Approval-gated stdio MCP `tools/list` and `resources/list` discovery
      exists and stores the latest discovery result in server config.
-   - Long-lived MCP sessions and per-agent access policy enforcement are still
-     missing.
+   - Per-agent MCP access policies can allow tools/list, resources/list, all
+     tools, or a specific tool allow-list.
+   - Long-lived MCP sessions are still missing.
 
 5. Web/MCP/network tool gateway
    - File writes and command runs are approval-gated.
@@ -241,8 +244,7 @@ changes land.
    - Event stream visibility.
    - Status: partial done. Web fetch and minimal MCP stdio tools/list,
      resources/list, and tools/call are approval-gated and audited; web search,
-     browser automation, long-lived MCP sessions, and per-agent access policy
-     are still missing.
+     browser automation, and long-lived MCP sessions are still missing.
 
 ### Phase D: Make It Operable Like A Product
 
@@ -266,12 +268,12 @@ changes land.
 
 ## Current Next Step
 
-Implement approval-gated search/browser calls, MCP session reuse/policy,
-schedule configuration UI, and packaged OpenClaw launch/restart integration. The
+Implement approval-gated search/browser calls, MCP session reuse, schedule
+configuration UI, and packaged OpenClaw launch/restart integration. The
 backend approval ledger, approval-gated local tools, approval-gated web fetch,
 approval-gated MCP tools/list/resources/list/tools/call, desktop approval queue,
 provider registry, agent registry, worker provider/agent routing, OpenClaw
-prompt/config sync, Skills/MCP registry foundation, scheduled task runner, and
-diagnostics surface now exist; the next highest-value slices are extending the
-same approval pattern to search/browser tools and proving a real OpenClaw
-provider end-to-end.
+prompt/config sync, Skills/MCP registry foundation, per-agent MCP policy,
+scheduled task runner, and diagnostics surface now exist; the next highest-value
+slices are extending the same approval pattern to search/browser tools and
+proving a real OpenClaw provider end-to-end.

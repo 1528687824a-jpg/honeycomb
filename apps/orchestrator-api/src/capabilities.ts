@@ -290,6 +290,9 @@ const capabilities: RuntimeCapability[] = [
       "POST /mcp-servers",
       "PATCH /mcp-servers/:serverId",
       "POST /mcp-servers/:serverId/check",
+      "GET /mcp-policies",
+      "POST /mcp-policies",
+      "PATCH /mcp-policies/:policyId",
       "POST /mcp-servers/:serverId/tools/list",
       "POST /mcp-servers/:serverId/resources/list",
       "POST /mcp-servers/:serverId/tools/call"
@@ -302,15 +305,15 @@ const capabilities: RuntimeCapability[] = [
       "Approval-gated MCP stdio initialize + tools/call proxy",
       "Approval-gated MCP tools/list and resources/list discovery",
       "MCP discovery results cached into server config for UI use",
+      "Per-agent MCP access policies for tools/list, resources/list, and tools/call",
       "MCP timeout and output caps",
       "MCP call audit events"
     ],
     missing: [
-      "Long-lived MCP sessions",
-      "Per-agent MCP access policy enforcement"
+      "Long-lived MCP sessions"
     ],
     nextActions: [
-      "Add MCP long-lived sessions and per-agent policy"
+      "Add MCP long-lived sessions"
     ]
   },
   {
@@ -334,7 +337,7 @@ const capabilities: RuntimeCapability[] = [
       "Approval-gated web search",
       "Approval-gated browser automation",
       "Long-lived MCP execution sessions",
-      "Per-agent network/MCP access policy enforcement"
+      "Per-agent network access policy enforcement"
     ],
     nextActions: [
       "Implement web search/browser gateways and MCP session reuse"
@@ -431,7 +434,7 @@ export function getRuntimeCapabilities(): RuntimeCapabilitiesResponse {
     summary,
     capabilities,
     recommendedNext: [
-      "Approval-gated search/browser tool calls, MCP session reuse, and per-agent MCP policy",
+      "Approval-gated search/browser tool calls, MCP session reuse, and per-agent network policy",
       "Schedule configuration UI",
       "Packaged OpenClaw launch/restart command defaults and real E2E regression"
     ]

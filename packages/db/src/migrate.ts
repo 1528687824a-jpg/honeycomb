@@ -270,6 +270,20 @@ const statements = [
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now()
   )`,
+  `create table if not exists agent.agent_mcp_policies (
+    id text primary key,
+    agent_config_id text not null references agent.agent_configs(id) on delete cascade,
+    mcp_server_id text not null references agent.mcp_servers(id) on delete cascade,
+    enabled boolean not null default true,
+    allow_tools_list boolean not null default true,
+    allow_resources_list boolean not null default false,
+    allow_all_tools boolean not null default false,
+    allowed_tools jsonb not null default '[]',
+    metadata jsonb not null default '{}',
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    unique(agent_config_id, mcp_server_id)
+  )`,
   `create table if not exists agent.scheduled_tasks (
     id text primary key,
     title text not null,
@@ -366,6 +380,10 @@ const statements = [
     on agent.skill_registry(enabled, updated_at desc)`,
   `create index if not exists mcp_servers_enabled_status_idx
     on agent.mcp_servers(enabled, status, updated_at desc)`,
+  `create index if not exists agent_mcp_policies_agent_idx
+    on agent.agent_mcp_policies(agent_config_id, enabled, updated_at desc)`,
+  `create index if not exists agent_mcp_policies_server_idx
+    on agent.agent_mcp_policies(mcp_server_id, enabled, updated_at desc)`,
   `create index if not exists scheduled_tasks_enabled_next_run_idx
     on agent.scheduled_tasks(enabled, next_run_at)
     where next_run_at is not null`,

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   MCP_SERVER_STATUSES,
+  type AgentMcpPolicyRecord,
   type McpServerRecord,
   type McpServerStatus,
   type SkillRegistryRecord
@@ -50,6 +51,22 @@ function toMcpServerRecord(row: any): McpServerRecord {
     lastCheckedAt: row.last_checked_at ? row.last_checked_at.toISOString() : null,
     lastError: row.last_error,
     config: row.config ?? {},
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString()
+  };
+}
+
+function toAgentMcpPolicyRecord(row: any): AgentMcpPolicyRecord {
+  return {
+    id: row.id,
+    agentId: row.agent_config_id,
+    serverId: row.mcp_server_id,
+    enabled: row.enabled ?? true,
+    allowToolsList: row.allow_tools_list ?? true,
+    allowResourcesList: row.allow_resources_list ?? false,
+    allowAllTools: row.allow_all_tools ?? false,
+    allowedTools: normalizeStringArray(row.allowed_tools),
+    metadata: row.metadata ?? {},
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString()
   };
@@ -216,4 +233,149 @@ export async function patchMcpServer(
     lastError: input.lastError !== undefined ? input.lastError : current.lastError,
     config: input.config ?? current.config
   });
+}
+
+export async function listAgentMcpPolicies(input: {
+  agentId?: string;
+  serverId?: string;
+} = {}): Promise<AgentMcpPolicyRecord[]> {
+  const where: string[] = [];
+  const values: unknown[] = [];
+  if (input.agentId) {
+    values.push(input.agentId);
+    where.push(`agent_config_id = $${values.length}`);
+  }
+  if (input.serverId) {
+    values.push(input.serverId);
+    where.push(`mcp_server_id = $${values.length}`);
+  }
+
+  const result = await pool.query(
+    `select *
+     from agent.agent_mcp_policies
+     ${where.length > 0 ? `where ${where.join(" and ")}` : ""}
+     order by enabled desc, updated_at desc, agent_config_id asc, mcp_server_id asc`,
+    values
+  );
+  return result.rows.map(toAgentMcpPolicyRecord);
+}
+
+export async function getAgentMcpPolicy(policyId: string): Promise<AgentMcpPolicyRecord | null> {
+  const result = await pool.query(`select * from agent.agent_mcp_policies where id = $1`, [
+    policyId
+  ]);
+  return result.rows[0] ? toAgentMcpPolicyRecord(result.rows[0]) : null;
+}
+
+export async function getAgentMcpPolicyFor(input: {
+  agentId: string;
+  serverId: string;
+}): Promise<AgentMcpPolicyRecord | null> {
+  const result = await pool.query(
+    `select *
+     from agent.agent_mcp_policies
+     where agent_config_id = $1 and mcp_server_id = $2`,
+    [input.agentId, input.serverId]
+  );
+  return result.rows[0] ? toAgentMcpPolicyRecord(result.rows[0]) : null;
+}
+
+export async function upsertAgentMcpPolicy(input: {
+  id?: string;
+  agentId: string;
+  serverId: string;
+  enabled?: boolean;
+  allowToolsList?: boolean;
+  allowResourcesList?: boolean;
+  allowAllTools?: boolean;
+  allowedTools?: string[];
+  metadata?: Record<string, unknown>;
+}): Promise<AgentMcpPolicyRecord> {
+  const id = input.id?.trim() || fallbackId("mcp-policy");
+  const result = await pool.query(
+    `insert into agent.agent_mcp_policies (
+      id,
+      agent_config_id,
+      mcp_server_id,
+      enabled,
+      allow_tools_list,
+      allow_resources_list,
+      allow_all_tools,
+      allowed_tools,
+      metadata
+    ) values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb)
+    on conflict (agent_config_id, mcp_server_id) do update set
+      enabled = excluded.enabled,
+      allow_tools_list = excluded.allow_tools_list,
+      allow_resources_list = excluded.allow_resources_list,
+      allow_all_tools = excluded.allow_all_tools,
+      allowed_tools = excluded.allowed_tools,
+      metadata = excluded.metadata,
+      updated_at = now()
+    returning *`,
+    [
+      id,
+      input.agentId,
+      input.serverId,
+      input.enabled ?? true,
+      input.allowToolsList ?? true,
+      input.allowResourcesList ?? false,
+      input.allowAllTools ?? false,
+      JSON.stringify(input.allowedTools ?? []),
+      JSON.stringify(input.metadata ?? {})
+    ]
+  );
+  return toAgentMcpPolicyRecord(result.rows[0]);
+}
+
+export async function patchAgentMcpPolicy(
+  policyId: string,
+  input: Partial<{
+    enabled: boolean;
+    allowToolsList: boolean;
+    allowResourcesList: boolean;
+    allowAllTools: boolean;
+    allowedTools: string[];
+    metadata: Record<string, unknown>;
+  }>
+): Promise<AgentMcpPolicyRecord | null> {
+  const current = await getAgentMcpPolicy(policyId);
+  if (!current) {
+    return null;
+  }
+  return upsertAgentMcpPolicy({
+    id: current.id,
+    agentId: current.agentId,
+    serverId: current.serverId,
+    enabled: input.enabled ?? current.enabled,
+    allowToolsList: input.allowToolsList ?? current.allowToolsList,
+    allowResourcesList: input.allowResourcesList ?? current.allowResourcesList,
+    allowAllTools: input.allowAllTools ?? current.allowAllTools,
+    allowedTools: input.allowedTools ?? current.allowedTools,
+    metadata: input.metadata ?? current.metadata
+  });
+}
+
+export function isAgentMcpPolicyAllowed(
+  policy: AgentMcpPolicyRecord | null,
+  input: {
+    operation: "tools/list" | "resources/list" | "tools/call";
+    toolName?: string;
+  }
+) {
+  if (!policy?.enabled) {
+    return false;
+  }
+
+  if (input.operation === "tools/list") {
+    return policy.allowToolsList;
+  }
+  if (input.operation === "resources/list") {
+    return policy.allowResourcesList;
+  }
+
+  if (policy.allowAllTools) {
+    return true;
+  }
+  return Boolean(input.toolName && policy.allowedTools.includes(input.toolName));
 }

@@ -60,11 +60,16 @@ import {
   upsertModelProvider
 } from "../../../packages/db/src/config-registry";
 import {
+  getAgentMcpPolicyFor,
   getMcpServer,
+  isAgentMcpPolicyAllowed,
+  listAgentMcpPolicies,
   listMcpServers,
   listSkills,
+  patchAgentMcpPolicy,
   patchMcpServer,
   patchSkill,
+  upsertAgentMcpPolicy,
   upsertMcpServer,
   upsertSkill
 } from "../../../packages/db/src/tool-registry";
@@ -278,6 +283,29 @@ const mcpListSchema = z.object({
   timeoutMs: z.number().int().min(1000).max(120000).optional(),
   maxOutputBytes: z.number().int().min(1).max(1024 * 1024).optional(),
   approvalId: z.string().trim().min(1).max(200)
+});
+
+const mcpPolicyQuerySchema = z.object({
+  agentId: z.string().trim().min(1).max(160).optional(),
+  serverId: z.string().trim().min(1).max(160).optional()
+});
+
+const mcpPolicySchema = z.object({
+  id: z.string().trim().min(1).max(160).optional(),
+  agentId: z.string().trim().min(1).max(160),
+  serverId: z.string().trim().min(1).max(160),
+  enabled: z.boolean().optional(),
+  allowToolsList: z.boolean().optional(),
+  allowResourcesList: z.boolean().optional(),
+  allowAllTools: z.boolean().optional(),
+  allowedTools: z.array(z.string().trim().min(1).max(200)).max(200).optional(),
+  metadata: z.record(z.unknown()).optional()
+});
+
+const patchMcpPolicySchema = mcpPolicySchema.partial().omit({
+  id: true,
+  agentId: true,
+  serverId: true
 });
 
 const scheduleBaseSchema = z.object({
@@ -546,6 +574,37 @@ function mcpDiscoveryConfigEntry(result: unknown) {
     count: tools?.length ?? resources?.length ?? null,
     result
   };
+}
+
+async function requireMcpPolicy(input: {
+  agentId: string;
+  serverId: string;
+  operation: "tools/list" | "resources/list" | "tools/call";
+  toolName?: string;
+}) {
+  const policy = await getAgentMcpPolicyFor({
+    agentId: input.agentId,
+    serverId: input.serverId
+  });
+  if (!policy) {
+    throw new McpToolError("mcp_policy_denied", "Agent is not allowed to use this MCP operation.", {
+      agentId: input.agentId,
+      serverId: input.serverId,
+      operation: input.operation,
+      toolName: input.toolName ?? null,
+      policyId: null
+    });
+  }
+  if (!isAgentMcpPolicyAllowed(policy, input)) {
+    throw new McpToolError("mcp_policy_denied", "Agent is not allowed to use this MCP operation.", {
+      agentId: input.agentId,
+      serverId: input.serverId,
+      operation: input.operation,
+      toolName: input.toolName ?? null,
+      policyId: policy?.id ?? null
+    });
+  }
+  return policy;
 }
 
 function stableIdFromName(prefix: string, value: string) {
@@ -1144,6 +1203,48 @@ async function main() {
     }
   });
 
+  app.get("/mcp-policies", async (request, response, next) => {
+    try {
+      const query = mcpPolicyQuerySchema.parse(request.query);
+      response.json({
+        policies: await listAgentMcpPolicies(query)
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/mcp-policies", async (request, response, next) => {
+    try {
+      const input = mcpPolicySchema.parse(request.body ?? {});
+      if (!(await getAgentConfig(input.agentId))) {
+        response.status(404).json({ error: "agent_not_found" });
+        return;
+      }
+      if (!(await getMcpServer(input.serverId))) {
+        response.status(404).json({ error: "mcp_server_not_found" });
+        return;
+      }
+      response.status(201).json(await upsertAgentMcpPolicy(input));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.patch("/mcp-policies/:policyId", async (request, response, next) => {
+    try {
+      const input = patchMcpPolicySchema.parse(request.body ?? {});
+      const policy = await patchAgentMcpPolicy(request.params.policyId, input);
+      if (!policy) {
+        response.status(404).json({ error: "mcp_policy_not_found" });
+        return;
+      }
+      response.json(policy);
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post("/mcp-servers/:serverId/tools/list", async (request, response, next) => {
     try {
       const input = mcpListSchema.parse(request.body ?? {});
@@ -1199,6 +1300,12 @@ async function main() {
         return;
       }
 
+      const policy = await requireMcpPolicy({
+        agentId: approval.agentId,
+        serverId: server.id,
+        operation: "tools/list"
+      });
+
       const consumed = await consumeToolApproval({
         approvalId: approval.id,
         consumedBy: "mcp.tools/list"
@@ -1233,6 +1340,7 @@ async function main() {
         "tool.mcp_tools_list_completed",
         {
           approvalId: approval.id,
+          policyId: policy.id,
           serverId: server.id,
           serverName: server.name,
           resultPreview: previewJson(result.result),
@@ -1310,6 +1418,12 @@ async function main() {
         return;
       }
 
+      const policy = await requireMcpPolicy({
+        agentId: approval.agentId,
+        serverId: server.id,
+        operation: "resources/list"
+      });
+
       const consumed = await consumeToolApproval({
         approvalId: approval.id,
         consumedBy: "mcp.resources/list"
@@ -1344,6 +1458,7 @@ async function main() {
         "tool.mcp_resources_list_completed",
         {
           approvalId: approval.id,
+          policyId: policy.id,
           serverId: server.id,
           serverName: server.name,
           resultPreview: previewJson(result.result),
@@ -1424,6 +1539,13 @@ async function main() {
         return;
       }
 
+      const policy = await requireMcpPolicy({
+        agentId: approval.agentId,
+        serverId: server.id,
+        operation: "tools/call",
+        toolName: input.toolName
+      });
+
       const consumed = await consumeToolApproval({
         approvalId: approval.id,
         consumedBy: "mcp.tools/call"
@@ -1450,6 +1572,7 @@ async function main() {
         "tool.mcp_call_completed",
         {
           approvalId: approval.id,
+          policyId: policy.id,
           serverId: server.id,
           serverName: server.name,
           toolName: input.toolName,
