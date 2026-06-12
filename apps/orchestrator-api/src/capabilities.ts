@@ -82,6 +82,34 @@ const capabilities: RuntimeCapability[] = [
     ]
   },
   {
+    id: "local_api_security",
+    title: "Local API security baseline",
+    status: "partial",
+    summary: "Non-health routes require a local Honeycomb bearer token, and Docker API/Postgres ports are published only on 127.0.0.1; remaining security review items are tracked.",
+    routes: [
+      "GET /health",
+      "all non-health API routes"
+    ],
+    implemented: [
+      "Bearer-token middleware for non-health API routes",
+      "Authorization, x-honeycomb-token, and SSE access_token support",
+      "Desktop launcher generates a per-machine local token",
+      "Desktop API client injects the token automatically",
+      "Docker API port binds to 127.0.0.1:3000",
+      "Docker Postgres port binds to 127.0.0.1:5432",
+      "Source and Docker smoke tests assert missing-token rejection"
+    ],
+    missing: [
+      "Registered workspace root whitelist",
+      "OS keychain/DPAPI encryption for saved API keys",
+      "Approval expiry and stronger decided-by trust boundary",
+      "DNS pinning for web fetch connect-time revalidation"
+    ],
+    nextActions: [
+      "Close the remaining HONEYC~2.MD S2/S4/S5/S6 security items before expanding search/browser tool exposure"
+    ]
+  },
+  {
     id: "plans_todos",
     title: "Plans and Todo",
     status: "ready",
@@ -434,6 +462,7 @@ export function getRuntimeCapabilities(): RuntimeCapabilitiesResponse {
     summary,
     capabilities,
     recommendedNext: [
+      "Finish HONEYC~2.MD security hardening: workspace root whitelist, keychain storage, approval expiry, and DNS pinning",
       "Approval-gated search/browser tool calls, MCP session reuse, and per-agent network policy",
       "Schedule configuration UI",
       "Packaged OpenClaw launch/restart command defaults and real E2E regression"

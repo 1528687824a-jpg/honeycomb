@@ -138,6 +138,7 @@ import {
 } from "./local-secrets";
 import { verifyOpenAiCompatibleProvider } from "./provider-verification";
 import { checkMcpCommand } from "./mcp-diagnostics";
+import { requireApiToken } from "./api-auth";
 import {
   formatMcpListCommand,
   formatMcpListTarget,
@@ -707,6 +708,7 @@ async function main() {
   const app = express();
   await launchDbos();
   const port = Number(process.env.ORCHESTRATOR_PORT ?? 3000);
+  const host = process.env.ORCHESTRATOR_HOST?.trim() || "127.0.0.1";
   const corsOrigins = getCorsOrigins();
 
   app.use((request, response, next) => {
@@ -715,7 +717,10 @@ async function main() {
       response.header("access-control-allow-origin", origin);
       response.header("vary", "Origin");
       response.header("access-control-allow-methods", "GET,POST,PATCH,OPTIONS");
-      response.header("access-control-allow-headers", "content-type,x-admin-token");
+      response.header(
+        "access-control-allow-headers",
+        "authorization,content-type,x-admin-token,x-honeycomb-token"
+      );
     }
 
     if (request.method === "OPTIONS") {
@@ -726,6 +731,7 @@ async function main() {
     next();
   });
 
+  app.use(requireApiToken);
   app.use(express.json({ limit: "1mb" }));
 
   app.get("/health", (_request, response) => {
@@ -2686,8 +2692,8 @@ async function main() {
     response.status(500).json({ error: "internal_error" });
   });
 
-  app.listen(port, () => {
-    console.log(`Orchestrator API listening on http://localhost:${port}`);
+  app.listen(port, host, () => {
+    console.log(`Orchestrator API listening on http://${host}:${port}`);
   });
 }
 

@@ -1,4 +1,43 @@
-const API_BASE = import.meta.env.VITE_ORCHESTRATOR_URL ?? "http://localhost:3000";
+const API_BASE = import.meta.env.VITE_ORCHESTRATOR_URL ?? "http://127.0.0.1:3000";
+const STATIC_API_AUTH_TOKEN = import.meta.env.VITE_HONEYCOMB_API_TOKEN ?? "";
+
+let apiAuthTokenPromise: Promise<string | null> | null = null;
+
+function browserStoredApiToken() {
+  try {
+    return window.localStorage.getItem("honeycomb.apiToken")?.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+async function loadApiAuthToken() {
+  if (STATIC_API_AUTH_TOKEN.trim()) {
+    return STATIC_API_AUTH_TOKEN.trim();
+  }
+
+  const stored = browserStoredApiToken();
+  if (stored) {
+    return stored;
+  }
+
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const token = await invoke<string | null>("load_api_auth_token");
+    const trimmed = token?.trim() || null;
+    if (trimmed) {
+      window.localStorage.setItem("honeycomb.apiToken", trimmed);
+    }
+    return trimmed;
+  } catch {
+    return null;
+  }
+}
+
+async function getApiAuthToken() {
+  apiAuthTokenPromise ??= loadApiAuthToken();
+  return apiAuthTokenPromise;
+}
 
 function appendSearchParams(
   params: URLSearchParams,
@@ -1053,12 +1092,19 @@ export type ListSessionsInput = {
 };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers);
+  if (!headers.has("content-type")) {
+    headers.set("content-type", "application/json");
+  }
+
+  const token = await getApiAuthToken();
+  if (token) {
+    headers.set("authorization", `Bearer ${token}`);
+  }
+
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
-    headers: {
-      "content-type": "application/json",
-      ...init?.headers
-    }
+    headers
   });
 
   if (!response.ok) {
@@ -1455,12 +1501,16 @@ export async function getSessionEvents(sessionId: string, limit = 500) {
   return request<SessionEventsResponse>(`/sessions/${encodeURIComponent(sessionId)}/events?${params.toString()}`);
 }
 
-export function createSessionEventsSource(
+export async function createSessionEventsSource(
   sessionId: string,
   input: SessionEventsStreamInput = {}
 ) {
   const params = new URLSearchParams();
   appendSearchParams(params, input);
+  const token = await getApiAuthToken();
+  if (token) {
+    params.set("access_token", token);
+  }
   const query = params.toString();
   const suffix = query ? `?${query}` : "";
   return new EventSource(

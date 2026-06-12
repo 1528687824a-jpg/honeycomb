@@ -15,13 +15,15 @@ $honeycombSecretHostDir = Join-Path ([Environment]::GetFolderPath("ApplicationDa
 $dockerProbeTimeoutSeconds = 10
 $dockerCommandTimeoutSeconds = 90
 $desktopBuildTimeoutSeconds = 600
-$apiHealthUrl = "http://localhost:3000/health"
+$apiHealthUrl = "http://127.0.0.1:3000/health"
 $desktopLaunched = $false
 
 Set-Location $root
 New-Item -ItemType Directory -Force -Path "logs", ".runtime" | Out-Null
 New-Item -ItemType Directory -Force -Path $honeycombRuntimeHostDir | Out-Null
 New-Item -ItemType Directory -Force -Path $honeycombSecretHostDir | Out-Null
+. (Join-Path $PSScriptRoot "honeycomb-api-token.ps1")
+Initialize-HoneycombApiToken | Out-Null
 $env:HONEYCOMB_OPENCLAW_RUNTIME_HOST_DIR = $honeycombRuntimeHostDir
 $env:HONEYCOMB_SECRET_HOST_DIR = $honeycombSecretHostDir
 $env:HONEYCOMB_OPENCLAW_RUNTIME_DIR = "/app/honeycomb-runtime"

@@ -3,6 +3,9 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $docker = "docker"
 $composeProject = "agent-openclaw-smoke"
+. (Join-Path $PSScriptRoot "honeycomb-api-token.ps1")
+$apiHeaders = Get-HoneycombApiHeaders
+$apiBaseUrl = "http://127.0.0.1:3000"
 
 function Invoke-DockerCompose {
   param(
@@ -25,10 +28,10 @@ function Invoke-Json {
   )
 
   if ($Body) {
-    return Invoke-RestMethod -Uri $Uri -Method $Method -ContentType "application/json" -Body ($Body | ConvertTo-Json -Depth 10)
+    return Invoke-RestMethod -Uri $Uri -Method $Method -Headers $apiHeaders -ContentType "application/json" -Body ($Body | ConvertTo-Json -Depth 10)
   }
 
-  return Invoke-RestMethod -Uri $Uri -Method $Method
+  return Invoke-RestMethod -Uri $Uri -Method $Method -Headers $apiHeaders
 }
 
 function Assert-Equal {
@@ -57,7 +60,7 @@ function Assert-True {
 function Wait-ForHealth {
   for ($i = 0; $i -lt 90; $i++) {
     try {
-      $health = Invoke-Json -Uri "http://localhost:3000/health"
+      $health = Invoke-Json -Uri "$apiBaseUrl/health"
       if ($health.ok -eq $true) {
         return
       }
@@ -76,7 +79,7 @@ function Wait-ForTerminalStatus {
 
   for ($i = 0; $i -lt 120; $i++) {
     Start-Sleep -Seconds 1
-    $job = Invoke-Json -Uri "http://localhost:3000/jobs/$JobId"
+    $job = Invoke-Json -Uri "$apiBaseUrl/jobs/$JobId"
     if (@("succeeded", "failed", "waiting_for_human", "cancelled") -contains $job.status) {
       return $job
     }
@@ -93,8 +96,16 @@ try {
   Invoke-DockerCompose -Arguments @("up", "-d", "--build")
   Wait-ForHealth
 
+  $unauthorizedStatus = $null
+  try {
+    Invoke-WebRequest -Uri "$apiBaseUrl/jobs?limit=1" -UseBasicParsing | Out-Null
+  } catch {
+    $unauthorizedStatus = [int]$_.Exception.Response.StatusCode
+  }
+  Assert-Equal -Actual $unauthorizedStatus -Expected 401 -Message "unauthenticated job list should be rejected"
+
   $created = Invoke-Json `
-    -Uri "http://localhost:3000/jobs" `
+    -Uri "$apiBaseUrl/jobs" `
     -Method "Post" `
     -Body @{
       prompt = "Docker Compose smoke: run the mock platform quickstart job"
@@ -108,14 +119,14 @@ try {
   Assert-Equal -Actual $job.status -Expected "succeeded" -Message "job terminal status"
   Assert-Equal -Actual $job.ingressOrigin -Expected "http" -Message "job ingress origin"
 
-  $messages = Invoke-Json -Uri "http://localhost:3000/jobs/$($created.jobId)/messages"
+  $messages = Invoke-Json -Uri "$apiBaseUrl/jobs/$($created.jobId)/messages"
   Assert-True -Condition (@($messages.messages).Count -gt 0) -Message "expected message chain"
 
   Invoke-DockerCompose -Arguments @("down", "--remove-orphans")
   Invoke-DockerCompose -Arguments @("up", "-d")
   Wait-ForHealth
 
-  $persisted = Invoke-Json -Uri "http://localhost:3000/jobs/$($created.jobId)"
+  $persisted = Invoke-Json -Uri "$apiBaseUrl/jobs/$($created.jobId)"
   Assert-Equal -Actual $persisted.status -Expected "succeeded" -Message "persisted job status after restart"
 
   [pscustomobject]@{
@@ -127,6 +138,7 @@ try {
     persistenceCheck = "passed"
     checked = @(
       "compose_up_build",
+      "api_auth_rejects_missing_token",
       "http_create_job",
       "poll_succeeded",
       "get_messages",

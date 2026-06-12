@@ -92,6 +92,17 @@ changes land.
    - Runtime control API exposes status/start/restart/stop hooks when explicit
      host commands are configured.
 
+13. Local API security baseline
+   - All non-health API routes require a Honeycomb bearer token.
+   - Desktop launcher generates a per-machine random token under the local app
+     data directory and passes it to Docker/API and the UI.
+   - Desktop API calls send `Authorization: Bearer <token>`.
+   - SSE uses the same local token via `access_token` query because browser
+     `EventSource` cannot set custom headers.
+   - Docker API and Postgres ports are published only on `127.0.0.1`.
+   - Source/dev and Docker smoke tests assert that unauthenticated business API
+     requests are rejected.
+
 ## Partial Or Not Yet Real Enough
 
 1. OpenClaw real-agent orchestration
@@ -178,6 +189,16 @@ changes land.
    - Full installer readiness, Docker/WSL checks, and repair actions still need
      deeper backend diagnostics.
 
+10. Security hardening from `HONEYC~2.MD`
+   - S1 API bearer token and local-only Docker/Postgres port publishing are
+     implemented.
+   - S2 registered workspace root whitelist is still missing.
+   - S4 OS keychain/DPAPI encryption for saved API keys is still missing.
+   - S5 approval expiry, stronger decided-by trust boundary, and tighter
+     consume semantics still need review.
+   - S6 DNS rebinding TOCTOU mitigation needs hostname/IP pinning across fetch
+     connect time.
+
 ## Work Order
 
 ### Phase A: Make Product State Inspectable
@@ -224,21 +245,29 @@ changes land.
 
 ### Phase C: Make Tooling Useful And Safe
 
-6. Add desktop approval UI.
+6. Security baseline before broader tool exposure.
+   - Enforce local API auth and avoid LAN-exposed development services.
+   - Status: partial done. Non-health API routes now require a bearer token,
+     desktop/dev launchers generate and inject that token, and Docker API /
+     Postgres ports bind to `127.0.0.1`; registered workspace roots, OS
+     keychain storage, approval expiry, and DNS pinning remain.
+
+7. Add desktop approval UI.
    - Queue, detail, approve/reject/cancel.
    - Risk level text.
    - Live SSE updates.
    - Status: partial done. Pending queue, detail cards, and approve/reject
      controls exist; SSE refresh and policy editing are still missing.
 
-7. Add Skills/MCP registry.
+8. Add Skills/MCP registry.
    - CRUD skills and MCP servers.
    - Diagnostics and enable/disable switches.
    - Per-agent policy.
-   - Status: partial done. Registry and command diagnostics exist; real MCP call
-     execution and per-agent policy enforcement are still missing.
+   - Status: partial done. Registry, command diagnostics, approval-gated stdio
+     calls/discovery, and per-agent policy enforcement exist; long-lived MCP
+     sessions are still missing.
 
-8. Add approval-gated Web/MCP calls.
+9. Add approval-gated Web/MCP calls.
    - Same approval ledger as file/command.
    - Timeout/output caps.
    - Event stream visibility.
@@ -248,18 +277,18 @@ changes land.
 
 ### Phase D: Make It Operable Like A Product
 
-9. Add scheduled tasks.
+10. Add scheduled tasks.
    - One-time, daily, interval, manual tasks.
    - Bind workspace, model, and reasoning/execution settings.
    - Status: partial done. Schedule CRUD, due listing, next-run calculation,
      manual trigger-to-job, worker runner, and startup catch-up exist; product
      UI and model/reasoning policy binding are still missing.
 
-10. Add IM/mobile background agent.
+11. Add IM/mobile background agent.
     - Feishu/Lark/WeChat/relay setup.
     - Independent background sessions.
 
-11. Add installer/runtime diagnostics.
+12. Add installer/runtime diagnostics.
     - OpenClaw, WSL/Docker, database, API, worker, desktop bundle, and provider
       checks.
     - Safe repair actions.
@@ -268,12 +297,16 @@ changes land.
 
 ## Current Next Step
 
-Implement approval-gated search/browser calls, MCP session reuse, schedule
+Finish the remaining `HONEYC~2.MD` security hardening first: registered
+workspace root whitelist, OS keychain/DPAPI secret storage, approval expiry /
+trust-boundary tightening, and DNS pinning for web fetch. After that, implement
+approval-gated search/browser calls, MCP session reuse, schedule
 configuration UI, and packaged OpenClaw launch/restart integration. The
 backend approval ledger, approval-gated local tools, approval-gated web fetch,
 approval-gated MCP tools/list/resources/list/tools/call, desktop approval queue,
 provider registry, agent registry, worker provider/agent routing, OpenClaw
 prompt/config sync, Skills/MCP registry foundation, per-agent MCP policy,
 scheduled task runner, and diagnostics surface now exist; the next highest-value
-slices are extending the same approval pattern to search/browser tools and
-proving a real OpenClaw provider end-to-end.
+slices are closing the remaining security review items, extending the same
+approval pattern to search/browser tools, and proving a real OpenClaw provider
+end-to-end.

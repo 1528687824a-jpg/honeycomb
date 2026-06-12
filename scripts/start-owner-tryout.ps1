@@ -64,6 +64,8 @@ if (-not (Test-DockerReady)) {
 
 Set-Location $root
 New-Item -ItemType Directory -Force -Path ".runtime", "logs" | Out-Null
+. (Join-Path $PSScriptRoot "honeycomb-api-token.ps1")
+Initialize-HoneycombApiToken | Out-Null
 
 $statePath = Join-Path $root ".runtime\owner-tryout.json"
 if (Test-Path -LiteralPath $statePath) {
@@ -80,7 +82,7 @@ if ($LASTEXITCODE -ne 0) {
   throw "docker compose up failed"
 }
 
-$apiUrl = "http://localhost:3000"
+$apiUrl = "http://127.0.0.1:3000"
 $apiReady = $false
 for ($i = 1; $i -le 90; $i++) {
   if (Test-HttpReady "$apiUrl/health") {
@@ -113,7 +115,7 @@ while (-not (Test-PortAvailable $selectedPort)) {
 
 $desktopUrl = "http://127.0.0.1:$selectedPort"
 $desktopLog = Join-Path $root "logs\owner-tryout-desktop.log"
-$desktopCmd = "cd '$root'; `$env:VITE_ORCHESTRATOR_URL='http://localhost:3000'; npm --prefix apps/desktop-app run dev -- --host 127.0.0.1 --port $selectedPort --strictPort *> '$desktopLog'"
+$desktopCmd = "cd '$root'; `$env:VITE_ORCHESTRATOR_URL='http://127.0.0.1:3000'; `$env:VITE_HONEYCOMB_API_TOKEN='$env:HONEYCOMB_API_TOKEN'; npm --prefix apps/desktop-app run dev -- --host 127.0.0.1 --port $selectedPort --strictPort *> '$desktopLog'"
 
 Write-Output "Starting desktop UI on $desktopUrl..."
 $desktop = Start-Process -FilePath powershell -WindowStyle Hidden -PassThru -ArgumentList @(

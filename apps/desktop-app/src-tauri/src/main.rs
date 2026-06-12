@@ -488,6 +488,25 @@ fn load_provider_api_key(app: AppHandle) -> Result<Option<String>, String> {
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn load_api_auth_token(app: AppHandle) -> Result<Option<String>, String> {
+    let app_data = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    let token_path = app_data.join("honeycomb-api-token.txt");
+    if !token_path.exists() {
+        return Ok(None);
+    }
+    fs::read_to_string(token_path)
+        .map(|token| {
+            let trimmed = token.trim().to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
+        })
+        .map_err(|error| error.to_string())
+}
+
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
@@ -499,7 +518,8 @@ fn main() {
             save_agent_model_config,
             apply_openclaw_agent_setup,
             save_provider_api_key,
-            load_provider_api_key
+            load_provider_api_key,
+            load_api_auth_token
         ])
         .run(tauri::generate_context!())
         .expect("error while running Honeycomb desktop shell");

@@ -1,4 +1,5 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { mkdir, open, readFile, rm, stat, unlink, writeFile, type FileHandle } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
@@ -10,7 +11,7 @@ declare const WebSocket: any;
 const root = path.resolve(__dirname, "..");
 const desktopDir = path.join(root, "apps", "desktop-app");
 const runtimeDir = path.join(root, ".runtime", "desktop-ui-smoke");
-const apiUrl = "http://localhost:3000";
+const apiUrl = "http://127.0.0.1:3000";
 const mode = process.argv.includes("--prod") ? "prod" : "dev";
 const skipApiStart = process.argv.includes("--skip-api-start");
 const onboardingMode = process.argv.includes("--onboarding");
@@ -19,6 +20,7 @@ const uiPort = Number(process.env.DESKTOP_UI_SMOKE_PORT ?? (mode === "prod" ? 51
 const uiUrl = `http://127.0.0.1:${uiPort}`;
 const flowName = onboardingMode ? "onboarding-" : memoryMode ? "memory-" : "";
 const screenshotPath = path.join(runtimeDir, `desktop-ui-${flowName}${mode}-smoke.png`);
+let apiAuthToken = process.env.HONEYCOMB_API_TOKEN?.trim() ?? "";
 
 type CdpResponse = {
   id?: number;
@@ -53,6 +55,33 @@ function cleanEnv(env: NodeJS.ProcessEnv) {
     }
   }
   return output;
+}
+
+async function ensureApiAuthToken() {
+  if (apiAuthToken) {
+    process.env.HONEYCOMB_API_TOKEN = apiAuthToken;
+    process.env.VITE_HONEYCOMB_API_TOKEN = apiAuthToken;
+    return apiAuthToken;
+  }
+
+  const appDataDir = process.env.APPDATA || path.join(root, ".runtime");
+  const tokenPath = path.join(appDataDir, "io.agentopenclaw.desktop", "honeycomb-api-token.txt");
+  await mkdir(path.dirname(tokenPath), { recursive: true });
+
+  try {
+    apiAuthToken = (await readFile(tokenPath, "utf8")).trim();
+  } catch {
+    apiAuthToken = randomBytes(32).toString("base64url");
+    await writeFile(tokenPath, `${apiAuthToken}\n`, "utf8");
+  }
+
+  if (!apiAuthToken) {
+    throw new Error(`Honeycomb API token is empty: ${tokenPath}`);
+  }
+
+  process.env.HONEYCOMB_API_TOKEN = apiAuthToken;
+  process.env.VITE_HONEYCOMB_API_TOKEN = apiAuthToken;
+  return apiAuthToken;
 }
 
 function browserCandidates() {
@@ -1137,6 +1166,8 @@ async function runMemoryFlow(page: CdpClient) {
   const expression = String.raw`
     (async () => {
       const apiUrl = "${apiUrl}";
+      const apiAuthToken = ${JSON.stringify(apiAuthToken)};
+      const apiHeaders = apiAuthToken ? { authorization: "Bearer " + apiAuthToken } : {};
       const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
       const waitFor = async (fn, message, timeoutMs = 90000) => {
         const startedAt = Date.now();
@@ -1152,7 +1183,7 @@ async function runMemoryFlow(page: CdpClient) {
       const marker = "Desktop memory UI smoke " + Math.random().toString(16).slice(2);
       const created = await fetch(apiUrl + "/jobs", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { ...apiHeaders, "content-type": "application/json" },
         body: JSON.stringify({
           prompt: marker,
           requesterId: "desktop-memory-ui-smoke",
@@ -1162,12 +1193,12 @@ async function runMemoryFlow(page: CdpClient) {
       }).then((response) => response.json());
 
       await waitFor(async () => {
-        const job = await fetch(apiUrl + "/jobs/" + created.jobId).then((response) => response.json());
+        const job = await fetch(apiUrl + "/jobs/" + created.jobId, { headers: apiHeaders }).then((response) => response.json());
         return job.status === "succeeded";
       }, "memory smoke job did not succeed");
 
       await waitFor(async () => {
-        const response = await fetch(apiUrl + "/memory/experiences?status=candidate&limit=200")
+        const response = await fetch(apiUrl + "/memory/experiences?status=candidate&limit=200", { headers: apiHeaders })
           .then((candidateResponse) => candidateResponse.json());
         return response.experiences.some((experience) => experience.sourceJobId === created.jobId);
       }, "memory candidate was not created");
@@ -1265,6 +1296,7 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: str
 
 async function main() {
   logStep(`mode=${mode}; skipApiStart=${skipApiStart}; onboardingMode=${onboardingMode}; memoryMode=${memoryMode}; uiUrl=${uiUrl}`);
+  await ensureApiAuthToken();
   await mkdir(runtimeDir, { recursive: true });
   await rm(screenshotPath, { force: true });
   const smokeLock = skipApiStart ? null : await acquireSmokeLock("dev-stack");
@@ -1281,7 +1313,8 @@ async function main() {
         shell: process.platform === "win32",
         env: {
           ...process.env,
-          VITE_ORCHESTRATOR_URL: apiUrl
+          VITE_ORCHESTRATOR_URL: apiUrl,
+          VITE_HONEYCOMB_API_TOKEN: apiAuthToken
         }
       });
       logStep("desktop production bundle built");
@@ -1301,6 +1334,7 @@ async function main() {
           FEISHU_ADAPTER_ENABLED: "false",
           FEISHU_DRY_RUN: "true",
           OPENCLAW_AGENT_MODE: "mock",
+          HONEYCOMB_API_TOKEN: apiAuthToken,
           AGENT_CLUSTER_CONFIG_PATH: "",
           ORCHESTRATOR_CORS_ORIGINS: [
             "http://localhost:5173",
@@ -1322,7 +1356,8 @@ async function main() {
         shell: process.platform === "win32",
         env: {
           ...process.env,
-          VITE_ORCHESTRATOR_URL: apiUrl
+          VITE_ORCHESTRATOR_URL: apiUrl,
+          VITE_HONEYCOMB_API_TOKEN: apiAuthToken
         }
       });
       vite.stdout?.on("data", (chunk) => process.stdout.write(chunk));

@@ -192,6 +192,8 @@ if (-not (Test-DockerReady -TimeoutSeconds $initialProbeTimeoutSeconds)) {
 }
 
 Set-Location $root
+. (Join-Path $PSScriptRoot "honeycomb-api-token.ps1")
+Initialize-HoneycombApiToken | Out-Null
 Invoke-ProcessWithTimeout -FilePath $dockerCli -ArgumentList @("compose", "stop", "orchestrator-api", "dbos-worker") -TimeoutSeconds $dockerCommandTimeoutSeconds -IgnoreExitCode | Out-Null
 Invoke-ProcessWithTimeout -FilePath $dockerCli -ArgumentList @("compose", "rm", "-f", "orchestrator-api", "dbos-worker") -TimeoutSeconds $dockerCommandTimeoutSeconds -IgnoreExitCode | Out-Null
 Invoke-ProcessWithTimeout -FilePath $dockerCli -ArgumentList @("compose", "up", "-d", "--remove-orphans", "postgres") -TimeoutSeconds $dockerCommandTimeoutSeconds | Out-Null
@@ -255,8 +257,27 @@ $api = Start-Process -FilePath powershell -WindowStyle Hidden -PassThru -Argumen
   apiPid = $api.Id
 } | ConvertTo-Json | Set-Content ".runtime\pids.json"
 
-Start-Sleep -Seconds 5
+$apiReady = Wait-ForCondition -TimeoutSeconds 90 -SleepSeconds 1 -Condition {
+  if (-not (Get-Process -Id $api.Id -ErrorAction SilentlyContinue)) {
+    return $false
+  }
+
+  try {
+    $health = Invoke-RestMethod -Uri "http://127.0.0.1:3000/health" -TimeoutSec 2
+    return $health.ok -eq $true
+  } catch {
+    return $false
+  }
+}
+
+if (-not $apiReady) {
+  $log = ""
+  if (Test-Path -LiteralPath "$root\logs\api.log") {
+    $log = (Get-Content -LiteralPath "$root\logs\api.log" -Tail 80 -ErrorAction SilentlyContinue) -join "`n"
+  }
+  throw "API did not become ready at http://127.0.0.1:3000 within 90 seconds.`n$log"
+}
 
 Write-Output "Dev services started"
-Write-Output "API: http://localhost:3000"
+Write-Output "API: http://127.0.0.1:3000"
 Get-Content ".runtime\pids.json"

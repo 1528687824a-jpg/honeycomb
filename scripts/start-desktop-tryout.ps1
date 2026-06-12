@@ -54,6 +54,8 @@ if (-not (Test-DockerReady)) {
 
 Set-Location $root
 New-Item -ItemType Directory -Force -Path ".runtime", "logs" | Out-Null
+. (Join-Path $PSScriptRoot "honeycomb-api-token.ps1")
+Initialize-HoneycombApiToken | Out-Null
 
 $statePath = Join-Path $root ".runtime\owner-tryout.json"
 if (Test-Path -LiteralPath $statePath) {
@@ -81,7 +83,7 @@ if ($LASTEXITCODE -ne 0) {
 
 $apiReady = $false
 for ($i = 1; $i -le 90; $i++) {
-  if (Test-HttpReady "http://localhost:3000/health") {
+  if (Test-HttpReady "http://127.0.0.1:3000/health") {
     $apiReady = $true
     break
   }
@@ -89,7 +91,7 @@ for ($i = 1; $i -le 90; $i++) {
 }
 
 if (-not $apiReady) {
-  throw "API did not become ready at http://localhost:3000"
+  throw "API did not become ready at http://127.0.0.1:3000"
 }
 
 $desktopNodeModules = Join-Path $root "apps\desktop-app\node_modules"
@@ -103,10 +105,10 @@ if (-not (Test-Path -LiteralPath $desktopNodeModules)) {
 
 Write-Output ""
 Write-Output "Launching honeycomb desktop app..."
-Write-Output "Backend API: http://localhost:3000"
+Write-Output "Backend API: http://127.0.0.1:3000"
 Write-Output "Close the Tauri window or press Ctrl+C in this terminal when done."
 Write-Output "Stop backend containers with: npm run tryout:stop"
 Write-Output ""
 
-$env:VITE_ORCHESTRATOR_URL = "http://localhost:3000"
+$env:VITE_ORCHESTRATOR_URL = "http://127.0.0.1:3000"
 npm --prefix apps/desktop-app run tauri:dev

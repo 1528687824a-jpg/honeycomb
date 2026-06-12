@@ -9,7 +9,7 @@ services:
       POSTGRES_PASSWORD: temporal
       POSTGRES_DB: temporal
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres17-data:/var/lib/postgresql/data
     healthcheck:
@@ -31,6 +31,8 @@ services:
       DBOS_SYSTEM_DATABASE_URL: postgresql://temporal:temporal@postgres:5432/temporal
       DBOS_SYSTEM_DATABASE_SCHEMA: dbos
       ORCHESTRATOR_PORT: "3000"
+      ORCHESTRATOR_HOST: "0.0.0.0"
+      HONEYCOMB_API_TOKEN: ${HONEYCOMB_API_TOKEN:-}
       JOB_DATA_DIR: /app/data/jobs
       FEISHU_ADAPTER_ENABLED: "false"
       FEISHU_DRY_RUN: "true"
@@ -42,7 +44,7 @@ services:
       HONEYCOMB_FIRST_RUN_AGENTS_DIR: ${HONEYCOMB_FIRST_RUN_AGENTS_DIR:-}
       HONEYCOMB_PANEL_SUPERVISOR_AGENT_ID: ${HONEYCOMB_PANEL_SUPERVISOR_AGENT_ID:-panel-supervisor-agent}
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     volumes:
       - job-data:/app/data/jobs
       - ${HONEYCOMB_SECRET_HOST_DIR:-./.runtime/honeycomb-secrets}:/app/honeycomb-secrets

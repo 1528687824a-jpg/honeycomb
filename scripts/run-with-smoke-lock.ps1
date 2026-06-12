@@ -23,6 +23,8 @@ if (-not (Test-Path -LiteralPath $resolvedScriptPath)) {
 }
 
 New-Item -ItemType Directory -Force -Path $lockDir | Out-Null
+. (Join-Path $PSScriptRoot "honeycomb-api-token.ps1")
+Initialize-HoneycombApiToken | Out-Null
 
 function Test-ProcessAlive {
   param([int]$ProcessId)
