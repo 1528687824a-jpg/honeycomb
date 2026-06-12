@@ -56,6 +56,12 @@ import {
 } from "./api";
 import { FirstRunPanel, type FirstRunFlow } from "./firstRun";
 import { HoneycombLogo } from "./brand";
+import {
+  loadSeenNotificationIds,
+  saveSeenNotificationIds,
+  showDesktopNotification,
+  type DesktopNotificationPayload
+} from "./notifications";
 import "./styles.css";
 
 type ApiState = "checking" | "online" | "offline";
@@ -243,6 +249,88 @@ const jobTimeFilters: Array<{ id: JobTimeFilter }> = [
   { id: "7d" },
   { id: "custom" }
 ];
+
+const notifiableJobStatuses = new Set<JobStatus>(["succeeded", "failed", "waiting_for_human"]);
+
+function isNewForDesktopNotification(timestamp: string | null | undefined, monitorStartedAt: number) {
+  if (!timestamp) return false;
+  const parsed = Date.parse(timestamp);
+  return Number.isFinite(parsed) && parsed >= monitorStartedAt - 5000;
+}
+
+function jobDesktopNotification(
+  job: JobRecord,
+  language: Language
+): DesktopNotificationPayload | null {
+  if (!notifiableJobStatuses.has(job.status)) {
+    return null;
+  }
+
+  if (job.status === "succeeded") {
+    return language === "zh"
+      ? {
+          id: `job:${job.id}:succeeded`,
+          title: "Honeycomb \u4efb\u52a1\u5df2\u5b8c\u6210",
+          body: `${job.id} \u5df2\u751f\u6210\u7ed3\u679c\u3002`,
+          tag: `honeycomb-job-${job.id}`
+        }
+      : {
+          id: `job:${job.id}:succeeded`,
+          title: "Honeycomb job completed",
+          body: `${job.id} generated a result.`,
+          tag: `honeycomb-job-${job.id}`
+        };
+  }
+
+  if (job.status === "failed") {
+    return language === "zh"
+      ? {
+          id: `job:${job.id}:failed`,
+          title: "Honeycomb \u4efb\u52a1\u5931\u8d25",
+          body: `${job.id} \u9700\u8981\u68c0\u67e5\u5931\u8d25\u539f\u56e0\u3002`,
+          tag: `honeycomb-job-${job.id}`
+        }
+      : {
+          id: `job:${job.id}:failed`,
+          title: "Honeycomb job failed",
+          body: `${job.id} needs attention.`,
+          tag: `honeycomb-job-${job.id}`
+        };
+  }
+
+  return language === "zh"
+    ? {
+        id: `job:${job.id}:waiting_for_human`,
+        title: "Honeycomb \u9700\u8981\u4f60\u51b3\u5b9a",
+        body: `${job.id} \u6b63\u5728\u7b49\u5f85\u4eba\u5de5\u5904\u7406\u3002`,
+        tag: `honeycomb-job-${job.id}`
+      }
+    : {
+        id: `job:${job.id}:waiting_for_human`,
+        title: "Honeycomb needs your input",
+        body: `${job.id} is waiting for a human decision.`,
+        tag: `honeycomb-job-${job.id}`
+      };
+}
+
+function approvalDesktopNotification(
+  approval: ToolApprovalRecord,
+  language: Language
+): DesktopNotificationPayload {
+  return language === "zh"
+    ? {
+        id: `approval:${approval.id}:pending`,
+        title: "Honeycomb \u6709\u65b0\u7684\u5de5\u5177\u5ba1\u6279",
+        body: `${approval.toolName} / ${approval.actionType} · ${approval.riskLevel}`,
+        tag: `honeycomb-approval-${approval.id}`
+      }
+    : {
+        id: `approval:${approval.id}:pending`,
+        title: "New Honeycomb approval",
+        body: `${approval.toolName} / ${approval.actionType} · ${approval.riskLevel}`,
+        tag: `honeycomb-approval-${approval.id}`
+      };
+}
 
 const languageOptions: Array<{ id: Language; label: string }> = [
   { id: "en", label: "English" },
@@ -1387,6 +1475,8 @@ function App() {
   const [runtimeRepairMessage, setRuntimeRepairMessage] = useState("");
   const [runtimeRepairError, setRuntimeRepairError] = useState("");
   const jobsRequestSeq = useRef(0);
+  const notificationStartedAt = useRef(Date.now());
+  const seenNotificationIds = useRef<Set<string>>(loadSeenNotificationIds());
   const copy = translations[language];
 
   const statusText = useMemo(() => {
@@ -1447,6 +1537,15 @@ function App() {
       .replaceAll("video", "视频")
       .replaceAll("test", "质检");
   };
+
+  function notifyOnce(payload: DesktopNotificationPayload) {
+    if (seenNotificationIds.current.has(payload.id)) {
+      return;
+    }
+    seenNotificationIds.current.add(payload.id);
+    saveSeenNotificationIds(seenNotificationIds.current);
+    void showDesktopNotification(payload);
+  }
 
   useEffect(() => {
     window.localStorage.setItem("agentOpenClaw.language", language);
@@ -2026,6 +2125,44 @@ function App() {
   }, [apiState, selectedJobId, jobStatusFilter, jobTimeFilter, customSince, customUntil, trimmedJobPromptFilter]);
 
   useEffect(() => {
+    if (apiState !== "online" || !setupComplete) return;
+    let cancelled = false;
+
+    async function pollJobNotifications() {
+      try {
+        const response = await listJobs({
+          limit: 50,
+          sort: "updatedAt",
+          order: "desc"
+        });
+        if (cancelled) {
+          return;
+        }
+        for (const job of response.jobs) {
+          if (!isNewForDesktopNotification(job.updatedAt, notificationStartedAt.current)) {
+            continue;
+          }
+          const payload = jobDesktopNotification(job, language);
+          if (payload) {
+            notifyOnce(payload);
+          }
+        }
+      } catch {
+        // Job notifications are best-effort; the jobs page still owns UI errors.
+      }
+    }
+
+    void pollJobNotifications();
+    const interval = window.setInterval(() => {
+      void pollJobNotifications();
+    }, 10_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [apiState, language, setupComplete]);
+
+  useEffect(() => {
     if (!selectedJobId || apiState !== "online") return;
     refreshJob(selectedJobId).catch((caught) =>
       setError(caught instanceof Error ? caught.message : String(caught))
@@ -2044,6 +2181,37 @@ function App() {
       setMemoryError(caught instanceof Error ? caught.message : String(caught))
     );
   }, [activeView, apiState, experienceFilter]);
+
+  useEffect(() => {
+    if (apiState !== "online" || !setupComplete) return;
+    let cancelled = false;
+
+    async function pollPendingApprovalNotifications() {
+      try {
+        const response = await listToolApprovals({ status: "pending", limit: 100 });
+        if (cancelled) {
+          return;
+        }
+        for (const approval of response.approvals) {
+          if (!isNewForDesktopNotification(approval.createdAt, notificationStartedAt.current)) {
+            continue;
+          }
+          notifyOnce(approvalDesktopNotification(approval, language));
+        }
+      } catch {
+        // Approval notifications are best-effort; the approvals page still owns UI errors.
+      }
+    }
+
+    void pollPendingApprovalNotifications();
+    const interval = window.setInterval(() => {
+      void pollPendingApprovalNotifications();
+    }, 10_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [apiState, language, setupComplete]);
 
   useEffect(() => {
     if (activeView !== "approvals" || apiState !== "online") return;

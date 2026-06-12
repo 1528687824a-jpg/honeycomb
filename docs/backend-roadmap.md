@@ -443,8 +443,11 @@ deliberately the LAST stage (user decision: finish the product first).
    and stalledAt; worker activities update heartbeat around long steps; API
    and diagnostics expose the state; the smoke test creates an expired running
    job and verifies scan/diagnostics behavior.
-3. Desktop system notifications for job completion/failure and pending
-   approvals (small; makes real long-running use bearable).
+3. Desktop system notifications: done for the current desktop webview path.
+   The app now uses the Web Notification API with local de-dupe storage for
+   job succeeded/failed/waiting-for-human events and newly pending approvals.
+   Unsupported or denied notification permission silently degrades without
+   breaking the panel.
 
 ### Stage B - Complete the core workflow (after the real loop is proven)
 
