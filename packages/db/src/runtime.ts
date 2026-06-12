@@ -1,5 +1,11 @@
 import { pool } from "./pool";
 import { createArtifact } from "./pipeline";
+import { listModelProviders } from "./config-registry";
+import {
+  estimateUsageCostUsd,
+  getProviderPricingRate,
+  roundEstimatedUsd
+} from "./pricing-policy";
 
 export type RuntimeLogSource = "job_event" | "agent_event" | "model_call";
 
@@ -54,6 +60,12 @@ export type RuntimeUsageResponse = {
       totalTokens: number;
       callsWithUsage: number;
     };
+    cost: {
+      currency: "USD";
+      estimatedUsd: number;
+      callsWithCost: number;
+      callsMissingPricing: number;
+    };
     events: {
       jobEvents: number;
       agentEvents: number;
@@ -70,6 +82,22 @@ export type RuntimeUsageResponse = {
     promptTokens: number;
     completionTokens: number;
     totalTokens: number;
+    estimatedUsd: number;
+    callsWithCost: number;
+    callsMissingPricing: number;
+  }>;
+  byProvider: Array<{
+    providerId: string | null;
+    providerDisplayName: string | null;
+    model: string | null;
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+    callsWithUsage: number;
+    callsWithCost: number;
+    callsMissingPricing: number;
+    estimatedUsd: number;
+    pricingSource: string | null;
   }>;
   byDay: Array<{
     day: string;
@@ -79,6 +107,9 @@ export type RuntimeUsageResponse = {
     promptTokens: number;
     completionTokens: number;
     totalTokens: number;
+    estimatedUsd: number;
+    callsWithCost: number;
+    callsMissingPricing: number;
   }>;
   byActionType: Array<{
     actionType: string;
@@ -229,6 +260,55 @@ function escapeLike(value: string) {
   return value.replace(/[\\%_]/g, (match) => `\\${match}`);
 }
 
+type UsageCostGroup = {
+  agentId: string;
+  day: string;
+  providerId: string | null;
+  model: string | null;
+  callsWithUsage: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+};
+
+function routeString(row: any, key: string) {
+  const value = row[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function providerCostKey(providerId: string | null, model: string | null) {
+  return `${providerId ?? ""}\u0000${model ?? ""}`;
+}
+
+function addCostBucket(
+  map: Map<string, { estimatedUsd: number; callsWithCost: number; callsMissingPricing: number }>,
+  key: string,
+  amountUsd: number,
+  callsWithUsage: number,
+  priced: boolean
+) {
+  const current = map.get(key) ?? {
+    estimatedUsd: 0,
+    callsWithCost: 0,
+    callsMissingPricing: 0
+  };
+  current.estimatedUsd += amountUsd;
+  if (priced) {
+    current.callsWithCost += callsWithUsage;
+  } else {
+    current.callsMissingPricing += callsWithUsage;
+  }
+  map.set(key, current);
+}
+
+function emptyCostBucket() {
+  return {
+    estimatedUsd: 0,
+    callsWithCost: 0,
+    callsMissingPricing: 0
+  };
+}
+
 export async function listRuntimeLogs(input: {
   source?: RuntimeLogSource;
   jobId?: string;
@@ -348,7 +428,18 @@ export async function getRuntimeUsage(input: {
     coalesce(sum((${usagePath}->>'completionTokens')::bigint), 0)::bigint as completion_tokens,
     coalesce(sum((${usagePath}->>'totalTokens')::bigint), 0)::bigint as total_tokens`;
 
-  const [jobs, modelCalls, events, byAgent, byActionType, recentFailures, tokens, byDay] = await Promise.all([
+  const [
+    jobs,
+    modelCalls,
+    events,
+    byAgent,
+    byActionType,
+    recentFailures,
+    tokens,
+    byDay,
+    usageCostGroups,
+    providers
+  ] = await Promise.all([
     pool.query(
       `select
          count(*)::int as total,
@@ -438,12 +529,120 @@ export async function getRuntimeUsage(input: {
        order by 1 desc
        limit 60`,
       values
-    )
+    ),
+    pool.query(
+      `select
+         agent_id,
+         to_char(date_trunc('day', created_at), 'YYYY-MM-DD') as day,
+         nullif(response_payload->'route'->>'providerId', '') as provider_id,
+         nullif(response_payload->'route'->>'model', '') as model,
+         count(*) filter (where ${usagePath} is not null)::int as calls_with_usage,
+         ${tokenSums}
+       from agent.model_calls
+       ${whereSql}
+       group by agent_id, day, provider_id, model`,
+      values
+    ),
+    listModelProviders()
   ]);
 
   const jobRow = jobs.rows[0] ?? {};
   const modelRow = modelCalls.rows[0] ?? {};
   const eventRow = events.rows[0] ?? {};
+  const providerById = new Map<string, (typeof providers)[number]>();
+  for (const provider of providers) {
+    providerById.set(provider.id, provider);
+  }
+
+  const agentCost = new Map<string, ReturnType<typeof emptyCostBucket>>();
+  const dayCost = new Map<string, ReturnType<typeof emptyCostBucket>>();
+  const providerCost = new Map<
+    string,
+    {
+      providerId: string | null;
+      providerDisplayName: string | null;
+      model: string | null;
+      promptTokens: number;
+      completionTokens: number;
+      totalTokens: number;
+      callsWithUsage: number;
+      callsWithCost: number;
+      callsMissingPricing: number;
+      estimatedUsd: number;
+      pricingSource: string | null;
+    }
+  >();
+  let totalEstimatedUsd = 0;
+  let totalCallsWithCost = 0;
+  let totalCallsMissingPricing = 0;
+
+  for (const row of usageCostGroups.rows) {
+    const group: UsageCostGroup = {
+      agentId: row.agent_id,
+      day: row.day,
+      providerId: routeString(row, "provider_id"),
+      model: routeString(row, "model"),
+      callsWithUsage: Number(row.calls_with_usage ?? 0),
+      promptTokens: Number(row.prompt_tokens ?? 0),
+      completionTokens: Number(row.completion_tokens ?? 0),
+      totalTokens: Number(row.total_tokens ?? 0)
+    };
+
+    if (group.callsWithUsage <= 0) {
+      continue;
+    }
+
+    const provider = group.providerId ? providerById.get(group.providerId) ?? null : null;
+    const rate = provider
+      ? getProviderPricingRate(provider.metadata, group.model ?? provider.defaultModel)
+      : null;
+    const amountUsd = rate
+      ? estimateUsageCostUsd(
+        {
+          promptTokens: group.promptTokens,
+          completionTokens: group.completionTokens
+        },
+        rate
+      )
+      : 0;
+    const priced = Boolean(rate);
+
+    totalEstimatedUsd += amountUsd;
+    if (priced) {
+      totalCallsWithCost += group.callsWithUsage;
+    } else {
+      totalCallsMissingPricing += group.callsWithUsage;
+    }
+    addCostBucket(agentCost, group.agentId, amountUsd, group.callsWithUsage, priced);
+    addCostBucket(dayCost, group.day, amountUsd, group.callsWithUsage, priced);
+
+    const providerKey = providerCostKey(group.providerId, group.model);
+    const current = providerCost.get(providerKey) ?? {
+      providerId: group.providerId,
+      providerDisplayName: provider?.displayName ?? null,
+      model: group.model,
+      promptTokens: 0,
+      completionTokens: 0,
+      totalTokens: 0,
+      callsWithUsage: 0,
+      callsWithCost: 0,
+      callsMissingPricing: 0,
+      estimatedUsd: 0,
+      pricingSource: rate?.source ?? null
+    };
+    current.promptTokens += group.promptTokens;
+    current.completionTokens += group.completionTokens;
+    current.totalTokens += group.totalTokens;
+    current.callsWithUsage += group.callsWithUsage;
+    current.estimatedUsd += amountUsd;
+    if (priced) {
+      current.callsWithCost += group.callsWithUsage;
+      current.pricingSource ??= rate?.source ?? null;
+    } else {
+      current.callsMissingPricing += group.callsWithUsage;
+    }
+    providerCost.set(providerKey, current);
+  }
 
   return {
     summary: {
@@ -468,6 +667,12 @@ export async function getRuntimeUsage(input: {
         totalTokens: Number(tokens.rows[0]?.total_tokens ?? 0),
         callsWithUsage: Number(tokens.rows[0]?.calls_with_usage ?? 0)
       },
+      cost: {
+        currency: "USD",
+        estimatedUsd: roundEstimatedUsd(totalEstimatedUsd),
+        callsWithCost: totalCallsWithCost,
+        callsMissingPricing: totalCallsMissingPricing
+      },
       events: {
         jobEvents: Number(eventRow.job_events ?? 0),
         agentEvents: Number(eventRow.agent_events ?? 0),
@@ -483,8 +688,26 @@ export async function getRuntimeUsage(input: {
       started: Number(row.started ?? 0),
       promptTokens: Number(row.prompt_tokens ?? 0),
       completionTokens: Number(row.completion_tokens ?? 0),
-      totalTokens: Number(row.total_tokens ?? 0)
+      totalTokens: Number(row.total_tokens ?? 0),
+      estimatedUsd: roundEstimatedUsd(agentCost.get(row.agent_id)?.estimatedUsd ?? 0),
+      callsWithCost: agentCost.get(row.agent_id)?.callsWithCost ?? 0,
+      callsMissingPricing: agentCost.get(row.agent_id)?.callsMissingPricing ?? 0
     })),
+    byProvider: [...providerCost.values()]
+      .map((entry) => ({
+        providerId: entry.providerId,
+        providerDisplayName: entry.providerDisplayName,
+        model: entry.model,
+        promptTokens: entry.promptTokens,
+        completionTokens: entry.completionTokens,
+        totalTokens: entry.totalTokens,
+        callsWithUsage: entry.callsWithUsage,
+        callsWithCost: entry.callsWithCost,
+        callsMissingPricing: entry.callsMissingPricing,
+        estimatedUsd: roundEstimatedUsd(entry.estimatedUsd),
+        pricingSource: entry.pricingSource
+      }))
+      .sort((left, right) => right.estimatedUsd - left.estimatedUsd || right.totalTokens - left.totalTokens),
     byDay: byDay.rows.map((row) => ({
       day: row.day,
       total: Number(row.total ?? 0),
@@ -492,7 +715,10 @@ export async function getRuntimeUsage(input: {
       failed: Number(row.failed ?? 0),
       promptTokens: Number(row.prompt_tokens ?? 0),
       completionTokens: Number(row.completion_tokens ?? 0),
-      totalTokens: Number(row.total_tokens ?? 0)
+      totalTokens: Number(row.total_tokens ?? 0),
+      estimatedUsd: roundEstimatedUsd(dayCost.get(row.day)?.estimatedUsd ?? 0),
+      callsWithCost: dayCost.get(row.day)?.callsWithCost ?? 0,
+      callsMissingPricing: dayCost.get(row.day)?.callsMissingPricing ?? 0
     })),
     byActionType: byActionType.rows.map((row) => ({
       actionType: row.action_type,

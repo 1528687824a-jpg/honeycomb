@@ -18,8 +18,11 @@ changes land.
    - Runtime logs and usage summary.
    - Token usage aggregation in `GET /runtime/usage`: totals, per-agent, and
      per-day prompt/completion/total tokens read from real-mode OpenClaw
-     usage payloads (see `docs/reviews/competitive-analysis-agent-panels.md`;
-     cost estimation and provider pricing config are still missing).
+     usage payloads.
+   - Provider pricing metadata drives estimated USD cost in `GET /runtime/usage`:
+     summary cost, per-provider/model cost, and per-agent/per-day cost buckets.
+     Pricing is read from `provider.metadata.pricing`, including optional
+     model-specific overrides.
    - Session events list.
    - Session events SSE stream for live UI updates.
    - Runtime diagnostics aggregate through `GET /runtime/diagnostics`,

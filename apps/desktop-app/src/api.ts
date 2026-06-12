@@ -248,6 +248,18 @@ export type RuntimeUsageResponse = {
       failed: number;
       failedUnknownOutcome: number;
     };
+    tokens?: {
+      promptTokens: number;
+      completionTokens: number;
+      totalTokens: number;
+      callsWithUsage: number;
+    };
+    cost?: {
+      currency: "USD";
+      estimatedUsd: number;
+      callsWithCost: number;
+      callsMissingPricing: number;
+    };
     events: {
       jobEvents: number;
       agentEvents: number;
@@ -261,6 +273,37 @@ export type RuntimeUsageResponse = {
     succeeded: number;
     failed: number;
     started: number;
+    promptTokens?: number;
+    completionTokens?: number;
+    totalTokens?: number;
+    estimatedUsd?: number;
+    callsWithCost?: number;
+    callsMissingPricing?: number;
+  }>;
+  byProvider?: Array<{
+    providerId: string | null;
+    providerDisplayName: string | null;
+    model: string | null;
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+    callsWithUsage: number;
+    callsWithCost: number;
+    callsMissingPricing: number;
+    estimatedUsd: number;
+    pricingSource: string | null;
+  }>;
+  byDay?: Array<{
+    day: string;
+    total: number;
+    succeeded: number;
+    failed: number;
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+    estimatedUsd: number;
+    callsWithCost: number;
+    callsMissingPricing: number;
   }>;
   byActionType: Array<{
     actionType: string;

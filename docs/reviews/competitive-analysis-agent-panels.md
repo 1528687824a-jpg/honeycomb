@@ -54,3 +54,9 @@
 - harness 多项目终端池/一键广播/资源市场（多项目代码驾驶舱定位）。
 - Kun Write 写作编辑器（写作由 writer-agent 以产物交付）。
 - ClawPanel 晴辰云接口、11 种语言（中英已够）。
+
+## 2026-06-12 Update
+
+- P0 runtime cost observability is now implemented beyond token totals: provider metadata can define USD pricing, optional model overrides are supported, and `GET /runtime/usage` returns estimated cost totals by summary, provider/model, agent, and day.
+- Verification added: `tests/pricing-policy.test.ts` covers pricing parsing and model overrides; `npm run smoke:runtime-usage-cost` inserts a real model-call usage payload and verifies the API cost aggregation.
+- Remaining P0 backend work after this slice: primary/fallback provider failover, batch latency verification, packaged OpenClaw launch/restart defaults, real provider E2E, and Phase 18 web search/browser gateway.
