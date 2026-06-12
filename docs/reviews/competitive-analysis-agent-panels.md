@@ -24,8 +24,8 @@
 
 ## 已在开发/路线图上
 
-- web search/browser 网关（Phase 18；fetch、search、browser snapshot 已上线；
-  richer browser automation 与 per-agent network policy 待做）。
+- web search/browser 网关（Phase 18；fetch、search、browser snapshot、
+  per-agent network policy 已上线；richer browser automation 待做）。
 - IM 多渠道后台 Agent（roadmap #11；飞书骨架已有）。
 - 调度任务绑定模型/工作区/推理强度（roadmap #6）。
 - 远程访问认证（HONEYC~3：每设备 token + 短时 SSE ticket）。
@@ -79,3 +79,9 @@
 - Phase 18 minimal web/search/browser backend is now implemented: `POST /tools/web/search` and `POST /tools/browser/snapshot` reuse the approval-ledger pattern from web fetch, including exact target/command matching, private-network approval checks, DNS-pinned fetches, approval consumption, and audit events.
 - Verification added: `tests/web-tools.test.ts` covers configurable search endpoints and browser snapshot extraction; `npm run smoke:web-search-browser` runs a fake local search/page server, approves both tool calls, and verifies extracted search results plus title/text/links.
 - Remaining Phase 18 work after this slice: per-agent network policy and richer interactive browser automation. Real provider E2E against an installed OpenClaw runtime remains the next Phase 19 regression target.
+
+## 2026-06-12 Update 5
+
+- Phase 18 per-agent network policy is now implemented for web fetch, web search, and browser snapshot. Agent metadata can allow/deny operations, require explicit private-network permission, and restrict protocols or hosts with allow/block lists.
+- Verification added: `tests/network-policy.test.ts` covers policy defaults, disabled operations, private-network checks, host allow/block matching, and disabled agents; the web-search/browser smoke now creates policy-scoped agents and verifies both allowed access and a real `network_policy_denied` response without consuming the approval.
+- Remaining Phase 18 work after this slice: richer interactive browser automation only. Real provider E2E against an installed OpenClaw runtime remains the next Phase 19 regression target.

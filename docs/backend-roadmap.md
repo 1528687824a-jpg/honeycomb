@@ -236,9 +236,12 @@ changes land.
      gateway pattern: exact approval target/command matching, DNS-pinned
      fetches, private-network blocking unless approved, approval consumption,
      and audit events.
+   - Per-agent network policy can now allow or deny web fetch, web search, and
+     browser snapshot by operation, private-network use, protocol, and host
+     allow/block lists stored in agent metadata.
    - MCP calls now run through approval-gated long-lived sessions.
-   - Full interactive browser automation, per-agent network policy, and broader
-     external network connectors still need safe product rules.
+   - Full interactive browser automation and broader external network
+     connectors still need safe product rules.
 
 6. Scheduled tasks
    - Durable schedule table and CRUD API exist.
@@ -366,8 +369,9 @@ changes land.
    - Event stream visibility.
    - Status: partial done. Web fetch, web search, browser snapshot, and MCP
      stdio tools/list, resources/list, and tools/call are approval-gated,
-     audited, and reuse the same safe gateway principles; richer browser
-     automation and per-agent network policy are still missing.
+     audited, and reuse the same safe gateway principles. Agent metadata can
+     now enforce per-agent network policy for fetch/search/snapshot; richer
+     interactive browser automation is still missing.
 
 ### Phase D: Make It Operable Like A Product
 
@@ -399,8 +403,8 @@ SIGINT/SIGTERM, and the scheduler auto-disables schedules after consecutive
 failures. Packaged OpenClaw runtime control defaults now prepare/mark the local
 runtime when host commands are absent. Phase 18 now has approval-gated web
 search and browser snapshot calls; next, prove the real OpenClaw provider
-end-to-end against an installed runtime, then finish Phase 18 per-agent network
-policy and richer browser automation, then Phase 18.5
+end-to-end against an installed runtime, then finish Phase 18 richer interactive
+browser automation, then Phase 18.5
 architecture cleanup splitting `server.ts` and desktop `main.tsx` into tested
 modules, and Schedule UI only after the real OpenClaw loop is proven. Two
 Phase 19 real-mode risks are already closed: OpenClaw output extraction now

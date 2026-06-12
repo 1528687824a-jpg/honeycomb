@@ -130,7 +130,8 @@ import {
   TASK_PLAN_STATUSES,
   TOOL_APPROVAL_STATUSES,
   TOOL_RISK_LEVELS,
-  type ExperienceStatus
+  type ExperienceStatus,
+  type ToolApprovalRecord
 } from "../../../packages/shared/src/types";
 import { launchDbos, startJobWorkflow } from "../../dbos-worker/src/dbos-runtime";
 import { ingressAdapters } from "./adapters";
@@ -159,6 +160,10 @@ import {
 } from "./provider-verification";
 import { checkMcpCommand } from "./mcp-diagnostics";
 import { requireApiToken, timingSafeEqualString } from "./api-auth";
+import {
+  evaluateAgentNetworkPolicy,
+  type AgentNetworkOperation
+} from "./network-policy";
 import {
   formatMcpListCommand,
   formatMcpListTarget,
@@ -651,6 +656,50 @@ function previewJson(value: unknown, maxLength = 4000) {
   } catch {
     return String(value).slice(0, maxLength);
   }
+}
+
+async function requireAgentNetworkPolicy(input: {
+  approval: ToolApprovalRecord;
+  operation: AgentNetworkOperation;
+  url: string;
+  allowPrivateNetwork: boolean;
+  response: express.Response;
+}) {
+  const agent = await getAgentConfig(input.approval.agentId);
+  const decision = evaluateAgentNetworkPolicy({
+    agent,
+    operation: input.operation,
+    url: input.url,
+    allowPrivateNetwork: input.allowPrivateNetwork
+  });
+
+  if (decision.allowed) {
+    return true;
+  }
+
+  await appendJobEvent(
+    input.approval.jobId,
+    "tool.network_policy_denied",
+    {
+      approvalId: input.approval.id,
+      agentId: input.approval.agentId,
+      operation: input.operation,
+      target: input.url,
+      reason: decision.reason,
+      policySource: decision.policySource,
+      policy: decision.policy
+    },
+    {
+      actor: "network-policy",
+      stageId: input.approval.stageId
+    }
+  );
+
+  input.response.status(403).json({
+    error: "network_policy_denied",
+    decision
+  });
+  return false;
 }
 
 function mcpDiscoveryConfigEntry(result: unknown) {
@@ -2374,6 +2423,18 @@ async function main() {
         return;
       }
 
+      if (
+        !(await requireAgentNetworkPolicy({
+          approval,
+          operation: "web.fetch",
+          url: normalizedUrl,
+          allowPrivateNetwork,
+          response
+        }))
+      ) {
+        return;
+      }
+
       const consumed = await consumeToolApproval({
         approvalId: approval.id,
         consumedBy: "web.fetch"
@@ -2487,6 +2548,18 @@ async function main() {
         return;
       }
 
+      if (
+        !(await requireAgentNetworkPolicy({
+          approval,
+          operation: "web.search",
+          url: searchUrl,
+          allowPrivateNetwork,
+          response
+        }))
+      ) {
+        return;
+      }
+
       const consumed = await consumeToolApproval({
         approvalId: approval.id,
         consumedBy: "web.search"
@@ -2597,6 +2670,18 @@ async function main() {
           error: "private_network_not_approved",
           approval
         });
+        return;
+      }
+
+      if (
+        !(await requireAgentNetworkPolicy({
+          approval,
+          operation: "browser.snapshot",
+          url: normalizedUrl,
+          allowPrivateNetwork,
+          response
+        }))
+      ) {
         return;
       }
 

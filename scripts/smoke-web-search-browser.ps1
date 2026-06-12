@@ -32,6 +32,33 @@ function Assert-True {
   }
 }
 
+function Invoke-ExpectHttpError {
+  param(
+    [scriptblock]$Script,
+    [int]$StatusCode,
+    [string]$Message
+  )
+
+  try {
+    & $Script | Out-Null
+  } catch {
+    $response = $_.Exception.Response
+    if ($null -eq $response) {
+      throw "$Message. Request failed without an HTTP response: $($_.Exception.Message)"
+    }
+    $actualStatus = [int]$response.StatusCode
+    if ($actualStatus -ne $StatusCode) {
+      throw "$Message. Expected HTTP $StatusCode, got HTTP $actualStatus"
+    }
+    if ($_.ErrorDetails.Message) {
+      return ($_.ErrorDetails.Message | ConvertFrom-Json)
+    }
+    return [pscustomobject]@{ error = "http_error"; status = $actualStatus }
+  }
+
+  throw "$Message. Request unexpectedly succeeded"
+}
+
 try {
   Set-Location $root
   $env:FEISHU_ADAPTER_ENABLED = "false"
@@ -117,6 +144,29 @@ server.listen(port, "127.0.0.1");
       startWorkflow = $false
     } | ConvertTo-Json)
 
+  $allowedAgentId = "network-policy-smoke-agent"
+  Invoke-RestMethod `
+    -Uri "$apiBaseUrl/agents" `
+    -Method Post `
+    -Headers $apiHeaders `
+    -ContentType "application/json" `
+    -Body (@{
+      id = $allowedAgentId
+      displayName = "Network Policy Smoke Agent"
+      agentRole = "research"
+      required = $false
+      enabled = $true
+      tools = @("web.search", "browser.snapshot")
+      metadata = @{
+        networkPolicy = @{
+          allowPrivateNetwork = $true
+          allowWebSearch = $true
+          allowBrowserSnapshot = $true
+          allowedHosts = @("127.0.0.1")
+        }
+      }
+    } | ConvertTo-Json -Depth 8) | Out-Null
+
   $query = "honeycomb agents"
   $endpointUrl = "http://127.0.0.1:$port/search?q={query}"
   $searchUrl = "http://127.0.0.1:$port/search?q=honeycomb%20agents"
@@ -129,7 +179,7 @@ server.listen(port, "127.0.0.1");
     -ContentType "application/json" `
     -Body (@{
       jobId = $created.jobId
-      agentId = "research-agent"
+      agentId = $allowedAgentId
       requesterActor = "smoke"
       toolName = "web.search"
       actionType = "web_search"
@@ -171,7 +221,7 @@ server.listen(port, "127.0.0.1");
     -ContentType "application/json" `
     -Body (@{
       jobId = $created.jobId
-      agentId = "research-agent"
+      agentId = $allowedAgentId
       requesterActor = "smoke"
       toolName = "browser.snapshot"
       actionType = "browser_snapshot"
@@ -205,6 +255,77 @@ server.listen(port, "127.0.0.1");
   Assert-True -Condition ($snapshot.snapshot.textPreview -match "Honeycomb Browser Snapshot") -Message "snapshot text missing"
   Assert-Equal -Actual $snapshot.approval.status -Expected "consumed" -Message "snapshot approval consumed"
 
+  $blockedAgentId = "network-policy-blocked-agent"
+  Invoke-RestMethod `
+    -Uri "$apiBaseUrl/agents" `
+    -Method Post `
+    -Headers $apiHeaders `
+    -ContentType "application/json" `
+    -Body (@{
+      id = $blockedAgentId
+      displayName = "Network Policy Blocked Agent"
+      agentRole = "research"
+      required = $false
+      enabled = $true
+      tools = @("web.search")
+      metadata = @{
+        networkPolicy = @{
+          allowPrivateNetwork = $true
+          allowWebSearch = $false
+          allowedHosts = @("127.0.0.1")
+        }
+      }
+    } | ConvertTo-Json -Depth 8) | Out-Null
+
+  $blockedApproval = Invoke-RestMethod `
+    -Uri "$apiBaseUrl/approvals" `
+    -Method Post `
+    -Headers $apiHeaders `
+    -ContentType "application/json" `
+    -Body (@{
+      jobId = $created.jobId
+      agentId = $blockedAgentId
+      requesterActor = "smoke"
+      toolName = "web.search"
+      actionType = "web_search"
+      riskLevel = "medium"
+      target = $searchUrl
+      command = $searchCommand
+      input = @{ allowPrivateNetwork = $true }
+      policy = @{ allowPrivateNetwork = $true }
+    } | ConvertTo-Json -Depth 6)
+
+  Invoke-RestMethod `
+    -Uri "$apiBaseUrl/approvals/$($blockedApproval.id)/approve" `
+    -Method Post `
+    -Headers $apiHeaders `
+    -ContentType "application/json" `
+    -Body (@{ decidedBy = "smoke" } | ConvertTo-Json) | Out-Null
+
+  $denied = Invoke-ExpectHttpError -StatusCode 403 -Message "network policy denial" -Script {
+    Invoke-RestMethod `
+      -Uri "$apiBaseUrl/tools/web/search" `
+      -Method Post `
+      -Headers $apiHeaders `
+      -ContentType "application/json" `
+      -Body (@{
+        query = $query
+        endpointUrl = $endpointUrl
+        allowPrivateNetwork = $true
+        maxResults = 2
+        approvalId = $blockedApproval.id
+      } | ConvertTo-Json -Depth 6)
+  }
+
+  Assert-Equal -Actual $denied.error -Expected "network_policy_denied" -Message "network policy error"
+  Assert-Equal -Actual $denied.decision.reason -Expected "operation_not_allowed" -Message "network policy reason"
+
+  $blockedApprovalAfter = Invoke-RestMethod `
+    -Uri "$apiBaseUrl/approvals/$($blockedApproval.id)" `
+    -Method Get `
+    -Headers $apiHeaders
+  Assert-Equal -Actual $blockedApprovalAfter.status -Expected "approved" -Message "denied approval should not be consumed"
+
   [pscustomobject]@{
     ok = $true
     jobId = $created.jobId
@@ -214,7 +335,9 @@ server.listen(port, "127.0.0.1");
       "approval_gated_web_search",
       "search_results_extracted",
       "approval_gated_browser_snapshot",
-      "snapshot_title_text_links_extracted"
+      "snapshot_title_text_links_extracted",
+      "agent_network_policy_allows_configured_host",
+      "agent_network_policy_denies_disabled_operation"
     )
   } | ConvertTo-Json -Depth 5
 } finally {

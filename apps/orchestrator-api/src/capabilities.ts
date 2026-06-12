@@ -106,14 +106,15 @@ const capabilities: RuntimeCapability[] = [
       "Legacy plaintext provider/agent key files migrate on read",
       "Tool approvals get default expiry and approved approvals expire before consumption",
       "API approval decisions record the desktop approval actor instead of trusting client-provided decidedBy",
-      "Web fetch/search/browser snapshot resolve and pin the connect IP for every request and redirect"
+      "Web fetch/search/browser snapshot resolve and pin the connect IP for every request and redirect",
+      "Per-agent network policy can allow or deny fetch/search/snapshot by operation, private-network use, protocol, and host allow/block lists"
     ],
     missing: [
       "macOS/Linux keychain integration before cross-platform release",
       "Signed/attested desktop identity for multi-user or remote approval scenarios"
     ],
     nextActions: [
-      "Add per-agent network policy defaults on top of the existing approval-gated network gateways"
+      "Keep policy defaults visible in diagnostics and settings UI"
     ]
   },
   {
@@ -364,7 +365,7 @@ const capabilities: RuntimeCapability[] = [
     id: "web_network_tools",
     title: "Web/MCP/network tool gateway",
     status: "partial",
-    summary: "Approval-gated web fetch, web search, and browser snapshot are implemented with URL/command matching, timeout/output caps, DNS-pinned redirect checks, private-network blocking, approval consumption, and audit events; full browser automation and per-agent network policy remain.",
+    summary: "Approval-gated web fetch, web search, and browser snapshot are implemented with URL/command matching, timeout/output caps, DNS-pinned redirect checks, private-network blocking, approval consumption, per-agent network policy, and audit events; full interactive browser automation remains.",
     routes: [
       "POST /tools/web/fetch",
       "POST /tools/web/search",
@@ -379,14 +380,13 @@ const capabilities: RuntimeCapability[] = [
       "Timeout and output caps",
       "Private-network target blocking unless explicitly allowed",
       "Redirect target revalidation with DNS-pinned connect IPs",
+      "Per-agent network policy from agent metadata",
       "Network audit events"
     ],
     missing: [
-      "Richer interactive browser automation",
-      "Per-agent network access policy enforcement"
+      "Richer interactive browser automation"
     ],
     nextActions: [
-      "Add per-agent network policy enforcement",
       "Add richer interactive browser automation when product flows require it"
     ]
   },
@@ -510,7 +510,7 @@ export function getRuntimeCapabilities(): RuntimeCapabilitiesResponse {
     capabilities,
     recommendedNext: [
       "Phase 19: real provider E2E regression against installed OpenClaw",
-      "Phase 18 remainder: per-agent network policy and richer browser automation",
+      "Phase 18 remainder: richer interactive browser automation",
       "Phase 18.5: split the large API/desktop modules into smaller tested modules",
       "Phase 20: schedule configuration UI after the real OpenClaw loop is proven"
     ]
