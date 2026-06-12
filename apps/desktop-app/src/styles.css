@@ -1671,6 +1671,7 @@ select {
 }
 
 .runtimeCard,
+.repairCard,
 .streamCard,
 .planCard {
   grid-column: span 2;
@@ -1711,6 +1712,127 @@ select {
   font-size: 12px;
   font-style: normal;
   overflow-wrap: anywhere;
+}
+
+.workbenchMuted {
+  margin: 0;
+  color: #9aa5b5;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.runtimeRepairSummary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 1px;
+  border: 1px solid #252a32;
+  background: #252a32;
+}
+
+.runtimeRepairSummary div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+  background: #151922;
+}
+
+.runtimeRepairSummary span {
+  color: #7f8998;
+  font-size: 10px;
+}
+
+.runtimeRepairSummary em {
+  color: #eef1f5;
+  font-size: 12px;
+  font-style: normal;
+  overflow-wrap: anywhere;
+}
+
+.repairStatus.success {
+  border-color: #315d46;
+  background: #142319;
+  color: #92e2b5;
+}
+
+.repairStatus.warn {
+  border-color: #684a1e;
+  background: #21180d;
+  color: #f3c46a;
+}
+
+.repairStatus.danger {
+  border-color: #743e3e;
+  background: #271616;
+  color: #ff9e9e;
+}
+
+.runtimeRepairActions {
+  display: grid;
+  gap: 7px;
+}
+
+.repairActionButton {
+  width: 100%;
+  min-height: 42px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 8px 9px;
+  border: 1px solid #343c49;
+  border-radius: 6px;
+  background: #151a22;
+  color: #d7dde7;
+  text-align: left;
+}
+
+.repairActionButton:hover:not(:disabled) {
+  border-color: #c78b23;
+  background: #1b2029;
+}
+
+.repairActionButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.repairActionButton span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.repairActionButton strong {
+  font-size: 12px;
+}
+
+.repairActionButton small {
+  color: #8f9aa9;
+  font-size: 10px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.repairActionButton.risk-high {
+  border-color: #6b4b24;
+}
+
+.refreshRepairButton {
+  grid-template-columns: 18px minmax(0, 1fr);
+  min-height: 34px;
+  border-color: #29313d;
+  background: #11151c;
+}
+
+.compactMessage {
+  margin: 0;
+  font-size: 11px;
+}
+
+.compactEmpty {
+  margin: 0;
+  font-size: 11px;
 }
 
 .workbenchPlanList {
@@ -3158,6 +3280,7 @@ select {
   }
 
   .runtimeCard,
+  .repairCard,
   .streamCard,
   .planCard,
   .configCard,

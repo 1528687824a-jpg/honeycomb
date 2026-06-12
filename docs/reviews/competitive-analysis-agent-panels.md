@@ -104,3 +104,10 @@
 - First repair actions implemented: reconcile provider secret status, prepare/start OpenClaw runtime, restart OpenClaw runtime, seed default Honeycomb agents, and apply OpenClaw sync files.
 - Verification added: `npm run smoke:runtime-repair-actions` exercises the catalog and executes real repair actions against a temporary provider/runtime root, including stale secret reconciliation and OpenClaw prompt/config file generation.
 - Remaining repair work: desktop diagnostics UI wiring plus more targeted WSL/Docker/database/MCP repair actions.
+
+## 2026-06-12 Update 9
+
+- Desktop supervisor workbench now has a diagnostics repair card. It loads `GET /runtime/repair/actions`, displays localized repair action labels, shows runtime diagnostics status, and can execute `POST /runtime/repair` from the panel.
+- Repair result handling is wired through the desktop API client, including HTTP 409 repair-result payloads so blocked/failed repair actions show the backend summary instead of a generic network failure.
+- Verification added to `npm run smoke:desktop-ui`: the smoke waits for the repair card, clicks the low-risk provider secret reconciliation action, and asserts that a real `/runtime/repair` request was sent and rendered.
+- Remaining repair work: targeted WSL/Docker/database/MCP repair actions and cross-platform installer validation.

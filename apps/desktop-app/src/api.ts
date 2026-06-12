@@ -370,6 +370,44 @@ export type RuntimeDiagnosticsResponse = {
   recommendedActions: string[];
 };
 
+export type RuntimeRepairActionId =
+  | "providers.reconcileSecrets"
+  | "openclaw.runtime.start"
+  | "openclaw.runtime.restart"
+  | "agents.seedDefaults"
+  | "openclaw.sync.apply";
+
+export type RuntimeRepairAction = {
+  id: RuntimeRepairActionId;
+  title: string;
+  description: string;
+  riskLevel: "low" | "medium" | "high";
+  inputs: string[];
+};
+
+export type RuntimeRepairActionsResponse = {
+  actions: RuntimeRepairAction[];
+};
+
+export type RuntimeRepairInput = {
+  action: RuntimeRepairActionId;
+  rootPath?: string;
+  timeoutMs?: number;
+  providerId?: string | null;
+  model?: string | null;
+  panelAgentName?: string;
+  allowDiscoveredUserRuntime?: boolean;
+};
+
+export type RuntimeRepairResult = {
+  action: RuntimeRepairActionId;
+  ranAt: string;
+  ok: boolean;
+  changed: boolean;
+  summary: string;
+  details: Record<string, unknown>;
+};
+
 export type OpenClawRuntimeCandidate = {
   rootPath: string;
   source: string;
@@ -1296,6 +1334,38 @@ export async function getRuntimeDiagnostics(input: { openClawRootPath?: string }
   }
   const query = params.toString();
   return request<RuntimeDiagnosticsResponse>(`/runtime/diagnostics${query ? `?${query}` : ""}`);
+}
+
+export async function listRuntimeRepairActions() {
+  return request<RuntimeRepairActionsResponse>("/runtime/repair/actions");
+}
+
+export async function runRuntimeRepairAction(input: RuntimeRepairInput) {
+  const headers = new Headers({ "content-type": "application/json" });
+  const token = await getApiAuthToken();
+  if (token) {
+    headers.set("authorization", `Bearer ${token}`);
+  }
+
+  const response = await fetch(`${API_BASE}/runtime/repair`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(input)
+  });
+  const body = await response.text();
+  let parsed: RuntimeRepairResult | null = null;
+  try {
+    parsed = body ? JSON.parse(body) as RuntimeRepairResult : null;
+  } catch {
+    parsed = null;
+  }
+  if (parsed?.action) {
+    return parsed;
+  }
+  if (!response.ok) {
+    throw new Error(body || `${response.status} ${response.statusText}`);
+  }
+  throw new Error("Runtime repair response was empty.");
 }
 
 export async function discoverOpenClawRuntime(rootPath?: string) {

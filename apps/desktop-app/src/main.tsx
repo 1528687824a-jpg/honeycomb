@@ -33,11 +33,14 @@ import {
   getHealth,
   getJob,
   getJobTimeline,
+  getRuntimeDiagnostics,
   listExperiences,
   listJobs,
+  listRuntimeRepairActions,
   listToolApprovals,
   rejectExperience,
   rejectToolApproval,
+  runRuntimeRepairAction,
   type ExperienceListResponse,
   type ExperienceRecord,
   type ExperienceStatus,
@@ -45,6 +48,9 @@ import {
   type JobStatus,
   type JobTimeline,
   type ListJobsResponse,
+  type RuntimeDiagnosticsResponse,
+  type RuntimeRepairAction,
+  type RuntimeRepairActionId,
   type RoutingMode,
   type ToolApprovalRecord
 } from "./api";
@@ -251,6 +257,53 @@ const supervisorPermissionKeys: SupervisorPermissionKey[] = [
   "mcpTools"
 ];
 
+const runtimeRepairActionLabels: Record<Language, Record<RuntimeRepairActionId, { title: string; description: string }>> = {
+  en: {
+    "providers.reconcileSecrets": {
+      title: "Sync key status",
+      description: "Fix stale provider key flags from local secret storage."
+    },
+    "openclaw.runtime.start": {
+      title: "Prepare runtime",
+      description: "Create or start the Honeycomb-managed OpenClaw runtime."
+    },
+    "openclaw.runtime.restart": {
+      title: "Restart runtime",
+      description: "Restart the configured or built-in OpenClaw runtime."
+    },
+    "agents.seedDefaults": {
+      title: "Seed agents",
+      description: "Ensure panel, research, writer, image, video, and test agents exist."
+    },
+    "openclaw.sync.apply": {
+      title: "Sync OpenClaw",
+      description: "Write prompts and redacted model config into the runtime."
+    }
+  },
+  zh: {
+    "providers.reconcileSecrets": {
+      title: "同步 Key 状态",
+      description: "根据本地密钥存储修正模型服务商的 Key 状态。"
+    },
+    "openclaw.runtime.start": {
+      title: "准备运行时",
+      description: "创建或启动 Honeycomb 管理的 OpenClaw 运行目录。"
+    },
+    "openclaw.runtime.restart": {
+      title: "重启运行时",
+      description: "重启已配置或内置的 OpenClaw 运行时。"
+    },
+    "agents.seedDefaults": {
+      title: "创建默认 Agent",
+      description: "确保面板、研究、写作、图像、视频、质检 Agent 都存在。"
+    },
+    "openclaw.sync.apply": {
+      title: "同步到 OpenClaw",
+      description: "写入提示词和脱敏模型配置到运行目录。"
+    }
+  }
+};
+
 const defaultSupervisorPermissions: Record<SupervisorPermissionKey, boolean> = {
   readWorkspace: true,
   writeWorkspace: false,
@@ -417,6 +470,19 @@ const translations = {
     workbenchLive: "Live",
     workbenchLocal: "Local",
     workbenchStored: "Saved",
+    workbenchRepair: "Repair",
+    workbenchRepairTitle: "Diagnostics repair",
+    workbenchRepairIntro: "Run safe backend repair actions when runtime diagnostics finds a recoverable issue.",
+    workbenchRepairStatus: "Diagnostics",
+    workbenchRepairActions: "Repair actions",
+    workbenchRepairRefresh: "Refresh",
+    workbenchRepairRunning: "Running repair...",
+    workbenchRepairLoading: "Loading repair actions...",
+    workbenchRepairUnavailable: "Repair actions unavailable.",
+    workbenchRepairNoActions: "No repair actions available.",
+    workbenchRepairDone: "Repair completed.",
+    workbenchRepairFailed: "Repair failed.",
+    workbenchRepairCheckedAt: "Checked",
     workbenchLatestJob: "Tracked job",
     workbenchNoJob: "No job yet",
     workbenchTimelineItems: "Timeline events",
@@ -648,6 +714,19 @@ const translations = {
     workbenchLive: "实时",
     workbenchLocal: "本地",
     workbenchStored: "已保存",
+    workbenchRepair: "可修复",
+    workbenchRepairTitle: "诊断修复",
+    workbenchRepairIntro: "当运行时诊断发现可恢复问题时，可以直接运行后端真实修复动作。",
+    workbenchRepairStatus: "诊断状态",
+    workbenchRepairActions: "修复动作",
+    workbenchRepairRefresh: "刷新",
+    workbenchRepairRunning: "正在修复...",
+    workbenchRepairLoading: "正在加载修复动作...",
+    workbenchRepairUnavailable: "暂时无法加载修复动作。",
+    workbenchRepairNoActions: "暂无可用修复动作。",
+    workbenchRepairDone: "修复完成。",
+    workbenchRepairFailed: "修复失败。",
+    workbenchRepairCheckedAt: "检查时间",
     workbenchLatestJob: "跟踪任务",
     workbenchNoJob: "还没有任务",
     workbenchTimelineItems: "时间线事件",
@@ -801,6 +880,36 @@ function riskTone(riskLevel: ToolApprovalRecord["riskLevel"]) {
   if (riskLevel === "critical" || riskLevel === "high") return "danger";
   if (riskLevel === "medium") return "warn";
   return "success";
+}
+
+function diagnosticTone(status?: RuntimeDiagnosticsResponse["status"]) {
+  if (status === "ok") return "success";
+  if (status === "error") return "danger";
+  if (status === "warning") return "warn";
+  return "active";
+}
+
+function runtimeDiagnosticStatusLabel(
+  status: RuntimeDiagnosticsResponse["status"] | undefined,
+  language: Language
+) {
+  if (language === "zh") {
+    if (status === "ok") return "正常";
+    if (status === "warning") return "需要注意";
+    if (status === "error") return "需要修复";
+    return "未知";
+  }
+  if (status === "ok") return "Ready";
+  if (status === "warning") return "Needs attention";
+  if (status === "error") return "Repair needed";
+  return "Unknown";
+}
+
+function runtimeRepairActionCopy(action: RuntimeRepairAction, language: Language) {
+  return runtimeRepairActionLabels[language][action.id] ?? {
+    title: action.title,
+    description: action.description
+  };
 }
 
 function compactJson(value: Record<string, unknown>) {
@@ -1256,6 +1365,11 @@ function App() {
   const [showAgentApiKey, setShowAgentApiKey] = useState(false);
   const [workbenchConfig, setWorkbenchConfig] = useState<SupervisorWorkbenchConfig>(loadSupervisorWorkbenchConfig);
   const [workbenchMessage, setWorkbenchMessage] = useState("");
+  const [runtimeDiagnostics, setRuntimeDiagnostics] = useState<RuntimeDiagnosticsResponse | null>(null);
+  const [runtimeRepairActions, setRuntimeRepairActions] = useState<RuntimeRepairAction[]>([]);
+  const [runtimeRepairBusy, setRuntimeRepairBusy] = useState<RuntimeRepairActionId | "refresh" | "">("");
+  const [runtimeRepairMessage, setRuntimeRepairMessage] = useState("");
+  const [runtimeRepairError, setRuntimeRepairError] = useState("");
   const jobsRequestSeq = useRef(0);
   const copy = translations[language];
 
@@ -1508,6 +1622,48 @@ function App() {
   async function refreshApprovals() {
     const response = await listToolApprovals({ status: "pending", limit: 100 });
     setApprovals(response.approvals);
+  }
+
+  async function refreshRuntimeRepairPanel() {
+    setRuntimeRepairBusy((current) => current || "refresh");
+    setRuntimeRepairError("");
+    try {
+      const [diagnostics, repairCatalog] = await Promise.all([
+        getRuntimeDiagnostics(),
+        listRuntimeRepairActions()
+      ]);
+      setRuntimeDiagnostics(diagnostics);
+      setRuntimeRepairActions(repairCatalog.actions);
+    } catch (caught) {
+      setRuntimeRepairError(caught instanceof Error ? caught.message : copy.workbenchRepairUnavailable);
+    } finally {
+      setRuntimeRepairBusy((current) => current === "refresh" ? "" : current);
+    }
+  }
+
+  async function runRepairFromWorkbench(action: RuntimeRepairAction) {
+    setRuntimeRepairBusy(action.id);
+    setRuntimeRepairError("");
+    setRuntimeRepairMessage(copy.workbenchRepairRunning);
+    try {
+      const repair = await runRuntimeRepairAction({
+        action: action.id,
+        panelAgentName: action.id === "agents.seedDefaults" ? panelSupervisorDisplayName : undefined,
+        allowDiscoveredUserRuntime: false
+      });
+      if (repair.ok) {
+        setRuntimeRepairMessage(repair.summary || copy.workbenchRepairDone);
+      } else {
+        setRuntimeRepairMessage("");
+        setRuntimeRepairError(repair.summary || copy.workbenchRepairFailed);
+      }
+      await refreshRuntimeRepairPanel();
+    } catch (caught) {
+      setRuntimeRepairMessage("");
+      setRuntimeRepairError(caught instanceof Error ? caught.message : copy.workbenchRepairFailed);
+    } finally {
+      setRuntimeRepairBusy("");
+    }
   }
 
   async function decideApproval(approvalId: string, decision: "approve" | "reject") {
@@ -1901,6 +2057,13 @@ function App() {
     };
   }, [activeView, apiState, copy.approvalLoadFailed]);
 
+  useEffect(() => {
+    if (activeView !== "dashboard" || apiState !== "online") return;
+    refreshRuntimeRepairPanel().catch((caught) =>
+      setRuntimeRepairError(caught instanceof Error ? caught.message : copy.workbenchRepairUnavailable)
+    );
+  }, [activeView, apiState]);
+
   if (locked && securityRecord) {
     const canRecover = hasRecoveryQuestion(securityRecord);
     return (
@@ -2069,6 +2232,63 @@ function App() {
                   <span>{copy.agentHint}</span>
                   <em>{panelSupervisorDisplayName}</em>
                 </div>
+              </div>
+            </article>
+
+            <article className="workbenchCard repairCard" data-testid="runtime-repair-card">
+              <span className={`workbenchStatusPill repairStatus ${diagnosticTone(runtimeDiagnostics?.status)}`}>
+                {copy.workbenchRepair}
+              </span>
+              <strong>{copy.workbenchRepairTitle}</strong>
+              <p className="workbenchMuted">{copy.workbenchRepairIntro}</p>
+              <div className="runtimeRepairSummary">
+                <div>
+                  <span>{copy.workbenchRepairStatus}</span>
+                  <em>{runtimeDiagnosticStatusLabel(runtimeDiagnostics?.status, language)}</em>
+                </div>
+                <div>
+                  <span>{copy.workbenchRepairCheckedAt}</span>
+                  <em>{runtimeDiagnostics ? formatTime(runtimeDiagnostics.checkedAt, language) : "-"}</em>
+                </div>
+              </div>
+              {runtimeRepairMessage ? <p className="successMessage compactMessage">{runtimeRepairMessage}</p> : null}
+              {runtimeRepairError ? <p className="error compactMessage">{runtimeRepairError}</p> : null}
+              <div className="runtimeRepairActions" aria-label={copy.workbenchRepairActions}>
+                <button
+                  className="repairActionButton refreshRepairButton"
+                  data-testid="runtime-repair-refresh"
+                  type="button"
+                  onClick={() => refreshRuntimeRepairPanel()}
+                  disabled={apiState !== "online" || Boolean(runtimeRepairBusy)}
+                >
+                  <RefreshCw size={14} aria-hidden="true" />
+                  <span>{runtimeRepairBusy === "refresh" ? copy.workbenchRepairLoading : copy.workbenchRepairRefresh}</span>
+                </button>
+                {runtimeRepairActions.length ? (
+                  runtimeRepairActions.map((action) => {
+                    const label = runtimeRepairActionCopy(action, language);
+                    const running = runtimeRepairBusy === action.id;
+                    return (
+                      <button
+                        className={`repairActionButton risk-${action.riskLevel}`}
+                        data-testid={`runtime-repair-action-${action.id}`}
+                        key={action.id}
+                        type="button"
+                        title={label.description}
+                        onClick={() => runRepairFromWorkbench(action)}
+                        disabled={apiState !== "online" || Boolean(runtimeRepairBusy)}
+                      >
+                        <Play size={13} aria-hidden="true" />
+                        <span>
+                          <strong>{running ? copy.workbenchRepairRunning : label.title}</strong>
+                          <small>{label.description}</small>
+                        </span>
+                      </button>
+                    );
+                  })
+                ) : (
+                  <p className="emptyState compactEmpty">{runtimeRepairBusy === "refresh" ? copy.workbenchRepairLoading : copy.workbenchRepairNoActions}</p>
+                )}
               </div>
             </article>
 
