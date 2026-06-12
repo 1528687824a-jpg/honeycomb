@@ -417,26 +417,61 @@ changes land.
       Safe WSL/Docker repair actions (mutating) are still deliberately not
       implemented until a safer installer strategy is designed.
 
-## Current Next Step
+## Current Next Step: Staged Work Plan (2026-06-12)
 
-Phase 17E MCP long-lived session reuse is now complete: MCP stdio calls share
-one initialized process per server, idle sessions are swept, config changes
-invalidate old sessions, and session stats are visible in diagnostics. Process
-lifecycle hardening also landed: API and worker now shut down gracefully on
-SIGINT/SIGTERM, and the scheduler auto-disables schedules after consecutive
-failures. Packaged OpenClaw runtime control defaults now prepare/mark the local
-runtime when host commands are absent. Phase 18 now has approval-gated web
-search and browser snapshot calls; next, prove the real OpenClaw provider
-end-to-end against an installed runtime, then finish Phase 18 richer interactive
-browser automation, then Phase 18.5
-architecture cleanup splitting `server.ts` and desktop `main.tsx` into tested
-modules, and Schedule UI only after the real OpenClaw loop is proven. Two
-Phase 19 real-mode risks are already closed: OpenClaw output extraction now
-recognizes explicit shapes and fails loudly on empty/unrecognized output
-(`extractOpenClawText` + `OpenClawOutputError`), and the WSL invocation wraps
-the CLI in a Linux-side `timeout --kill-after` so a Windows-side kill cannot
-leave orphan processes inside the distro. Remaining Phase 19 work: the real
-provider E2E regression itself. Desktop fix landed alongside: DPAPI PowerShell calls no longer flash
-console windows (CREATE_NO_WINDOW), decrypted reads are TTL-cached in-process,
-and the secret-reading Tauri commands are async so they stop blocking the UI
-thread.
+Everything up to read-only WSL/Docker host diagnostics has landed. What
+remains, ordered into execution stages. Cross-platform support is
+deliberately the LAST stage (user decision: finish the product first).
+
+### Stage A - Prove the product is real (now)
+
+1. Real OpenClaw provider E2E regression (`npm run smoke:openclaw-real`).
+   Blocked on the user re-entering and verifying a real external provider
+   API key; the `real_provider_e2e` diagnostic lists exactly what is
+   missing. Fix whatever the first real runs expose.
+2. Job heartbeat/stall detection: detect running jobs that stop producing
+   events/model-calls and surface alive-but-stuck states (DBOS only covers
+   crash recovery). Real long tasks will hit this first.
+3. Desktop system notifications for job completion/failure and pending
+   approvals (small; makes real long-running use bearable).
+
+### Stage B - Complete the core workflow (after the real loop is proven)
+
+4. Adopted-experience retrieval into subsequent jobs, plus confidence
+   aggregation across similar results (README "next build" items).
+5. Requirement clarification flow: background/goal/acceptance-criteria
+   before job creation, AI-assisted clarification, feeding the plan and the
+   test-agent quality gate.
+6. Schedule execution policy binding (model/workspace/reasoning) and the
+   Schedule product UI.
+7. Approval queue SSE live refresh and approval policy editing.
+
+### Stage C - Architecture and quality
+
+8. Phase 18.5: split `server.ts` (~3k lines) into route modules and desktop
+   `main.tsx` into tested modules; extend unit coverage over the big
+   modules.
+9. Phase 18 remainder: richer interactive browser automation (multi-step
+   click/fill flows) behind the same approval ledger.
+10. P2 backlog from the competitive analysis: `mcp_search` progressive tool
+    discovery, memory/experience management UI (edit/classify/export),
+    config backup/restore with key re-encryption.
+11. Safe WSL/Docker repair actions on top of the read-only checks (explicit
+    confirmation, scoped to Honeycomb's own stack).
+
+### Stage D - IM and mobile ingress
+
+12. Feishu relay completion and independent background agent sessions; then
+    WeChat/other channels.
+13. Remote access auth: per-device tokens and short-lived SSE tickets
+    (HONEYC~3 item; shared prerequisite for Stage E iOS access).
+
+### Stage E - Cross-platform adaptation (LAST) + Alpha
+
+14. Execute `docs/cross-platform-plan.md`: process-execution adapter
+    (win32 WSL wrapper vs native CLI), SecretBackend abstraction
+    (DPAPI/Keychain/libsecret/encrypted-file), bash launchers, Tauri
+    macOS/Linux builds, hosted web panel + PWA for headless Linux/WSL2 and
+    iOS remote use. iOS gets no native app: IM channels + PWA + per-device
+    tokens cover it.
+15. Cross-platform installer validation, then the first public Alpha.
