@@ -37,6 +37,7 @@
     "smoke:experience-memory": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-with-smoke-lock.ps1 dev-stack scripts/smoke-experience-memory.ps1",
     "smoke:repair-cancelled-archives": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-with-smoke-lock.ps1 dev-stack scripts/smoke-repair-cancelled-archives.ps1",
     "smoke:openclaw-real": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-with-smoke-lock.ps1 dev-stack scripts/smoke-openclaw-real.ps1",
+    "smoke:openclaw-runtime-control": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-with-smoke-lock.ps1 dev-stack scripts/smoke-openclaw-runtime-control.ps1",
     "smoke:desktop-ui": "tsx scripts/smoke-desktop-ui.ts",
     "smoke:desktop-ui-prod": "tsx scripts/smoke-desktop-ui.ts --prod",
     "smoke:desktop-onboarding": "tsx scripts/smoke-desktop-ui.ts --prod --onboarding",

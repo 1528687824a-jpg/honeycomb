@@ -110,8 +110,9 @@ changes land.
      never writes plaintext API keys.
    - Docker API and worker containers now discover `/app/honeycomb-runtime` and
      the launcher-provided runtime config paths.
-   - Runtime control API exposes status/start/restart/stop hooks when explicit
-     host commands are configured.
+   - Runtime control API exposes status/start/restart/stop hooks. Explicit host
+     commands still take priority, and builtin packaged defaults prepare/mark
+     the local OpenClaw runtime when host commands are absent.
 
 13. Local API security baseline
    - All non-health API routes require a Honeycomb bearer token.
@@ -172,12 +173,12 @@ changes land.
    - Sync apply now also writes native runtime files: `cluster.config.json`,
      `agent-model-configs.json`, `openclaw.env`, and `runtime-manifest.json`.
    - Runtime control now has configurable status/start/restart/stop command
-     endpoints.
+     endpoints plus builtin packaged defaults.
    - Worker execution now resolves Honeycomb agents to OpenClaw agent IDs and
      supplies provider/model/key runtime environment variables for real CLI
      calls.
-   - Packaged default OpenClaw launch/restart command wiring and real OpenClaw
-     end-to-end regression are still not complete.
+   - Real OpenClaw end-to-end regression against an installed runtime is still
+     not complete.
 
 2. Model/provider configuration center
    - First-run UI can collect model and API key.
@@ -390,9 +391,9 @@ one initialized process per server, idle sessions are swept, config changes
 invalidate old sessions, and session stats are visible in diagnostics. Process
 lifecycle hardening also landed: API and worker now shut down gracefully on
 SIGINT/SIGTERM, and the scheduler auto-disables schedules after consecutive
-failures. Next, prove the real OpenClaw provider end-to-end with packaged
-launch/restart command defaults (Phase 19, pulled forward because the whole
-pipeline still defaults to mock execution), then Phase 18 approval-gated
+failures. Packaged OpenClaw runtime control defaults now prepare/mark the local
+runtime when host commands are absent. Next, prove the real OpenClaw provider
+end-to-end against an installed runtime, then Phase 18 approval-gated
 search/browser calls with per-agent network policy, then Phase 18.5
 architecture cleanup splitting `server.ts` and desktop `main.tsx` into tested
 modules, and Schedule UI only after the real OpenClaw loop is proven. Two
@@ -400,9 +401,8 @@ Phase 19 real-mode risks are already closed: OpenClaw output extraction now
 recognizes explicit shapes and fails loudly on empty/unrecognized output
 (`extractOpenClawText` + `OpenClawOutputError`), and the WSL invocation wraps
 the CLI in a Linux-side `timeout --kill-after` so a Windows-side kill cannot
-leave orphan processes inside the distro. Remaining Phase 19 work: packaged
-OpenClaw launch/restart command defaults and the real provider E2E regression
-itself. Desktop fix landed alongside: DPAPI PowerShell calls no longer flash
+leave orphan processes inside the distro. Remaining Phase 19 work: the real
+provider E2E regression itself. Desktop fix landed alongside: DPAPI PowerShell calls no longer flash
 console windows (CREATE_NO_WINDOW), decrypted reads are TTL-cached in-process,
 and the secret-reading Tauri commands are async so they stop blocking the UI
 thread.

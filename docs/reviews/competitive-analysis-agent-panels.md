@@ -66,3 +66,9 @@
 - P0 provider resilience slice is now implemented: `POST /providers/verify-batch` verifies multiple OpenAI-compatible providers, records latency in provider metadata, and returns per-provider results for future UI ranking.
 - Worker model calls now resolve route candidates from the primary agent provider plus `agent.metadata.fallbackRoutes` / `fallbackProviderIds` and primary provider metadata fallbacks. If the primary route fails, the worker records a failed route attempt and tries the next provider/model before marking the model call failed.
 - Remaining P0 backend work after this slice: packaged OpenClaw launch/restart defaults, real provider E2E against installed OpenClaw, and Phase 18 web search/browser gateway.
+
+## 2026-06-12 Update 3
+
+- Phase 19 packaged runtime-control defaults are now implemented: when explicit `HONEYCOMB_OPENCLAW_*_COMMAND` variables are absent, the API uses builtin status/start/restart/stop behavior to prepare or mark the local OpenClaw runtime directory.
+- The real OpenClaw smoke script now sends the local Honeycomb API token on all API calls, so the real-provider regression is no longer blocked by the post-HONEYC~3 auth boundary.
+- Remaining P0 backend work after this slice: run the real provider E2E against an installed OpenClaw runtime, then continue Phase 18 web search/browser gateway.

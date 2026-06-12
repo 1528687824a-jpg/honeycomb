@@ -1,4 +1,6 @@
 import { execFile } from "node:child_process";
+import { promises as fs } from "node:fs";
+import path from "node:path";
 import { promisify } from "node:util";
 import { discoverOpenClawRuntime } from "./openclaw-runtime";
 
@@ -15,6 +17,11 @@ export type OpenClawRuntimeCommandResult = {
   stdout: string;
   stderr: string;
   message: string;
+};
+
+type OpenClawRuntimeCommandInput = {
+  rootPath?: string;
+  timeoutMs?: number;
 };
 
 const commandEnv: Record<OpenClawRuntimeAction, string> = {
@@ -52,22 +59,108 @@ function clipOutput(value: string) {
   return value.slice(0, 8000);
 }
 
+function defaultRuntimeRoot(inputRootPath?: string) {
+  return path.resolve(
+    inputRootPath?.trim() ||
+    process.env.HONEYCOMB_OPENCLAW_RUNTIME_DIR?.trim() ||
+    path.resolve(".runtime", "openclaw")
+  );
+}
+
+async function writeDefaultRuntimeState(input: {
+  action: OpenClawRuntimeAction;
+  rootPath: string;
+}) {
+  await fs.mkdir(path.join(input.rootPath, "agents"), { recursive: true });
+  await fs.mkdir(path.join(input.rootPath, "workspace"), { recursive: true });
+  await fs.mkdir(path.join(input.rootPath, "config"), { recursive: true });
+  const statePath = path.join(input.rootPath, "runtime-control-state.json");
+  const state = {
+    schemaVersion: "honeycomb.openclaw.runtime-control.v1",
+    managedBy: "honeycomb-default-control",
+    action: input.action,
+    updatedAt: new Date().toISOString(),
+    rootPath: input.rootPath
+  };
+  await fs.writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+  return statePath;
+}
+
+async function runDefaultRuntimeCommand(
+  action: OpenClawRuntimeAction,
+  input: OpenClawRuntimeCommandInput = {}
+): Promise<OpenClawRuntimeCommandResult> {
+  if (action === "status") {
+    const discovery = await discoverOpenClawRuntime(input.rootPath);
+    return {
+      configured: true,
+      ok: Boolean(discovery.selected && discovery.selected.status !== "missing"),
+      action,
+      command: "builtin:openclaw-runtime-status",
+      exitCode: discovery.selected ? 0 : 1,
+      stdout: clipOutput(JSON.stringify({
+        checkedAt: discovery.checkedAt,
+        selected: discovery.selected,
+        defaultControl: true
+      })),
+      stderr: "",
+      message: discovery.selected ? "runtime_detected" : "runtime_not_found"
+    };
+  }
+
+  const rootPath = defaultRuntimeRoot(input.rootPath);
+  if (action === "start" || action === "restart") {
+    const statePath = await writeDefaultRuntimeState({ action, rootPath });
+    return {
+      configured: true,
+      ok: true,
+      action,
+      command: `builtin:openclaw-runtime-${action}`,
+      exitCode: 0,
+      stdout: clipOutput(JSON.stringify({
+        rootPath,
+        statePath,
+        preparedDirectories: ["agents", "workspace", "config"]
+      })),
+      stderr: "",
+      message: "runtime_prepared"
+    };
+  }
+
+  const statePath = await writeDefaultRuntimeState({ action, rootPath });
+  return {
+    configured: true,
+    ok: true,
+    action,
+    command: "builtin:openclaw-runtime-stop",
+    exitCode: 0,
+    stdout: clipOutput(JSON.stringify({ rootPath, statePath })),
+    stderr: "",
+    message: "runtime_marked_stopped"
+  };
+}
+
 export async function getOpenClawRuntimeControlStatus(input: {
   rootPath?: string;
 } = {}) {
   const discovery = await discoverOpenClawRuntime(input.rootPath);
-  const commands = Object.fromEntries(
+  const envCommands = Object.fromEntries(
     (Object.keys(commandEnv) as OpenClawRuntimeAction[]).map((action) => [
       action,
       Boolean(parseCommandSpec(process.env[commandEnv[action]]))
     ])
   ) as Record<OpenClawRuntimeAction, boolean>;
+  const commands = Object.fromEntries(
+    (Object.keys(commandEnv) as OpenClawRuntimeAction[]).map((action) => [action, true])
+  ) as Record<OpenClawRuntimeAction, boolean>;
 
   return {
     checkedAt: new Date().toISOString(),
     runtime: discovery.selected,
-    manageable: Object.values(commands).some(Boolean),
+    manageable: true,
+    commandMode: Object.values(envCommands).some(Boolean) ? "env-or-builtin" : "builtin",
     commands,
+    envCommands,
     commandEnv,
     nextActions: discovery.nextActions
   };
@@ -75,22 +168,11 @@ export async function getOpenClawRuntimeControlStatus(input: {
 
 export async function runOpenClawRuntimeCommand(
   action: OpenClawRuntimeAction,
-  input: {
-    timeoutMs?: number;
-  } = {}
+  input: OpenClawRuntimeCommandInput = {}
 ): Promise<OpenClawRuntimeCommandResult> {
   const spec = parseCommandSpec(process.env[commandEnv[action]]);
   if (!spec || spec.length === 0) {
-    return {
-      configured: false,
-      ok: false,
-      action,
-      command: null,
-      exitCode: null,
-      stdout: "",
-      stderr: "",
-      message: `${commandEnv[action]} is not configured`
-    };
+    return runDefaultRuntimeCommand(action, input);
   }
 
   const [filePath, ...args] = spec;

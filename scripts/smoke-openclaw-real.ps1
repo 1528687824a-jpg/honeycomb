@@ -11,6 +11,8 @@ param(
 $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot "honeycomb-api-token.ps1")
+$apiHeaders = Get-HoneycombApiHeaders
 $openClawCli = "/home/administrator/.npm-global/bin/openclaw"
 $wslDistro = "Ubuntu-24.04"
 
@@ -46,7 +48,7 @@ function Wait-ForTerminalStatus {
   $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
   while ((Get-Date) -lt $deadline) {
     Start-Sleep -Seconds 1
-    $job = Invoke-RestMethod -Uri "http://localhost:3000/jobs/$JobId" -TimeoutSec 5
+    $job = Invoke-RestMethod -Uri "http://localhost:3000/jobs/$JobId" -Headers $apiHeaders -TimeoutSec 5
     if (@("succeeded", "failed", "waiting_for_human", "cancelled") -contains $job.status) {
       return $job
     }
@@ -96,13 +98,13 @@ foreach ($mode in $Modes) {
     discussionRounds = 2
   } | ConvertTo-Json
 
-  $created = Invoke-RestMethod -Uri "http://localhost:3000/jobs" -Method Post -ContentType "application/json" -Body $body
+  $created = Invoke-RestMethod -Uri "http://localhost:3000/jobs" -Method Post -Headers $apiHeaders -ContentType "application/json" -Body $body
   Write-Output "Created $mode job: $($created.jobId)"
   $job = Wait-ForTerminalStatus -JobId $created.jobId -TimeoutSeconds $JobTimeoutSeconds
   Assert-Equal -Actual $job.status -Expected "succeeded" -Message "$mode job terminal status"
   Assert-Equal -Actual $job.routingMode -Expected $mode -Message "$mode job routing mode"
 
-  $details = Invoke-RestMethod -Uri "http://localhost:3000/jobs/$($created.jobId)/details"
+  $details = Invoke-RestMethod -Uri "http://localhost:3000/jobs/$($created.jobId)/details" -Headers $apiHeaders
   $realCompletions = @(
     $details.events | Where-Object {
       $_.event_type -eq "tool.openclaw_agent_completed" -and $_.payload.mode -eq "real"

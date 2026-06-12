@@ -213,6 +213,7 @@ const openClawRuntimeActionSchema = z.object({
 });
 
 const openClawRuntimeCommandSchema = z.object({
+  rootPath: z.string().trim().min(1).max(2000).optional(),
   timeoutMs: z.number().int().min(1000).max(300000).optional()
 });
 

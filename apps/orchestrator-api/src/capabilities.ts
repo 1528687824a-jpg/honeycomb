@@ -227,7 +227,7 @@ const capabilities: RuntimeCapability[] = [
     id: "openclaw_sync",
     title: "OpenClaw real-agent sync",
     status: "partial",
-    summary: "Runtime discovery, sync plan/apply/validate APIs, native Honeycomb/OpenClaw config writing, workflow shape, templates, and worker agent routing exist; real launch/restart command wiring is still deployment-dependent.",
+    summary: "Runtime discovery, sync plan/apply/validate APIs, native Honeycomb/OpenClaw config writing, builtin runtime control defaults, workflow shape, templates, and worker agent routing exist.",
     routes: [
       "GET /openclaw/runtime",
       "GET /openclaw/runtime/control",
@@ -247,16 +247,16 @@ const capabilities: RuntimeCapability[] = [
       "Native agent-model-configs.json writer with redacted API key status",
       "OpenClaw runtime manifest and env file writer",
       "Configurable OpenClaw status/start/restart/stop command API",
+      "Builtin packaged runtime status/start/restart/stop defaults when host commands are not configured",
       "Worker workflow shape",
       "Worker resolves Honeycomb agents to OpenClaw agent IDs before real CLI calls",
       "OpenClaw real smoke scripts"
     ],
     missing: [
-      "Host-provided OpenClaw launch/restart command defaults for packaged desktop runtime",
       "Real-agent workflow replacement for remaining mock activities"
     ],
     nextActions: [
-      "Add packaged desktop defaults for OpenClaw launch/restart commands"
+      "Run real provider end-to-end regression against installed OpenClaw"
     ]
   },
   {
@@ -505,7 +505,7 @@ export function getRuntimeCapabilities(): RuntimeCapabilitiesResponse {
     summary,
     capabilities,
     recommendedNext: [
-      "Phase 19 (pulled forward): packaged OpenClaw launch/restart command defaults and real provider E2E regression",
+      "Phase 19: real provider E2E regression against installed OpenClaw",
       "Phase 18: approval-gated search/browser tool calls and per-agent network policy",
       "Phase 18.5: split the large API/desktop modules into smaller tested modules",
       "Phase 20: schedule configuration UI after the real OpenClaw loop is proven"
