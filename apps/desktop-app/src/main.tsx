@@ -550,8 +550,10 @@ const translations = {
     provider: "Provider",
     baseUrl: "Base URL",
     model: "Model",
-    agentChatModel: "Agent chat model",
-    mediaModelConfigHint: "Use a chat/text model here so the agent can understand tasks and write prompts. Image/video generation models such as Seedream or Seedance belong in media tool settings.",
+    imageAgentModel: "Image model",
+    videoAgentModel: "Video model",
+    imageAgentModelHint: "Use an image-capable model here, such as Seedream. Honeycomb verifies it through the image generation API.",
+    videoAgentModelHint: "Use a video-capable model here, such as Seedance. Honeycomb verifies it through the video generation API.",
     apiKey: "API Key",
     saveAgentConfig: "Save configuration",
     cancelConfig: "Cancel",
@@ -796,8 +798,10 @@ const translations = {
     provider: "模型服务商",
     baseUrl: "接口地址",
     model: "模型",
-    agentChatModel: "Agent 对话模型",
-    mediaModelConfigHint: "这里请填写用于理解任务、编写提示词和调度工作的对话/文本模型。Seedream、Seedance 这类图片/视频生成模型应放在媒体生成工具配置里。",
+    imageAgentModel: "图像模型",
+    videoAgentModel: "视频模型",
+    imageAgentModelHint: "这里填写图像 Agent 实际使用的图像模型，例如 Seedream。Honeycomb 会通过图片生成 API 验证模型和 Key。",
+    videoAgentModelHint: "这里填写视频 Agent 实际使用的视频模型，例如 Seedance。Honeycomb 会通过视频生成 API 验证模型和 Key。",
     apiKey: "API Key",
     saveAgentConfig: "保存配置",
     cancelConfig: "取消",
@@ -1346,10 +1350,6 @@ function parseApiErrorPayload(error: unknown): ApiErrorPayload | null {
   }
 }
 
-function isLikelyVideoGenerationModelName(model: string) {
-  return /(seedance|doubao[-_]?seedance|sora|veo|video-generation|cogvideo|kling|wanx.*video)/i.test(model.trim());
-}
-
 function describeAgentConfigSaveError(error: unknown, language: Language, agentId = "", model = "") {
   const zh = language === "zh";
   const payload = parseApiErrorPayload(error);
@@ -1374,16 +1374,15 @@ function describeAgentConfigSaveError(error: unknown, language: Language, agentI
   if (payload?.reason === "provider_auth_failed") {
     return (zh ? "API Key 未通过服务商认证，请确认 Key 属于该模型服务商。" : "The API key was rejected by the provider. Confirm the key belongs to this provider.") + detail;
   }
+  if (payload?.reason === "agent_model_kind_mismatch") {
+    return (zh
+      ? "这个模型类型不适合当前 Agent。图像生成模型请配置到图像 Agent，视频生成模型请配置到视频 Agent，研究/写作/质检 Agent 请配置对话或文本模型。"
+      : "This model type does not match the current agent. Configure image generation models on the image agent, video generation models on the video agent, and chat/text models on research, writer, or test agents.") + detail;
+  }
   if (payload?.reason === "model_not_chat_compatible") {
-    const videoModel = agentId === "video-agent" || isLikelyVideoGenerationModelName(model);
-    if (videoModel) {
-      return zh
-        ? "这个模型更像视频生成模型，不支持当前 Agent 的对话验证接口。视频 Agent 这里先配置用于理解任务、写分镜和生成视频提示词的对话模型；Seedance 这类视频生成模型后续会放到媒体生成工具配置里。"
-        : "This looks like a video generation model and does not support the agent chat verification endpoint. Configure a chat model for the video agent here; Seedance-style video generation models belong in media tool settings.";
-    }
-    return zh
-      ? "这个模型更像图片生成模型，不支持当前 Agent 的对话验证接口。图像 Agent 这里先配置用于理解任务和写图片提示词的对话模型；Seedream 这类图片生成模型后续会放到媒体生成工具配置里。"
-      : "This looks like an image generation model and does not support the agent chat verification endpoint. Configure a chat model for the image agent here; Seedream-style image generation models belong in media tool settings.";
+    return (zh
+      ? "当前后端仍在使用旧的对话验证路径。请重启 Honeycomb 后再保存；图像 Agent 应通过图片生成 API 验证，视频 Agent 应通过视频生成 API 验证。"
+      : "The backend is still using the older chat-verification path. Restart Honeycomb and save again; image agents should verify through the image generation API and video agents through the video generation API.") + detail;
   }
   if (payload?.reason === "provider_rejected_model") {
     return (zh ? "模型服务拒绝了这个模型名，请确认账号支持该模型。" : "The provider rejected this model name. Confirm the account can use this model.") + detail;
@@ -3241,7 +3240,16 @@ function App() {
             const modelTag = savedConfigured
               ? [savedConfig.providerName, savedConfig.model].filter(Boolean).join(" · ")
               : agent.modelTag;
-            const mediaSpecialist = agent.id === "image-agent" || agent.id === "video-agent";
+            const agentModelLabel = agent.id === "image-agent"
+              ? copy.imageAgentModel
+              : agent.id === "video-agent"
+                ? copy.videoAgentModel
+                : copy.model;
+            const agentModelHint = agent.id === "image-agent"
+              ? copy.imageAgentModelHint
+              : agent.id === "video-agent"
+                ? copy.videoAgentModelHint
+                : "";
             const expanded = expandedAgentId === agent.id;
             return (
               <article className={expanded ? "deskPanel agentPanel expanded" : "deskPanel agentPanel"} key={agent.id}>
@@ -3272,9 +3280,9 @@ function App() {
                     </div>
                     <div className="agentConfigFields">
                       <label>
-                        {mediaSpecialist ? copy.agentChatModel : copy.model}
+                        {agentModelLabel}
                         <input value={agentConfigDraft.model} onChange={(event) => updateAgentConfigDraft("model", event.target.value)} />
-                        {mediaSpecialist ? <small className="agentConfigFieldHint">{copy.mediaModelConfigHint}</small> : null}
+                        {agentModelHint ? <small className="agentConfigFieldHint">{agentModelHint}</small> : null}
                       </label>
                       <label>
                         {copy.apiKey}

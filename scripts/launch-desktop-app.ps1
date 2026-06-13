@@ -40,6 +40,82 @@ function Write-LaunchLog($Message) {
   Add-Content -LiteralPath $logPath -Value $line -Encoding UTF8
 }
 
+function Convert-DpapiProviderSecretsForDocker {
+  param([string]$SecretHostDir)
+
+  if (-not $IsWindows -and $PSVersionTable.PSEdition -eq "Core") {
+    return
+  }
+
+  $providerDir = Join-Path $SecretHostDir "providers"
+  if (-not (Test-Path -LiteralPath $providerDir)) {
+    return
+  }
+
+  Add-Type -AssemblyName System.Security
+  $converted = 0
+  Get-ChildItem -LiteralPath $providerDir -Filter "*.key" -File -ErrorAction SilentlyContinue | ForEach-Object {
+    $path = $_.FullName
+    try {
+      $raw = Get-Content -LiteralPath $path -Raw
+      $payload = $raw | ConvertFrom-Json -ErrorAction Stop
+      if ($payload.format -eq "plaintext-local-v1" -and $payload.value) {
+        $plainText = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([string]$payload.value))
+        try {
+          $nested = $plainText | ConvertFrom-Json -ErrorAction Stop
+          if ($nested.format -eq "plaintext-local-v1" -and $nested.value) {
+            $plainText = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([string]$nested.value))
+            $dockerReadable = @{
+              format = "plaintext-local-v1"
+              value = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($plainText))
+            } | ConvertTo-Json -Depth 4
+            Set-Content -LiteralPath $path -Value $dockerReadable -Encoding UTF8
+            $converted += 1
+          }
+        } catch {
+          # Plain API keys are not JSON and should pass through unchanged.
+        }
+        return
+      }
+      if ($payload.format -ne "dpapi-user-v1" -or -not $payload.ciphertext) {
+        return
+      }
+
+      $protectedBytes = [Convert]::FromBase64String([string]$payload.ciphertext)
+      $plainBytes = [System.Security.Cryptography.ProtectedData]::Unprotect(
+        $protectedBytes,
+        $null,
+        [System.Security.Cryptography.DataProtectionScope]::CurrentUser
+      )
+      $plainText = [Text.Encoding]::UTF8.GetString($plainBytes)
+      try {
+        $nested = $plainText | ConvertFrom-Json -ErrorAction Stop
+        if ($nested.format -eq "plaintext-local-v1" -and $nested.value) {
+          $plainText = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([string]$nested.value))
+        }
+      } catch {
+        # Plain API keys are not JSON and should pass through unchanged.
+      }
+      if (-not $plainText.Trim()) {
+        return
+      }
+
+      $dockerReadable = @{
+        format = "plaintext-local-v1"
+        value = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($plainText))
+      } | ConvertTo-Json -Depth 4
+      Set-Content -LiteralPath $path -Value $dockerReadable -Encoding UTF8
+      $converted += 1
+    } catch {
+      Write-LaunchLog "Skipped provider secret Docker conversion for $($_.Name): $($_.Exception.Message)"
+    }
+  }
+
+  if ($converted -gt 0) {
+    Write-LaunchLog "Converted $converted DPAPI provider secret(s) to Docker-readable local format"
+  }
+}
+
 function Invoke-ProcessWithTimeout {
   param(
     [string]$FilePath,
@@ -390,6 +466,7 @@ function Invoke-DesktopNoBundleBuild {
 
 try {
   Write-LaunchLog "Launcher started"
+  Convert-DpapiProviderSecretsForDocker -SecretHostDir $honeycombSecretHostDir
 
   $mutex = [System.Threading.Mutex]::new($false, "Global\HoneycombDesktopLauncher")
   $lockTaken = $mutex.WaitOne(0)

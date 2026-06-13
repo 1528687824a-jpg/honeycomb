@@ -108,14 +108,32 @@ async function decryptSecret(payload: unknown) {
   const record = payload as Record<string, unknown>;
   if (record.format === "dpapi-user-v1" && typeof record.ciphertext === "string") {
     const decrypted = await runPowerShellDpapi("unprotect", record.ciphertext);
-    return Buffer.from(decrypted, "base64").toString("utf8");
+    return unwrapNestedPlaintextSecret(Buffer.from(decrypted, "base64").toString("utf8"));
   }
 
   if (record.format === "plaintext-local-v1" && typeof record.value === "string") {
-    return Buffer.from(record.value, "base64").toString("utf8");
+    return unwrapNestedPlaintextSecret(Buffer.from(record.value, "base64").toString("utf8"));
   }
 
   return null;
+}
+
+function unwrapNestedPlaintextSecret(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("{")) {
+    return value;
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed) as { format?: unknown; value?: unknown };
+    if (parsed.format === "plaintext-local-v1" && typeof parsed.value === "string") {
+      return Buffer.from(parsed.value, "base64").toString("utf8");
+    }
+  } catch {
+    // Keep the original value if it is not one of Honeycomb's secret envelopes.
+  }
+
+  return value;
 }
 
 function hasRecognizedSecretEnvelope(payload: unknown) {

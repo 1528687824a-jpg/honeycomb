@@ -157,12 +157,16 @@ import {
   saveProviderApiKey
 } from "../../../packages/runtime/src/local-secrets";
 import {
+  verifyOpenAiCompatibleImageGenerationProvider,
   verifyOpenAiCompatibleProvider,
+  verifyOpenAiCompatibleVideoGenerationProvider,
   type ProviderVerificationResult
 } from "./provider-verification";
 import {
   inferOpenAiCompatibleProviderForModel,
-  isLikelyMediaGenerationModel
+  isLikelyImageGenerationModel,
+  isLikelyMediaGenerationModel,
+  isLikelyVideoGenerationModel
 } from "./provider-inference";
 import {
   withLiveProviderSecretStatus,
@@ -845,9 +849,7 @@ function providerVerificationFailureCode(verification: ProviderVerificationResul
     return "provider_rate_limited";
   }
   if (verification.statusCode === 400) {
-    return isLikelyMediaGenerationModel(model)
-      ? "model_not_chat_compatible"
-      : "provider_rejected_model";
+    return "provider_rejected_model";
   }
   if (verification.statusCode && verification.statusCode >= 500) {
     return "provider_server_error";
@@ -856,6 +858,97 @@ function providerVerificationFailureCode(verification: ProviderVerificationResul
     return "provider_network_failed";
   }
   return "provider_verification_failed";
+}
+
+type AgentModelVerificationKind = "chat" | "image_generation" | "video_generation";
+
+function selectAgentModelVerificationKind(agent: { agentRole: string }, model: string): {
+  kind: AgentModelVerificationKind;
+  mismatch: null;
+} | {
+  kind: null;
+  mismatch: {
+    reason: "agent_model_kind_mismatch";
+    message: string;
+  };
+} {
+  const role = agent.agentRole;
+  const imageModel = isLikelyImageGenerationModel(model);
+  const videoModel = isLikelyVideoGenerationModel(model);
+
+  if (role === "image") {
+    if (videoModel) {
+      return {
+        kind: null,
+        mismatch: {
+          reason: "agent_model_kind_mismatch",
+          message: "Video generation models should be configured on the video agent."
+        }
+      };
+    }
+    return {
+      kind: imageModel ? "image_generation" : "chat",
+      mismatch: null
+    };
+  }
+
+  if (role === "video") {
+    if (imageModel) {
+      return {
+        kind: null,
+        mismatch: {
+          reason: "agent_model_kind_mismatch",
+          message: "Image generation models should be configured on the image agent."
+        }
+      };
+    }
+    return {
+      kind: videoModel ? "video_generation" : "chat",
+      mismatch: null
+    };
+  }
+
+  if (isLikelyMediaGenerationModel(model)) {
+    return {
+      kind: null,
+      mismatch: {
+        reason: "agent_model_kind_mismatch",
+        message: "Media generation models can only be configured on the image or video agent."
+      }
+    };
+  }
+
+  return {
+    kind: "chat",
+    mismatch: null
+  };
+}
+
+async function verifyAgentModelProvider(input: {
+  kind: AgentModelVerificationKind;
+  baseUrl: string;
+  model: string;
+  apiKey: string;
+}) {
+  if (input.kind === "image_generation") {
+    return verifyOpenAiCompatibleImageGenerationProvider({
+      baseUrl: input.baseUrl,
+      model: input.model,
+      apiKey: input.apiKey
+    });
+  }
+  if (input.kind === "video_generation") {
+    return verifyOpenAiCompatibleVideoGenerationProvider({
+      baseUrl: input.baseUrl,
+      model: input.model,
+      apiKey: input.apiKey
+    });
+  }
+  return verifyOpenAiCompatibleProvider({
+    baseUrl: input.baseUrl,
+    model: input.model,
+    apiKey: input.apiKey
+  });
 }
 
 async function applyOpenClawSyncAfterAgentConfig(input: {
@@ -1493,16 +1586,17 @@ async function main() {
         return;
       }
 
-      if (isLikelyMediaGenerationModel(input.model)) {
+      const selectedVerification = selectAgentModelVerificationKind(agent, input.model);
+      if (selectedVerification.mismatch) {
         const verification = {
           ...providerVerificationFailure(
-            "This model appears to be an image/video generation model and does not support the agent chat verification endpoint."
+            selectedVerification.mismatch.message
           ),
           statusCode: 400
         };
         response.status(400).json({
           error: "provider_verification_failed",
-          reason: "model_not_chat_compatible",
+          reason: selectedVerification.mismatch.reason,
           provider: {
             id: inferredProvider.id,
             displayName: inferredProvider.displayName,
@@ -1524,6 +1618,7 @@ async function main() {
         });
         return;
       }
+      const verificationKind = selectedVerification.kind;
 
       const providedApiKey = input.apiKey?.trim() ?? "";
       const storedApiKey = providedApiKey ? "" : await readProviderApiKey(inferredProvider.id);
@@ -1538,7 +1633,8 @@ async function main() {
         return;
       }
 
-      const verification = await verifyOpenAiCompatibleProvider({
+      const verification = await verifyAgentModelProvider({
+        kind: verificationKind,
         baseUrl: inferredProvider.baseUrl,
         model: input.model,
         apiKey
@@ -1560,7 +1656,8 @@ async function main() {
               inference: {
                 source: inferredProvider.source,
                 presetKey: inferredProvider.presetKey ?? null
-              }
+              },
+              verificationKind
             },
             verification,
             input.model
@@ -1594,7 +1691,8 @@ async function main() {
             inference: {
               source: inferredProvider.source,
               presetKey: inferredProvider.presetKey ?? null
-            }
+            },
+            verificationKind
           },
           verification,
           input.model
@@ -1611,7 +1709,8 @@ async function main() {
         metadata: {
           ...(agent.metadata ?? {}),
           configuredFrom: "desktop-agent-model-config",
-          requestedAgentId: request.params.agentId
+          requestedAgentId: request.params.agentId,
+          verificationKind
         }
       });
       if (!patchedAgent) {
