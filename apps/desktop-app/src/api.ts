@@ -539,6 +539,19 @@ export type ProviderVerificationResponse = {
   };
 };
 
+export type AgentModelConfigResponse = {
+  ok: boolean;
+  agent: AgentConfigRecord;
+  provider: ModelProviderRecord;
+  verification: ProviderVerificationResponse["verification"];
+  openclawSync: {
+    ok: boolean;
+    error: string | null;
+    appliedAt: string | null;
+    writtenFiles: string[];
+  };
+};
+
 export type ProviderBatchVerificationResponse = {
   checkedAt: string;
   count: number;
@@ -598,6 +611,14 @@ export type SeedDefaultAgentsInput = {
   panelAgentName?: string;
   providerId?: string | null;
   model?: string | null;
+};
+
+export type AgentModelConfigInput = {
+  model: string;
+  apiKey: string;
+  providerId?: string;
+  openClawRootPath?: string;
+  allowDiscoveredUserRuntime?: boolean;
 };
 
 export type McpServerStatus = "unknown" | "available" | "missing" | "failed";
@@ -1524,6 +1545,16 @@ export async function patchAgentConfig(agentId: string, input: PatchAgentConfigI
     method: "PATCH",
     body: JSON.stringify(input)
   });
+}
+
+export async function saveAgentModelConfig(agentId: string, input: AgentModelConfigInput) {
+  return request<AgentModelConfigResponse>(
+    `/agents/${encodeURIComponent(agentId)}/model-config`,
+    {
+      method: "POST",
+      body: JSON.stringify(input)
+    }
+  );
 }
 
 export async function listSkills() {

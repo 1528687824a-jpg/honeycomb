@@ -41,6 +41,7 @@ import {
   rejectExperience,
   rejectToolApproval,
   runRuntimeRepairAction,
+  saveAgentModelConfig as saveBackendAgentModelConfig,
   type ExperienceListResponse,
   type ExperienceRecord,
   type ExperienceStatus,
@@ -1248,6 +1249,68 @@ async function saveAgentModelConfigToDesktop(agentId: string, config: AgentModel
       apiKey: config.apiKey
     }
   });
+}
+
+type ApiErrorPayload = {
+  error?: string;
+  reason?: string;
+  message?: string;
+  verification?: {
+    statusCode?: number | null;
+    message?: string | null;
+  };
+};
+
+function parseApiErrorPayload(error: unknown): ApiErrorPayload | null {
+  const text = error instanceof Error ? error.message : String(error ?? "");
+  try {
+    const parsed = JSON.parse(text) as ApiErrorPayload;
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function describeAgentConfigSaveError(error: unknown, language: Language) {
+  const zh = language === "zh";
+  const payload = parseApiErrorPayload(error);
+  const remoteMessage = payload?.verification?.message || payload?.message || "";
+  const detail = remoteMessage ? (zh ? ` 服务商返回：${remoteMessage}` : ` Provider returned: ${remoteMessage}`) : "";
+
+  if (payload?.error === "provider_inference_failed") {
+    return zh
+      ? "无法只根据这个模型名识别模型服务商。请使用明确的模型名，例如 deepseek-chat、gpt-4o、qwen-plus，或稍后在服务商预设中补充接口。"
+      : "Honeycomb could not infer the provider from this model name. Use a recognizable model name such as deepseek-chat, gpt-4o, or qwen-plus, or add a provider preset later.";
+  }
+  if (payload?.reason === "provider_auth_failed") {
+    return (zh ? "API Key 未通过服务商认证，请确认 Key 属于该模型服务商。" : "The API key was rejected by the provider. Confirm the key belongs to this provider.") + detail;
+  }
+  if (payload?.reason === "model_not_chat_compatible") {
+    return zh
+      ? "这个模型更像图片生成模型，不支持当前 Agent 的对话验证接口。图像 Agent 这里先配置用于理解任务和写提示词的对话模型；图片生成模型后续会放到工具配置里。"
+      : "This looks like an image generation model and does not support the agent chat verification endpoint. Configure a chat model for the image agent here; image generation models belong in tool settings.";
+  }
+  if (payload?.reason === "provider_rejected_model") {
+    return (zh ? "模型服务拒绝了这个模型名，请确认账号支持该模型。" : "The provider rejected this model name. Confirm the account can use this model.") + detail;
+  }
+  if (payload?.reason === "provider_endpoint_or_model_not_found") {
+    return (zh ? "模型服务接口或模型不存在，请确认模型名是否正确。" : "The provider endpoint or model was not found. Confirm the model name.") + detail;
+  }
+  if (payload?.reason === "provider_quota_or_billing_failed") {
+    return (zh ? "模型服务账号余额或额度不足，请检查服务商控制台。" : "The provider account appears to have insufficient quota or billing.") + detail;
+  }
+  if (payload?.reason === "provider_rate_limited") {
+    return zh ? "模型服务正在限流，请稍后再试。" : "The provider rate-limited the verification request. Try again later.";
+  }
+  if (payload?.reason === "provider_network_failed") {
+    return zh ? "后端无法连接到模型服务，请检查网络或服务商状态。" : "The backend could not reach the model provider. Check network/provider status.";
+  }
+
+  const text = error instanceof Error ? error.message : String(error ?? "");
+  if (/failed to fetch|networkerror|load failed/i.test(text)) {
+    return zh ? "Honeycomb 后端离线，无法真实验证并写入 OpenClaw。请先启动后端后再保存。" : "The Honeycomb backend is offline, so the model cannot be verified or written to OpenClaw.";
+  }
+  return zh ? "无法验证模型连接，请检查模型和 API Key 后重试。" : "Could not verify the model connection. Check the model and API Key, then retry.";
 }
 
 function defaultSupervisorWorkbenchConfig(): SupervisorWorkbenchConfig {
@@ -2945,25 +3008,22 @@ function App() {
       setAgentConfigError(copy.agentConfigMissing);
       return;
     }
-    const providerReference = resolveProviderForAgent(model, existing || agentConfigDraft, firstRunPreview);
-    const nextConfig: AgentModelConfig = {
-      providerName: providerReference.providerName,
-      baseUrl: providerReference.baseUrl,
-      model,
-      apiKey,
-      apiKeyConfigured: true
-    };
     setAgentConfigSaving(true);
     try {
-      const desktopResult = await saveAgentModelConfigToDesktop(agentId, nextConfig);
-      if (desktopResult.available && "error" in desktopResult) {
-        throw desktopResult.error;
-      }
+      const backendResult = await saveBackendAgentModelConfig(agentId, {
+        model,
+        apiKey,
+        allowDiscoveredUserRuntime: true
+      });
       const verifiedAt = new Date().toISOString();
       const savedConfig = {
-        ...nextConfig,
-        verifiedAt,
-        appliedAt: verifiedAt
+        providerName: backendResult.provider.displayName,
+        baseUrl: backendResult.provider.baseUrl,
+        model: backendResult.agent.model || model,
+        apiKey,
+        apiKeyConfigured: true,
+        verifiedAt: backendResult.verification.checkedAt || verifiedAt,
+        appliedAt: backendResult.openclawSync.appliedAt || verifiedAt
       };
       const nextConfigs = {
         ...agentModelConfigs,
@@ -2976,10 +3036,15 @@ function App() {
         void invokeDesktopCommand("save_provider_api_key", { payload: apiKey });
         setProviderApiKey(apiKey);
       }
-      setAgentConfigMessage(copy.agentConfigSaved);
-    } catch {
+      void saveAgentModelConfigToDesktop(agentId, savedConfig);
+      setAgentConfigMessage(
+        backendResult.openclawSync.ok
+          ? copy.agentConfigSaved
+          : `${copy.agentConfigSaved} ${language === "zh" ? "但 OpenClaw 同步需要稍后重试。" : "OpenClaw sync needs a retry."}`
+      );
+    } catch (caught) {
       setAgentConfigMessage("");
-      setAgentConfigError(copy.agentConfigVerifyFailed);
+      setAgentConfigError(describeAgentConfigSaveError(caught, language));
     } finally {
       setAgentConfigSaving(false);
     }

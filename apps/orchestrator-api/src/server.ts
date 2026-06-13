@@ -161,6 +161,10 @@ import {
   type ProviderVerificationResult
 } from "./provider-verification";
 import {
+  inferOpenAiCompatibleProviderForModel,
+  isLikelyImageGenerationModel
+} from "./provider-inference";
+import {
   withLiveProviderSecretStatus,
   withLiveProviderSecretStatuses
 } from "./provider-secret-status";
@@ -312,6 +316,14 @@ const seedDefaultAgentsSchema = z.object({
   panelAgentName: z.string().trim().min(1).max(200).optional(),
   providerId: z.string().trim().min(1).max(160).nullable().optional(),
   model: z.string().trim().min(1).max(300).nullable().optional()
+});
+
+const agentModelConfigSchema = z.object({
+  model: z.string().trim().min(1).max(300),
+  apiKey: z.string().min(1).max(10000),
+  providerId: z.string().trim().min(1).max(160).optional(),
+  openClawRootPath: z.string().trim().min(1).max(2000).optional(),
+  allowDiscoveredUserRuntime: z.boolean().optional()
 });
 
 const skillSchema = z.object({
@@ -812,6 +824,73 @@ function providerVerificationFailure(message: string): ProviderVerificationResul
     latencyMs: 0,
     statusCode: null,
     message
+  };
+}
+
+function agentRegistryId(agentId: string) {
+  return agentId === "panel-supervisor-agent" ? "panel-agent" : agentId;
+}
+
+function providerVerificationFailureCode(verification: ProviderVerificationResult, model: string) {
+  if (verification.statusCode === 401 || verification.statusCode === 403) {
+    return "provider_auth_failed";
+  }
+  if (verification.statusCode === 402) {
+    return "provider_quota_or_billing_failed";
+  }
+  if (verification.statusCode === 404) {
+    return "provider_endpoint_or_model_not_found";
+  }
+  if (verification.statusCode === 429) {
+    return "provider_rate_limited";
+  }
+  if (verification.statusCode === 400) {
+    return isLikelyImageGenerationModel(model)
+      ? "model_not_chat_compatible"
+      : "provider_rejected_model";
+  }
+  if (verification.statusCode && verification.statusCode >= 500) {
+    return "provider_server_error";
+  }
+  if (!verification.statusCode) {
+    return "provider_network_failed";
+  }
+  return "provider_verification_failed";
+}
+
+async function applyOpenClawSyncAfterAgentConfig(input: {
+  rootPath?: string;
+  allowDiscoveredUserRuntime?: boolean;
+}) {
+  const result = await applyOpenClawSyncPlan({
+    rootPath: input.rootPath,
+    allowDiscoveredUserRuntime: input.allowDiscoveredUserRuntime ?? true
+  });
+  if (!result) {
+    return {
+      ok: false,
+      error: "openclaw_runtime_not_found",
+      appliedAt: null,
+      writtenFiles: []
+    };
+  }
+
+  await Promise.all(
+    result.plan.agents.map((agent) =>
+      patchAgentConfig(agent.honeycombAgentId, {
+        openclawSyncStatus: agent.status === "ready" ? "synced" : "failed",
+        openclawAgentPath: agent.targetAgentPromptPath,
+        lastSyncedAt: result.appliedAt,
+        lastError: agent.status === "ready" ? null : "missing_template"
+      })
+    )
+  );
+
+  return {
+    ok: true,
+    error: null,
+    appliedAt: result.appliedAt,
+    writtenFiles: result.writtenFiles
   };
 }
 
@@ -1366,6 +1445,165 @@ async function main() {
       response.json({
         provider: patched,
         verification
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/agents/:agentId/model-config", async (request, response, next) => {
+    try {
+      const input = agentModelConfigSchema.parse(request.body ?? {});
+      const registryId = agentRegistryId(request.params.agentId);
+      let agent = await getAgentConfig(registryId);
+      if (!agent) {
+        await seedDefaultAgentConfigs();
+        agent = await getAgentConfig(registryId);
+      }
+      if (!agent) {
+        response.status(404).json({ error: "agent_not_found" });
+        return;
+      }
+
+      const requestedProvider = input.providerId ? await getModelProvider(input.providerId) : null;
+      if (input.providerId && !requestedProvider) {
+        response.status(404).json({ error: "provider_not_found" });
+        return;
+      }
+      const existingProvider = requestedProvider ??
+        (agent.providerId ? await getModelProvider(agent.providerId) : null);
+      const inferredProvider = inferOpenAiCompatibleProviderForModel(
+        input.model,
+        existingProvider
+          ? {
+            id: existingProvider.id,
+            displayName: existingProvider.displayName,
+            baseUrl: existingProvider.baseUrl
+          }
+          : null
+      );
+      if (!inferredProvider) {
+        response.status(400).json({
+          error: "provider_inference_failed",
+          message: "Could not infer an OpenAI-compatible provider from the model name.",
+          model: input.model
+        });
+        return;
+      }
+
+      const verification = await verifyOpenAiCompatibleProvider({
+        baseUrl: inferredProvider.baseUrl,
+        model: input.model,
+        apiKey: input.apiKey
+      });
+      if (!verification.ok) {
+        const failedProvider = await upsertModelProvider({
+          id: inferredProvider.id,
+          displayName: inferredProvider.displayName,
+          baseUrl: inferredProvider.baseUrl,
+          defaultModel: input.model,
+          apiKeyConfigured: existingProvider?.apiKeyConfigured ?? false,
+          apiKeyFingerprint: existingProvider?.apiKeyFingerprint ?? null,
+          verificationStatus: verification.status,
+          lastVerifiedAt: verification.checkedAt,
+          lastError: verification.message,
+          metadata: withProviderVerificationMetadata(
+            {
+              ...(existingProvider?.metadata ?? {}),
+              inference: {
+                source: inferredProvider.source,
+                presetKey: inferredProvider.presetKey ?? null
+              }
+            },
+            verification,
+            input.model
+          )
+        });
+        response.status(400).json({
+          error: "provider_verification_failed",
+          reason: providerVerificationFailureCode(verification, input.model),
+          provider: failedProvider,
+          verification
+        });
+        return;
+      }
+
+      const keyStatus = await saveProviderApiKey(inferredProvider.id, input.apiKey);
+      const provider = await upsertModelProvider({
+        id: inferredProvider.id,
+        displayName: inferredProvider.displayName,
+        baseUrl: inferredProvider.baseUrl,
+        defaultModel: input.model,
+        apiKeyConfigured: keyStatus.configured,
+        apiKeyFingerprint: keyStatus.fingerprint,
+        verificationStatus: verification.status,
+        lastVerifiedAt: verification.checkedAt,
+        lastError: null,
+        metadata: withProviderVerificationMetadata(
+          {
+            ...(existingProvider?.metadata ?? {}),
+            inference: {
+              source: inferredProvider.source,
+              presetKey: inferredProvider.presetKey ?? null
+            }
+          },
+          verification,
+          input.model
+        )
+      });
+
+      const patchedAgent = await patchAgentConfig(registryId, {
+        providerId: provider.id,
+        model: input.model,
+        apiKeyConfigured: keyStatus.configured,
+        apiKeyFingerprint: keyStatus.fingerprint,
+        openclawSyncStatus: "pending",
+        lastError: null,
+        metadata: {
+          ...(agent.metadata ?? {}),
+          configuredFrom: "desktop-agent-model-config",
+          requestedAgentId: request.params.agentId
+        }
+      });
+      if (!patchedAgent) {
+        response.status(404).json({ error: "agent_not_found" });
+        return;
+      }
+
+      let openclawSync:
+        | Awaited<ReturnType<typeof applyOpenClawSyncAfterAgentConfig>>
+        | {
+          ok: false;
+          error: string;
+          appliedAt: null;
+          writtenFiles: string[];
+        };
+      try {
+        openclawSync = await applyOpenClawSyncAfterAgentConfig({
+          rootPath: input.openClawRootPath,
+          allowDiscoveredUserRuntime: input.allowDiscoveredUserRuntime
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "openclaw_sync_failed";
+        openclawSync = {
+          ok: false,
+          error: message,
+          appliedAt: null,
+          writtenFiles: []
+        };
+        await patchAgentConfig(registryId, {
+          openclawSyncStatus: "failed",
+          lastError: message
+        });
+      }
+
+      const syncedAgent = await getAgentConfig(registryId);
+      response.status(201).json({
+        ok: true,
+        agent: syncedAgent ?? patchedAgent,
+        provider,
+        verification,
+        openclawSync
       });
     } catch (error) {
       next(error);
