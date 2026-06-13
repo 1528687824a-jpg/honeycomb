@@ -481,10 +481,6 @@ select {
   font-style: normal;
 }
 
-.composerBand {
-  margin-bottom: 14px;
-}
-
 .composer {
   display: grid;
   gap: 10px;
@@ -492,6 +488,182 @@ select {
   border: 1px solid #252a32;
   border-radius: 6px;
   background: #151922;
+}
+
+.taskCommandCenter {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(230px, 300px);
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.taskComposerPanel {
+  min-width: 0;
+  gap: 14px;
+  padding: 18px;
+}
+
+.taskComposerHeader {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: start;
+  gap: 16px;
+}
+
+.taskComposerHeader h1 {
+  margin: 4px 0 6px;
+  color: #ffffff;
+  font-size: 24px;
+  line-height: 1.14;
+}
+
+.taskComposerHeader p {
+  max-width: 760px;
+  margin: 0;
+  color: #aeb8c7;
+  line-height: 1.45;
+}
+
+.taskPromptField {
+  display: grid;
+  gap: 8px;
+  color: #dce4ef;
+  font-weight: 700;
+}
+
+.taskPromptField textarea {
+  min-height: 118px;
+  resize: vertical;
+  font-weight: 500;
+}
+
+.composerControls.taskComposerControls {
+  grid-template-columns: minmax(260px, 1fr) 112px minmax(142px, max-content);
+}
+
+.budgetControl {
+  display: grid;
+  gap: 6px;
+  color: #8c97a7;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.budgetControl input {
+  min-height: 38px;
+}
+
+.taskLaunchButton {
+  min-height: 42px;
+  white-space: nowrap;
+}
+
+.taskLaunchState {
+  min-height: 18px;
+  margin: -4px 0 0;
+  color: #f5c96c;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.taskLaunchState.ready {
+  color: #8cf0b7;
+}
+
+.taskDispatchPanel {
+  min-width: 0;
+  border: 1px solid #252a32;
+  border-radius: 6px;
+  background: #151922;
+  overflow: hidden;
+}
+
+.flushHeader {
+  min-height: 50px;
+}
+
+.dispatchSteps {
+  display: grid;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  background: #252a32;
+}
+
+.dispatchSteps li {
+  min-width: 0;
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: #11151c;
+  color: #aeb8c7;
+}
+
+.dispatchSteps span {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #303641;
+  border-radius: 999px;
+  color: #8c97a7;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.dispatchSteps strong {
+  overflow-wrap: anywhere;
+}
+
+.dispatchSteps .ready span,
+.dispatchSteps .active span {
+  border-color: #66d196;
+  background: rgba(88, 201, 139, 0.15);
+  color: #9ef0bd;
+}
+
+.dispatchSteps .active strong {
+  color: #ffffff;
+}
+
+.jobsSummaryStrip {
+  display: grid;
+  grid-template-columns: 130px 130px minmax(0, 1fr);
+  gap: 1px;
+  margin-bottom: 12px;
+  border: 1px solid #252a32;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #252a32;
+}
+
+.jobsSummaryStrip div {
+  min-width: 0;
+  padding: 12px 14px;
+  background: #151922;
+}
+
+.jobsSummaryStrip span,
+.jobsSummaryStrip strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jobsSummaryStrip span {
+  color: #8c97a7;
+  font-size: 12px;
+}
+
+.jobsSummaryStrip strong {
+  margin-top: 5px;
+  color: #ffffff;
+  font-size: 16px;
 }
 
 .composerControls {
@@ -3270,6 +3442,8 @@ select {
   .routingFlowChart,
   .capabilityGrid,
   .supervisorWorkbenchGrid,
+  .taskCommandCenter,
+  .jobsSummaryStrip,
   .jobWorkspace,
   .approvalDetails,
   .approvalPayloads,
@@ -3306,6 +3480,10 @@ select {
 
   .composerControls {
     align-items: stretch;
+  }
+
+  .taskComposerHeader {
+    grid-template-columns: 1fr;
   }
 
   .timelineItem {

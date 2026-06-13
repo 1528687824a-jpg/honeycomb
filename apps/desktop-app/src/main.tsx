@@ -1995,11 +1995,21 @@ function App() {
   }
 
   async function submitJob() {
+    if (busy) return;
+    const trimmedPrompt = prompt.trim();
+    if (!trimmedPrompt) {
+      setError(language === "zh" ? "\u8bf7\u5148\u5199\u4e0b\u8981\u4ea4\u7ed9 Agent \u56e2\u961f\u7684\u4efb\u52a1\u3002" : "Describe the task before launching it.");
+      return;
+    }
+    if (apiState !== "online") {
+      setError(language === "zh" ? "\u540e\u7aef\u8fd8\u672a\u5c31\u7eea\uff0c\u8bf7\u5148\u7b49 OpenClaw \u53d8\u4e3a\u5728\u7ebf\u3002" : "OpenClaw is not ready yet. Wait until it is online, then launch the task.");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
       const promptWithWorkbenchContext = buildSupervisorPromptWithWorkbenchContext(
-        prompt,
+        trimmedPrompt,
         workbenchConfig,
         panelSupervisorDisplayName,
         language
@@ -2867,49 +2877,146 @@ function App() {
   }
 
   function renderJobs() {
+    const taskCopy = language === "zh"
+      ? {
+          commandTitle: "\u628a\u4efb\u52a1\u4ea4\u7ed9 Agent \u56e2\u961f",
+          commandSubtitle: "\u4efb\u52a1\u4f1a\u5148\u8fdb\u5165\u4e3b\u63a7 Agent\uff0c\u518d\u6309\u76ee\u6807\u6d3e\u7ed9\u7814\u7a76\u3001\u5199\u4f5c\u3001\u56fe\u50cf\u3001\u89c6\u9891\u6216\u8d28\u68c0 Agent\u3002",
+          promptLabel: "\u4efb\u52a1\u5185\u5bb9",
+          promptPlaceholder: "\u4f8b\u5982\uff1a\u5e2e\u6211\u8bbe\u8ba1\u4e00\u5f20\u4e52\u4e53\u7403\u4ff1\u4e50\u90e8\u62db\u65b0\u6d77\u62a5\u5ba3\u4f20\u56fe\uff0c\u98ce\u683c\u8981\u6e05\u723d\u3001\u6709\u8fd0\u52a8\u611f\u3002",
+          dispatchPath: "\u6d3e\u53d1\u8def\u5f84",
+          intake: "\u8bfb\u53d6\u4efb\u52a1",
+          routing: "\u9009\u62e9\u7f16\u6392",
+          agents: "\u4e13\u4e1a Agent \u6267\u884c",
+          evidence: "\u65f6\u95f4\u7ebf\u56de\u4f20",
+          ready: "\u53ef\u542f\u52a8",
+          launching: "\u6b63\u5728\u542f\u52a8...",
+          waitingPrompt: "\u7b49\u5f85\u4efb\u52a1\u5185\u5bb9",
+          waitingBackend: "\u7b49\u5f85\u540e\u7aef\u5728\u7ebf",
+          recentRuns: "\u4efb\u52a1\u5217\u8868",
+          selectedRun: "\u5f53\u524d\u4efb\u52a1"
+        }
+      : {
+          commandTitle: "Send Work To The Agent Team",
+          commandSubtitle: "The panel supervisor reads the task, chooses a routing mode, then dispatches specialist agents.",
+          promptLabel: "Task",
+          promptPlaceholder: "Example: Design a fresh, energetic poster image for a table tennis club recruiting campaign.",
+          dispatchPath: "Dispatch Path",
+          intake: "Task Intake",
+          routing: "Routing Choice",
+          agents: "Specialist Agents",
+          evidence: "Timeline Return",
+          ready: "Ready",
+          launching: "Launching...",
+          waitingPrompt: "Waiting for task text",
+          waitingBackend: "Waiting for backend",
+          recentRuns: "Job List",
+          selectedRun: "Selected Job"
+        };
+    const canStartJob = apiState === "online" && !busy && Boolean(prompt.trim());
+    const launchState = busy
+      ? taskCopy.launching
+      : apiState !== "online"
+        ? taskCopy.waitingBackend
+        : prompt.trim()
+          ? taskCopy.ready
+          : taskCopy.waitingPrompt;
+    const dispatchSteps = [
+      { label: taskCopy.intake, state: prompt.trim() ? "ready" : "idle" },
+      { label: taskCopy.routing, state: prompt.trim() ? "ready" : "idle" },
+      { label: taskCopy.agents, state: busy ? "active" : "idle" },
+      { label: taskCopy.evidence, state: selectedFromList ? "ready" : "idle" }
+    ];
+
     return (
       <section className="deskPage jobsPage" data-tour-anchor="jobs">
-        <section className="composerBand">
+        <section className="taskCommandCenter">
           <form
-            className="composer"
+            className="composer taskComposerPanel"
             onSubmit={(event) => {
               event.preventDefault();
               submitJob();
             }}
           >
-            <div className="panelHeader">
-              <h1>{copy.newJob}</h1>
+            <div className="taskComposerHeader">
+              <div>
+                <p className="eyebrow">
+                  <MessageSquare size={15} aria-hidden="true" />
+                  {copy.newJob}
+                </p>
+                <h1>{taskCopy.commandTitle}</h1>
+                <p>{taskCopy.commandSubtitle}</p>
+              </div>
               <span className={`status ${apiState}`}>{statusText}</span>
             </div>
-            <textarea id="prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} />
-            <div className="composerControls">
+            <label className="taskPromptField" htmlFor="prompt">
+              <span>{taskCopy.promptLabel}</span>
+              <textarea
+                id="prompt"
+                value={prompt}
+                placeholder={taskCopy.promptPlaceholder}
+                onChange={(event) => setPrompt(event.target.value)}
+              />
+            </label>
+            <div className="composerControls taskComposerControls">
               <div className="smartRoutingBadge" data-testid="smart-routing-badge">
                 <strong>{copy.smartRouting}</strong>
                 <span>{copy.smartRoutingHint}</span>
                 <em>{routingLabel(inferredRoutingMode)}</em>
               </div>
-              <label htmlFor="maxModelCalls">{copy.budget}</label>
-              <input
-                id="maxModelCalls"
-                type="number"
-                min="1"
-                max="100"
-                value={maxModelCalls}
-                onChange={(event) => setMaxModelCalls(Number(event.target.value))}
-              />
-              <button data-testid="start-job-button" className="primaryButton" type="submit" disabled={apiState !== "online" || busy || !prompt.trim()}>
+              <label className="budgetControl" htmlFor="maxModelCalls">
+                <span>{copy.budget}</span>
+                <input
+                  id="maxModelCalls"
+                  type="number"
+                  min="1"
+                  max="100"
+                  value={maxModelCalls}
+                  onChange={(event) => setMaxModelCalls(Number(event.target.value))}
+                />
+              </label>
+              <button data-testid="start-job-button" className="primaryButton taskLaunchButton" type="submit" disabled={!canStartJob}>
                 <Play size={16} aria-hidden="true" />
-                {copy.startJob}
+                {busy ? taskCopy.launching : copy.startJob}
               </button>
             </div>
+            <p className={`taskLaunchState ${canStartJob ? "ready" : ""}`}>{launchState}</p>
             {error ? <p className="error">{error}</p> : null}
           </form>
+          <aside className="taskDispatchPanel" aria-label={taskCopy.dispatchPath}>
+            <div className="sectionHeader flushHeader">
+              <h2>{taskCopy.dispatchPath}</h2>
+              <Sparkles size={16} aria-hidden="true" />
+            </div>
+            <ol className="dispatchSteps">
+              {dispatchSteps.map((step, index) => (
+                <li className={step.state} key={step.label}>
+                  <span>{index + 1}</span>
+                  <strong>{step.label}</strong>
+                </li>
+              ))}
+            </ol>
+          </aside>
         </section>
+
+        <div className="jobsSummaryStrip">
+          <div>
+            <span>{copy.runningJobs}</span>
+            <strong>{runningJobCount}</strong>
+          </div>
+          <div>
+            <span>{copy.totalJobs}</span>
+            <strong>{jobListPage?.hasMore ? `${jobs.length}+` : jobs.length}</strong>
+          </div>
+          <div>
+            <span>{copy.latestJob}</span>
+            <strong>{latestJob?.id ?? copy.noLatestJob}</strong>
+          </div>
+        </div>
 
         <section className="jobWorkspace">
           <aside className="jobList">
             <div className="sectionHeader">
-              <h2>{copy.jobs}</h2>
+              <h2>{taskCopy.recentRuns}</h2>
               <span>{jobListPage?.hasMore ? `${jobs.length}+` : jobs.length}</span>
             </div>
             <div className="jobFilters">
@@ -3007,7 +3114,7 @@ function App() {
           <section className="jobDetail">
             <div className="sectionHeader detailHeader">
               <div>
-                <h2>{selectedFromList?.id ?? copy.noJobSelected}</h2>
+                <h2>{selectedFromList?.id ?? taskCopy.selectedRun}</h2>
                 <p>{selectedFromList ? `${selectedFromList.ingressOrigin} / ${routingLabel(selectedFromList.routingMode)}` : "-"}</p>
               </div>
               <button

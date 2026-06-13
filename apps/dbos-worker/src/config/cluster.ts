@@ -15,7 +15,11 @@ function asString(value: unknown, field: string): string {
   if (typeof value !== "string" || !value.trim()) {
     throw new Error(`Invalid cluster config: ${field} must be a non-empty string`);
   }
-  return value;
+  return value.trim();
+}
+
+function optionalString(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
 }
 
 function asStringArray(value: unknown, field: string): string[] {
@@ -86,7 +90,11 @@ function parseClusterConfig(raw: unknown, configPath: string): LoadedClusterConf
     schemaVersion: "agent-openclaw.cluster.v1",
     clusterId: asString(input.clusterId, "clusterId"),
     name: asString(input.name, "name"),
-    description: asString(input.description, "description"),
+    description:
+      optionalString(input.description) ||
+      optionalString(input.name) ||
+      optionalString(input.clusterId) ||
+      "Honeycomb agent cluster",
     defaultRoutingMode: asRoutingMode(input.defaultRoutingMode),
     agents,
     stages: asStages(input.stages),

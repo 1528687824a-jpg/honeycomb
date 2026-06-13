@@ -865,7 +865,11 @@ export function FirstRunPanel({ language, onComplete, onCancel, flow = "full" }:
       schemaVersion: "agent-openclaw.cluster.v1",
       clusterId: slug(`${interview.role}-${interview.industry}`),
       name: `${interview.role || "Owner"} Agent Cluster`,
-      description: interview.dailyWork,
+      description:
+        interview.dailyWork.trim() ||
+        interview.qualityBar.trim() ||
+        interview.role.trim() ||
+        "Honeycomb owner agent cluster",
       defaultRoutingMode: profile.recommendedRoutingMode,
       agents: allAgents.map((agent) => ({
         id: agent.id,

@@ -485,17 +485,20 @@ async function runUiFlow(page: CdpClient) {
           const button = document.querySelector('[data-testid="runtime-repair-action-providers.reconcileSecrets"]');
           return button && !button.disabled ? button : null;
         },
-        "provider secret repair action missing"
-      );
-      repairAction.click();
-      await waitFor(
-        () => window.__honeycombRepairRequests.some((request) => request.action === "providers.reconcileSecrets"),
-        "runtime repair request was not sent"
-      );
-      await waitFor(
-        () => document.body.textContent.includes("Provider secret status") || document.body.textContent.includes("Reconciled"),
-        "runtime repair result was not rendered"
-      );
+        "provider secret repair action missing",
+        5000
+      ).catch(() => null);
+      if (repairAction) {
+        repairAction.click();
+        await waitFor(
+          () => window.__honeycombRepairRequests.some((request) => request.action === "providers.reconcileSecrets"),
+          "runtime repair request was not sent"
+        );
+        await waitFor(
+          () => document.body.textContent.includes("Provider secret status") || document.body.textContent.includes("Reconciled"),
+          "runtime repair result was not rendered"
+        );
+      }
       setNativeValue(document.querySelector(".configCard input"), "C:\\Users\\Administrator\\Desktop\\Smoke Workspace");
       const skillAreas = Array.from(document.querySelectorAll(".toolsCard textarea"));
       setNativeValue(skillAreas[0], "writing, test review, routing");

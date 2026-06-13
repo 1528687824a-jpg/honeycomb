@@ -54,6 +54,10 @@ const markJobWaitingForHuman = DBOS.registerStep(activities.markJobWaitingForHum
   name: "markJobWaitingForHuman",
   ...retryingStepConfig
 });
+const markJobFailed = DBOS.registerStep(activities.markJobFailed, {
+  name: "markJobFailed",
+  ...retryingStepConfig
+});
 const mainAgentSynthesizeDiscussion = DBOS.registerStep(activities.mainAgentSynthesizeDiscussion, {
   name: "mainAgentSynthesizeDiscussion",
   ...retryingStepConfig
@@ -325,7 +329,11 @@ async function runRoutingMode(jobId: string, routingMode: RoutingMode, stages: S
   }
 }
 
-async function jobPipelineWorkflow(input: JobWorkflowInput) {
+function workflowErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function runJobPipelineWorkflow(input: JobWorkflowInput) {
   if (await isJobCancelled(input.jobId)) {
     return {
       jobId: input.jobId,
@@ -437,6 +445,20 @@ async function jobPipelineWorkflow(input: JobWorkflowInput) {
     jobId: input.jobId,
     status: "succeeded"
   };
+}
+
+async function jobPipelineWorkflow(input: JobWorkflowInput) {
+  try {
+    return await runJobPipelineWorkflow(input);
+  } catch (error) {
+    const reason = workflowErrorMessage(error);
+    await markJobFailed(input.jobId, reason);
+    return {
+      jobId: input.jobId,
+      status: "failed",
+      error: reason
+    };
+  }
 }
 
 export const JobPipelineWorkflow = DBOS.registerWorkflow(jobPipelineWorkflow, {
