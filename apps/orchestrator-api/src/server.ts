@@ -162,7 +162,7 @@ import {
 } from "./provider-verification";
 import {
   inferOpenAiCompatibleProviderForModel,
-  isLikelyImageGenerationModel
+  isLikelyMediaGenerationModel
 } from "./provider-inference";
 import {
   withLiveProviderSecretStatus,
@@ -845,7 +845,7 @@ function providerVerificationFailureCode(verification: ProviderVerificationResul
     return "provider_rate_limited";
   }
   if (verification.statusCode === 400) {
-    return isLikelyImageGenerationModel(model)
+    return isLikelyMediaGenerationModel(model)
       ? "model_not_chat_compatible"
       : "provider_rejected_model";
   }
@@ -1489,6 +1489,38 @@ async function main() {
           error: "provider_inference_failed",
           message: "Could not infer an OpenAI-compatible provider from the model name.",
           model: input.model
+        });
+        return;
+      }
+
+      if (isLikelyMediaGenerationModel(input.model)) {
+        const verification = {
+          ...providerVerificationFailure(
+            "This model appears to be an image/video generation model and does not support the agent chat verification endpoint."
+          ),
+          statusCode: 400
+        };
+        response.status(400).json({
+          error: "provider_verification_failed",
+          reason: "model_not_chat_compatible",
+          provider: {
+            id: inferredProvider.id,
+            displayName: inferredProvider.displayName,
+            baseUrl: inferredProvider.baseUrl,
+            defaultModel: null,
+            apiKeyConfigured: existingProvider?.apiKeyConfigured ?? false,
+            apiKeyFingerprint: existingProvider?.apiKeyFingerprint ?? null,
+            verificationStatus: "failed",
+            lastVerifiedAt: verification.checkedAt,
+            lastError: verification.message,
+            metadata: {
+              inference: {
+                source: inferredProvider.source,
+                presetKey: inferredProvider.presetKey ?? null
+              }
+            }
+          },
+          verification
         });
         return;
       }

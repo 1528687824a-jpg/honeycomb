@@ -546,6 +546,8 @@ const translations = {
     provider: "Provider",
     baseUrl: "Base URL",
     model: "Model",
+    agentChatModel: "Agent chat model",
+    mediaModelConfigHint: "Use a chat/text model here so the agent can understand tasks and write prompts. Image/video generation models such as Seedream or Seedance belong in media tool settings.",
     apiKey: "API Key",
     saveAgentConfig: "Save configuration",
     cancelConfig: "Cancel",
@@ -790,6 +792,8 @@ const translations = {
     provider: "模型服务商",
     baseUrl: "接口地址",
     model: "模型",
+    agentChatModel: "Agent 对话模型",
+    mediaModelConfigHint: "这里请填写用于理解任务、编写提示词和调度工作的对话/文本模型。Seedream、Seedance 这类图片/视频生成模型应放在媒体生成工具配置里。",
     apiKey: "API Key",
     saveAgentConfig: "保存配置",
     cancelConfig: "取消",
@@ -3151,6 +3155,7 @@ function App() {
             const modelTag = savedConfigured
               ? [savedConfig.providerName, savedConfig.model].filter(Boolean).join(" · ")
               : agent.modelTag;
+            const mediaSpecialist = agent.id === "image-agent" || agent.id === "video-agent";
             const expanded = expandedAgentId === agent.id;
             return (
               <article className={expanded ? "deskPanel agentPanel expanded" : "deskPanel agentPanel"} key={agent.id}>
@@ -3181,8 +3186,9 @@ function App() {
                     </div>
                     <div className="agentConfigFields">
                       <label>
-                        {copy.model}
+                        {mediaSpecialist ? copy.agentChatModel : copy.model}
                         <input value={agentConfigDraft.model} onChange={(event) => updateAgentConfigDraft("model", event.target.value)} />
+                        {mediaSpecialist ? <small className="agentConfigFieldHint">{copy.mediaModelConfigHint}</small> : null}
                       </label>
                       <label>
                         {copy.apiKey}

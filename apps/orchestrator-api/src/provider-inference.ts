@@ -129,7 +129,17 @@ function presetBaseUrl(preset: ProviderPreset) {
 }
 
 export function isLikelyImageGenerationModel(model: string) {
-  return /^(dall-e|gpt-image-|imagen|cogview|wanx|seedream|doubao.*image|flux|stable-diffusion)/i.test(
+  return /(dall-e|gpt-image-|imagen|cogview|wanx|seedream|doubao[-_]?seedream|doubao.*image|flux|stable-diffusion)/i.test(
     model.trim()
   );
+}
+
+export function isLikelyVideoGenerationModel(model: string) {
+  return /(seedance|doubao[-_]?seedance|sora|veo|video-generation|cogvideo|kling|wanx.*video)/i.test(
+    model.trim()
+  );
+}
+
+export function isLikelyMediaGenerationModel(model: string) {
+  return isLikelyImageGenerationModel(model) || isLikelyVideoGenerationModel(model);
 }

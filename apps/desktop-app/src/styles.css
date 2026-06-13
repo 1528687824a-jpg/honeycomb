@@ -1207,9 +1207,19 @@ select {
 }
 
 .agentConfigFields label {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
   color: #ffffff;
   font-size: 13px;
   font-weight: 750;
+}
+
+.agentConfigFieldHint {
+  color: #9aa6b8;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
 }
 
 .agentConfigFields input,
