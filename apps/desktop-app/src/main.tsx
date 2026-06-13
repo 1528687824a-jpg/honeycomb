@@ -35,7 +35,9 @@ import {
   getJobTimeline,
   getRuntimeDiagnostics,
   listExperiences,
+  listAgentConfigs,
   listJobs,
+  listModelProviders,
   listRuntimeRepairActions,
   listToolApprovals,
   rejectExperience,
@@ -45,6 +47,7 @@ import {
   type ExperienceListResponse,
   type ExperienceRecord,
   type ExperienceStatus,
+  type AgentConfigRecord,
   type JobRecord,
   type JobStatus,
   type JobTimeline,
@@ -53,6 +56,7 @@ import {
   type RuntimeRepairAction,
   type RuntimeRepairActionId,
   type RoutingMode,
+  type ModelProviderRecord,
   type ToolApprovalRecord
 } from "./api";
 import { FirstRunPanel, type FirstRunFlow } from "./firstRun";
@@ -1153,8 +1157,8 @@ function normalizeAgentModelConfig(input: Partial<AgentModelConfig> | null | und
   if (!input || typeof input !== "object") return null;
   const apiKey = typeof input.apiKey === "string" ? input.apiKey : "";
   const model = typeof input.model === "string" ? input.model : "";
-  const providerName = typeof input.providerName === "string" && input.providerName.trim() ? input.providerName : "DeepSeek";
-  const baseUrl = typeof input.baseUrl === "string" && input.baseUrl.trim() ? input.baseUrl : "https://api.deepseek.com";
+  const providerName = typeof input.providerName === "string" && input.providerName.trim() ? input.providerName : "";
+  const baseUrl = typeof input.baseUrl === "string" && input.baseUrl.trim() ? input.baseUrl : "";
   return {
     providerName,
     baseUrl,
@@ -1166,14 +1170,34 @@ function normalizeAgentModelConfig(input: Partial<AgentModelConfig> | null | und
   };
 }
 
+function isStaleSpecialistAgentModelConfig(agentId: string, config: AgentModelConfig) {
+  return specialistAgentConfigIds.has(agentId) &&
+    config.apiKeyConfigured &&
+    !config.apiKey.trim() &&
+    !config.verifiedAt &&
+    !config.appliedAt &&
+    /^deepseek-v4-pro$/i.test(config.model.trim());
+}
+
+function normalizeAgentModelConfigEntry(
+  agentId: string,
+  config: Partial<AgentModelConfig>
+): [string, AgentModelConfig] | null {
+  const normalized = normalizeAgentModelConfig(config);
+  if (!normalized || isStaleSpecialistAgentModelConfig(agentId, normalized)) {
+    return null;
+  }
+  return [agentId, normalized];
+}
+
 function loadAgentModelConfigs(): Record<string, AgentModelConfig> {
   try {
     const parsed = JSON.parse(window.localStorage.getItem("honeycomb.agentModelConfigs") || "{}") as Record<string, Partial<AgentModelConfig>>;
     if (!parsed || typeof parsed !== "object") return {};
     return Object.fromEntries(
       Object.entries(parsed)
-        .map(([agentId, config]) => [agentId, normalizeAgentModelConfig(config)])
-        .filter((entry): entry is [string, AgentModelConfig] => Boolean(entry[1]))
+        .map(([agentId, config]) => normalizeAgentModelConfigEntry(agentId, config))
+        .filter((entry): entry is [string, AgentModelConfig] => Boolean(entry))
     );
   } catch {
     return {};
@@ -1192,6 +1216,53 @@ function saveAgentModelConfigs(configs: Record<string, AgentModelConfig>) {
     ])
   );
   window.localStorage.setItem("honeycomb.agentModelConfigs", JSON.stringify(redacted));
+}
+
+const specialistAgentConfigIds = new Set([
+  "research-agent",
+  "writer-agent",
+  "image-agent",
+  "video-agent",
+  "test-agent"
+]);
+
+function uiAgentIdFromBackend(agentId: string) {
+  return agentId === "panel-agent" ? "panel-supervisor-agent" : agentId;
+}
+
+function mergeBackendAgentModelConfigs(
+  current: Record<string, AgentModelConfig>,
+  agents: AgentConfigRecord[],
+  providers: ModelProviderRecord[]
+) {
+  const next = { ...current };
+  const providersById = new Map(providers.map((provider) => [provider.id, provider]));
+
+  for (const agent of agents) {
+    const uiAgentId = uiAgentIdFromBackend(agent.id);
+    if (!specialistAgentConfigIds.has(uiAgentId)) {
+      continue;
+    }
+
+    if (!agent.apiKeyConfigured || !agent.model) {
+      delete next[uiAgentId];
+      continue;
+    }
+
+    const existing = next[uiAgentId];
+    const provider = agent.providerId ? providersById.get(agent.providerId) : null;
+    next[uiAgentId] = {
+      providerName: provider?.displayName || existing?.providerName || agent.providerId || "Configured provider",
+      baseUrl: provider?.baseUrl || existing?.baseUrl || "",
+      model: agent.model,
+      apiKey: existing?.apiKey || "",
+      apiKeyConfigured: true,
+      verifiedAt: provider?.lastVerifiedAt || existing?.verifiedAt,
+      appliedAt: agent.lastSyncedAt || existing?.appliedAt
+    };
+  }
+
+  return next;
 }
 
 async function loadProviderApiKeyFromDesktop() {
@@ -1213,8 +1284,8 @@ async function loadAgentModelConfigsFromDesktop() {
     const parsed = JSON.parse(result.value) as Record<string, Partial<AgentModelConfig>>;
     return Object.fromEntries(
       Object.entries(parsed)
-        .map(([agentId, config]) => [agentId, normalizeAgentModelConfig(config)])
-        .filter((entry): entry is [string, AgentModelConfig] => Boolean(entry[1]))
+        .map(([agentId, config]) => normalizeAgentModelConfigEntry(agentId, config))
+        .filter((entry): entry is [string, AgentModelConfig] => Boolean(entry))
     );
   } catch {
     return {};
@@ -1275,7 +1346,11 @@ function parseApiErrorPayload(error: unknown): ApiErrorPayload | null {
   }
 }
 
-function describeAgentConfigSaveError(error: unknown, language: Language) {
+function isLikelyVideoGenerationModelName(model: string) {
+  return /(seedance|doubao[-_]?seedance|sora|veo|video-generation|cogvideo|kling|wanx.*video)/i.test(model.trim());
+}
+
+function describeAgentConfigSaveError(error: unknown, language: Language, agentId = "", model = "") {
   const zh = language === "zh";
   const payload = parseApiErrorPayload(error);
   const remoteMessage = payload?.verification?.message || payload?.message || "";
@@ -1300,9 +1375,15 @@ function describeAgentConfigSaveError(error: unknown, language: Language) {
     return (zh ? "API Key 未通过服务商认证，请确认 Key 属于该模型服务商。" : "The API key was rejected by the provider. Confirm the key belongs to this provider.") + detail;
   }
   if (payload?.reason === "model_not_chat_compatible") {
+    const videoModel = agentId === "video-agent" || isLikelyVideoGenerationModelName(model);
+    if (videoModel) {
+      return zh
+        ? "这个模型更像视频生成模型，不支持当前 Agent 的对话验证接口。视频 Agent 这里先配置用于理解任务、写分镜和生成视频提示词的对话模型；Seedance 这类视频生成模型后续会放到媒体生成工具配置里。"
+        : "This looks like a video generation model and does not support the agent chat verification endpoint. Configure a chat model for the video agent here; Seedance-style video generation models belong in media tool settings.";
+    }
     return zh
-      ? "这个模型更像图片生成模型，不支持当前 Agent 的对话验证接口。图像 Agent 这里先配置用于理解任务和写提示词的对话模型；图片生成模型后续会放到工具配置里。"
-      : "This looks like an image generation model and does not support the agent chat verification endpoint. Configure a chat model for the image agent here; image generation models belong in tool settings.";
+      ? "这个模型更像图片生成模型，不支持当前 Agent 的对话验证接口。图像 Agent 这里先配置用于理解任务和写图片提示词的对话模型；Seedream 这类图片生成模型后续会放到媒体生成工具配置里。"
+      : "This looks like an image generation model and does not support the agent chat verification endpoint. Configure a chat model for the image agent here; Seedream-style image generation models belong in media tool settings.";
   }
   if (payload?.reason === "provider_rejected_model") {
     return (zh ? "模型服务拒绝了这个模型名，请确认账号支持该模型。" : "The provider rejected this model name. Confirm the account can use this model.") + detail;
@@ -1656,14 +1737,19 @@ function App() {
   useEffect(() => {
     let cancelled = false;
     async function syncAgentConfigs() {
-      const [desktopConfigs, loadedProviderApiKey] = await Promise.all([
+      const [desktopConfigs, loadedProviderApiKey, backendAgents, backendProviders] = await Promise.all([
         loadAgentModelConfigsFromDesktop(),
-        loadProviderApiKeyFromDesktop()
+        loadProviderApiKeyFromDesktop(),
+        listAgentConfigs().then((response) => response.agents).catch(() => null),
+        listModelProviders().then((response) => response.providers).catch(() => null)
       ]);
       if (cancelled) return;
       setProviderApiKey(loadedProviderApiKey);
       setAgentModelConfigs((current) => {
-        const merged = { ...current, ...desktopConfigs };
+        let merged = { ...current, ...desktopConfigs };
+        if (backendAgents && backendProviders) {
+          merged = mergeBackendAgentModelConfigs(merged, backendAgents, backendProviders);
+        }
         const provider = firstRunPreview?.provider;
         if (provider?.apiKeyConfigured || loadedProviderApiKey) {
           const existing = merged["panel-supervisor-agent"];
@@ -3076,7 +3162,7 @@ function App() {
       );
     } catch (caught) {
       setAgentConfigMessage("");
-      setAgentConfigError(describeAgentConfigSaveError(caught, language));
+      setAgentConfigError(describeAgentConfigSaveError(caught, language, agentId, model));
     } finally {
       setAgentConfigSaving(false);
     }
