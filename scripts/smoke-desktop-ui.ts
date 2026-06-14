@@ -505,11 +505,11 @@ async function runUiFlow(page: CdpClient) {
       setNativeValue(skillAreas[1], "filesystem, git, browser");
       document.querySelector(".toolsCard button").click();
       await waitFor(() => document.body.textContent.includes("Workbench config saved locally."), "workbench config was not saved before job creation");
-      const consoleTab = await waitFor(
-        () => document.querySelector('[data-testid="console-view-tab"]'),
-        "console tab missing"
+      const conversationTab = await waitFor(
+        () => document.querySelector('[data-testid="conversation-view-tab"]'),
+        "conversation tab missing"
       );
-      consoleTab.click();
+      conversationTab.click();
       await sleep(100);
       await waitFor(() => document.querySelector("#prompt"), "prompt field missing");
       const smartRoutingVisible = Boolean(document.querySelector('[data-testid="smart-routing-badge"]')) &&

@@ -7,22 +7,25 @@ import {
   ChevronRight,
   Eye,
   EyeOff,
+  FolderOpen,
   Gauge,
   History,
   KeyRound,
   Languages,
+  ListChecks,
   LockKeyhole,
   MessageSquare,
   PanelLeftClose,
   PanelLeftOpen,
   Play,
+  Plus,
   RefreshCw,
   Search,
+  Send,
   Settings,
   ShieldQuestion,
   SlidersHorizontal,
   Sparkles,
-  TerminalSquare,
   X
 } from "lucide-react";
 import {
@@ -73,7 +76,16 @@ type ApiState = "checking" | "online" | "offline";
 type JobStatusFilter = "all" | "running" | "waiting_for_human" | "cancelled";
 type JobTimeFilter = "all" | "24h" | "7d" | "custom";
 type Language = "en" | "zh";
-type AppView = "dashboard" | "setup" | "jobs" | "approvals" | "agents" | "models" | "memory" | "settings";
+type AppView =
+  | "dashboard"
+  | "setup"
+  | "conversations"
+  | "jobs"
+  | "approvals"
+  | "agents"
+  | "models"
+  | "memory"
+  | "settings";
 type TourAnchor = "activity" | "dashboard" | "setup" | "jobs" | "settings";
 
 type SecurityRecord = {
@@ -450,6 +462,7 @@ const translations = {
     setupTab: "First Run",
     consoleTab: "Console",
     dashboard: "Dashboard",
+    conversationsView: "Conversations",
     jobsView: "Jobs",
     approvalsView: "Approvals",
     agentsView: "Agents",
@@ -457,6 +470,7 @@ const translations = {
     memoryView: "Memory",
     settingsView: "Settings",
     startSetup: "Start First Run",
+    openConversations: "Open Conversations",
     openJobs: "Open Jobs",
     newJob: "New Job",
     routing: "Routing",
@@ -698,6 +712,7 @@ const translations = {
     setupTab: "首次启动",
     consoleTab: "控制台",
     dashboard: "仪表盘",
+    conversationsView: "对话",
     jobsView: "任务",
     approvalsView: "审批",
     agentsView: "Agent",
@@ -705,6 +720,7 @@ const translations = {
     memoryView: "记忆",
     settingsView: "设置",
     startSetup: "开始首次启动",
+    openConversations: "打开对话",
     openJobs: "打开任务",
     newJob: "新任务",
     routing: "编排模式",
@@ -956,6 +972,7 @@ function getInitialView(): AppView {
   if (
     storedView === "dashboard" ||
     storedView === "setup" ||
+    storedView === "conversations" ||
     storedView === "jobs" ||
     storedView === "approvals" ||
     storedView === "agents" ||
@@ -991,6 +1008,16 @@ function statusTone(status: JobStatus) {
   if (status === "failed" || status === "cancelled") return "danger";
   if (status === "waiting_for_human") return "warn";
   return "active";
+}
+
+function jobProgress(status: JobStatus) {
+  if (status === "created") return 8;
+  if (status === "queued") return 14;
+  if (status === "planning") return 26;
+  if (status === "running") return 58;
+  if (status === "testing" || status === "fixing") return 78;
+  if (status === "waiting_for_human") return 62;
+  return 100;
 }
 
 function riskTone(riskLevel: ToolApprovalRecord["riskLevel"]) {
@@ -1667,7 +1694,8 @@ function App() {
   const allPrimaryNav = [
     { id: "dashboard" as const, icon: Gauge, label: copy.dashboard, group: copy.navGroups.operate },
     { id: "setup" as const, icon: Sparkles, label: copy.setupTab, group: copy.navGroups.operate },
-    { id: "jobs" as const, icon: MessageSquare, label: copy.jobsView, group: copy.navGroups.operate },
+    { id: "conversations" as const, icon: MessageSquare, label: copy.conversationsView, group: copy.navGroups.operate },
+    { id: "jobs" as const, icon: ListChecks, label: copy.jobsView, group: copy.navGroups.operate },
     { id: "approvals" as const, icon: ShieldQuestion, label: copy.approvalsView, group: copy.navGroups.operate },
     { id: "agents" as const, icon: Bot, label: copy.agentsView, group: copy.navGroups.build },
     { id: "models" as const, icon: SlidersHorizontal, label: copy.modelsView, group: copy.navGroups.build },
@@ -2486,9 +2514,9 @@ function App() {
             <p>{copy.subtitle}</p>
           </div>
           <div className="heroActions">
-            <button className="secondaryButton" type="button" onClick={() => setActiveView("jobs")}>
-              <TerminalSquare size={16} aria-hidden="true" />
-              {copy.openJobs}
+            <button className="secondaryButton" type="button" onClick={() => setActiveView("conversations")}>
+              <MessageSquare size={16} aria-hidden="true" />
+              {copy.openConversations}
             </button>
           </div>
         </div>
@@ -2876,95 +2904,159 @@ function App() {
     );
   }
 
-  function renderJobs() {
-    const taskCopy = language === "zh"
+  function renderConversations() {
+    const conversationCopy = language === "zh"
       ? {
-          commandTitle: "\u628a\u4efb\u52a1\u4ea4\u7ed9 Agent \u56e2\u961f",
-          commandSubtitle: "\u4efb\u52a1\u4f1a\u5148\u8fdb\u5165\u4e3b\u63a7 Agent\uff0c\u518d\u6309\u76ee\u6807\u6d3e\u7ed9\u7814\u7a76\u3001\u5199\u4f5c\u3001\u56fe\u50cf\u3001\u89c6\u9891\u6216\u8d28\u68c0 Agent\u3002",
-          promptLabel: "\u4efb\u52a1\u5185\u5bb9",
-          promptPlaceholder: "\u4f8b\u5982\uff1a\u5e2e\u6211\u8bbe\u8ba1\u4e00\u5f20\u4e52\u4e53\u7403\u4ff1\u4e50\u90e8\u62db\u65b0\u6d77\u62a5\u5ba3\u4f20\u56fe\uff0c\u98ce\u683c\u8981\u6e05\u723d\u3001\u6709\u8fd0\u52a8\u611f\u3002",
-          dispatchPath: "\u6d3e\u53d1\u8def\u5f84",
-          intake: "\u8bfb\u53d6\u4efb\u52a1",
-          routing: "\u9009\u62e9\u7f16\u6392",
-          agents: "\u4e13\u4e1a Agent \u6267\u884c",
-          evidence: "\u65f6\u95f4\u7ebf\u56de\u4f20",
-          ready: "\u53ef\u542f\u52a8",
-          launching: "\u6b63\u5728\u542f\u52a8...",
-          waitingPrompt: "\u7b49\u5f85\u4efb\u52a1\u5185\u5bb9",
+          pageTitle: "\u5bf9\u8bdd",
+          pageSubtitle: "\u9009\u62e9\u9879\u76ee\u4f4d\u7f6e\uff0c\u5728\u9879\u76ee\u91cc\u65b0\u5efa\u5bf9\u8bdd\uff0c\u7531\u9762\u677f Agent \u8d1f\u8d23\u8bfb\u53d6\u76ee\u6807\u5e76\u6d3e\u751f\u4efb\u52a1\u3002",
+          project: "\u9879\u76ee\u4f4d\u7f6e",
+          projectHint: "\u5f53\u524d\u5bf9\u8bdd\u548c\u4efb\u52a1\u4f1a\u5e26\u4e0a\u8fd9\u4e2a\u5de5\u4f5c\u76ee\u5f55\u4e0a\u4e0b\u6587\u3002",
+          projectUnset: "\u672a\u8bbe\u7f6e\u9879\u76ee\u4f4d\u7f6e",
+          newConversation: "\u65b0\u5efa\u5bf9\u8bdd",
+          conversations: "\u5bf9\u8bdd\u5217\u8868",
+          activeConversation: "\u65b0\u5bf9\u8bdd",
+          panelAgent: "\u9762\u677f Agent",
+          panelAgentHint: "\u8d1f\u8d23\u7406\u89e3\u5bf9\u8bdd\u3001\u7ed1\u5b9a\u9879\u76ee\u4e0a\u4e0b\u6587\uff0c\u7136\u540e\u751f\u6210\u53ef\u8ffd\u8e2a\u7684\u4efb\u52a1\u3002",
+          messageLabel: "\u4efb\u52a1\u6216\u5bf9\u8bdd\u5185\u5bb9",
+          messagePlaceholder: "\u4f8b\u5982\uff1a\u5e2e\u6211\u5728\u8fd9\u4e2a\u9879\u76ee\u91cc\u8bbe\u8ba1\u4e00\u5f20\u4e52\u4e53\u7403\u6d77\u62a5\u5ba3\u4f20\u56fe\u3002",
+          agentPanel: "Agent \u9762\u677f",
+          context: "\u9879\u76ee\u4e0a\u4e0b\u6587",
+          routing: "\u667a\u80fd\u7f16\u6392",
+          taskHandoff: "\u751f\u6210\u4efb\u52a1",
+          timeline: "\u8f6c\u5165\u4efb\u52a1\u76d1\u63a7",
+          ready: "\u53ef\u53d1\u9001",
+          waitingPrompt: "\u7b49\u5f85\u8f93\u5165",
           waitingBackend: "\u7b49\u5f85\u540e\u7aef\u5728\u7ebf",
-          recentRuns: "\u4efb\u52a1\u5217\u8868",
-          selectedRun: "\u5f53\u524d\u4efb\u52a1"
+          launching: "\u6b63\u5728\u53d1\u9001...",
+          send: "\u53d1\u9001\u7ed9 Agent",
+          budget: "\u8c03\u7528\u4e0a\u9650"
         }
       : {
-          commandTitle: "Send Work To The Agent Team",
-          commandSubtitle: "The panel supervisor reads the task, chooses a routing mode, then dispatches specialist agents.",
-          promptLabel: "Task",
-          promptPlaceholder: "Example: Design a fresh, energetic poster image for a table tennis club recruiting campaign.",
-          dispatchPath: "Dispatch Path",
-          intake: "Task Intake",
-          routing: "Routing Choice",
-          agents: "Specialist Agents",
-          evidence: "Timeline Return",
-          ready: "Ready",
-          launching: "Launching...",
-          waitingPrompt: "Waiting for task text",
+          pageTitle: "Conversations",
+          pageSubtitle: "Choose a project location, create a conversation inside that project, and let the panel agent turn the exchange into trackable work.",
+          project: "Project location",
+          projectHint: "Conversation and task requests include this local workspace path as context.",
+          projectUnset: "Project location not set",
+          newConversation: "New conversation",
+          conversations: "Conversation list",
+          activeConversation: "New conversation",
+          panelAgent: "Panel agent",
+          panelAgentHint: "Understands the conversation, binds project context, and creates a trackable job for the task monitor.",
+          messageLabel: "Task or conversation message",
+          messagePlaceholder: "Example: Design a fresh table tennis poster image inside this project.",
+          agentPanel: "Agent panel",
+          context: "Project context",
+          routing: "Smart routing",
+          taskHandoff: "Create job",
+          timeline: "Open task monitor",
+          ready: "Ready to send",
+          waitingPrompt: "Waiting for message",
           waitingBackend: "Waiting for backend",
-          recentRuns: "Job List",
-          selectedRun: "Selected Job"
+          launching: "Sending...",
+          send: "Send to Agent",
+          budget: "Call limit"
         };
     const canStartJob = apiState === "online" && !busy && Boolean(prompt.trim());
     const launchState = busy
-      ? taskCopy.launching
+      ? conversationCopy.launching
       : apiState !== "online"
-        ? taskCopy.waitingBackend
+        ? conversationCopy.waitingBackend
         : prompt.trim()
-          ? taskCopy.ready
-          : taskCopy.waitingPrompt;
-    const dispatchSteps = [
-      { label: taskCopy.intake, state: prompt.trim() ? "ready" : "idle" },
-      { label: taskCopy.routing, state: prompt.trim() ? "ready" : "idle" },
-      { label: taskCopy.agents, state: busy ? "active" : "idle" },
-      { label: taskCopy.evidence, state: selectedFromList ? "ready" : "idle" }
+          ? conversationCopy.ready
+          : conversationCopy.waitingPrompt;
+    const projectPath = workbenchConfig.workspacePath.trim() || conversationCopy.projectUnset;
+    const conversationTitle = prompt.trim() ? prompt.trim().slice(0, 64) : conversationCopy.activeConversation;
+    const conversationSteps = [
+      { label: conversationCopy.context, detail: projectPath, state: workbenchConfig.workspacePath.trim() ? "ready" : "idle" },
+      { label: conversationCopy.routing, detail: routingLabel(inferredRoutingMode), state: prompt.trim() ? "ready" : "idle" },
+      { label: conversationCopy.taskHandoff, detail: statusText, state: busy ? "active" : "idle" },
+      { label: conversationCopy.timeline, detail: latestJob?.id ?? copy.noLatestJob, state: latestJob ? "ready" : "idle" }
     ];
 
     return (
-      <section className="deskPage jobsPage" data-tour-anchor="jobs">
-        <section className="taskCommandCenter">
+      <section className="deskPage conversationsPage" data-tour-anchor="conversations">
+        <aside className="conversationIndex">
+          <div className="sectionHeader">
+            <h2>{conversationCopy.project}</h2>
+            <FolderOpen size={16} aria-hidden="true" />
+          </div>
+          <label className="projectPathField">
+            <span>{copy.workbenchWorkspaceLabel}</span>
+            <input
+              value={workbenchConfig.workspacePath}
+              placeholder={copy.workbenchWorkspacePlaceholder}
+              onChange={(event) => updateWorkbenchConfig((current) => ({ ...current, workspacePath: event.target.value }))}
+            />
+          </label>
+          <p className="mutedText">{conversationCopy.projectHint}</p>
+          <button
+            className="secondaryButton compactButton"
+            type="button"
+            onClick={() => {
+              setPrompt("");
+              setError(null);
+            }}
+          >
+            <Plus size={14} aria-hidden="true" />
+            {conversationCopy.newConversation}
+          </button>
+
+          <div className="conversationListBlock">
+            <div className="sectionHeader flushHeader">
+              <h2>{conversationCopy.conversations}</h2>
+              <span>1</span>
+            </div>
+            <button className="conversationRow active" type="button">
+              <MessageSquare size={16} aria-hidden="true" />
+              <span>
+                <strong>{conversationTitle}</strong>
+                <small>{projectPath}</small>
+              </span>
+            </button>
+          </div>
+        </aside>
+
+        <section className="conversationCanvas">
+          <header className="conversationHeader">
+            <div>
+              <p className="eyebrow">
+                <MessageSquare size={15} aria-hidden="true" />
+                {conversationCopy.pageTitle}
+              </p>
+              <h1>{conversationTitle}</h1>
+              <p>{conversationCopy.pageSubtitle}</p>
+            </div>
+            <span className={`status ${apiState}`}>{statusText}</span>
+          </header>
+
+          <div className="conversationTranscript">
+            <article className="agentMessage">
+              <div className="agentAvatar">H</div>
+              <div>
+                <strong>{conversationCopy.panelAgent}</strong>
+                <p>{conversationCopy.panelAgentHint}</p>
+                <small>{projectPath}</small>
+              </div>
+            </article>
+          </div>
+
           <form
-            className="composer taskComposerPanel"
+            className="conversationComposer"
             onSubmit={(event) => {
               event.preventDefault();
               submitJob();
             }}
           >
-            <div className="taskComposerHeader">
-              <div>
-                <p className="eyebrow">
-                  <MessageSquare size={15} aria-hidden="true" />
-                  {copy.newJob}
-                </p>
-                <h1>{taskCopy.commandTitle}</h1>
-                <p>{taskCopy.commandSubtitle}</p>
-              </div>
-              <span className={`status ${apiState}`}>{statusText}</span>
-            </div>
-            <label className="taskPromptField" htmlFor="prompt">
-              <span>{taskCopy.promptLabel}</span>
-              <textarea
-                id="prompt"
-                value={prompt}
-                placeholder={taskCopy.promptPlaceholder}
-                onChange={(event) => setPrompt(event.target.value)}
-              />
-            </label>
-            <div className="composerControls taskComposerControls">
-              <div className="smartRoutingBadge" data-testid="smart-routing-badge">
-                <strong>{copy.smartRouting}</strong>
-                <span>{copy.smartRoutingHint}</span>
-                <em>{routingLabel(inferredRoutingMode)}</em>
-              </div>
+            <label htmlFor="prompt">{conversationCopy.messageLabel}</label>
+            <textarea
+              id="prompt"
+              value={prompt}
+              placeholder={conversationCopy.messagePlaceholder}
+              onChange={(event) => setPrompt(event.target.value)}
+            />
+            <div className="conversationComposerActions">
               <label className="budgetControl" htmlFor="maxModelCalls">
-                <span>{copy.budget}</span>
+                <span>{conversationCopy.budget}</span>
                 <input
                   id="maxModelCalls"
                   type="number"
@@ -2975,27 +3067,126 @@ function App() {
                 />
               </label>
               <button data-testid="start-job-button" className="primaryButton taskLaunchButton" type="submit" disabled={!canStartJob}>
-                <Play size={16} aria-hidden="true" />
-                {busy ? taskCopy.launching : copy.startJob}
+                <Send size={16} aria-hidden="true" />
+                {busy ? conversationCopy.launching : conversationCopy.send}
               </button>
             </div>
             <p className={`taskLaunchState ${canStartJob ? "ready" : ""}`}>{launchState}</p>
             {error ? <p className="error">{error}</p> : null}
           </form>
-          <aside className="taskDispatchPanel" aria-label={taskCopy.dispatchPath}>
-            <div className="sectionHeader flushHeader">
-              <h2>{taskCopy.dispatchPath}</h2>
-              <Sparkles size={16} aria-hidden="true" />
+        </section>
+
+        <aside className="conversationAgentPanel">
+          <div className="sectionHeader">
+            <h2>{conversationCopy.agentPanel}</h2>
+            <Bot size={16} aria-hidden="true" />
+          </div>
+          <div className="smartRoutingBadge" data-testid="smart-routing-badge">
+            <strong>{copy.smartRouting}</strong>
+            <span>{copy.smartRoutingHint}</span>
+            <em>{routingLabel(inferredRoutingMode)}</em>
+          </div>
+          <ol className="dispatchSteps conversationSteps">
+            {conversationSteps.map((step, index) => (
+              <li className={step.state} key={step.label}>
+                <span>{index + 1}</span>
+                <strong>{step.label}</strong>
+                <small>{step.detail}</small>
+              </li>
+            ))}
+          </ol>
+        </aside>
+      </section>
+    );
+  }
+
+  function renderJobs() {
+    const taskCopy = language === "zh"
+      ? {
+          monitorTitle: "\u4efb\u52a1\u8fd0\u884c",
+          monitorSubtitle: "\u8fd9\u91cc\u53ea\u770b\u4efb\u52a1\u8fdb\u7a0b\u3001\u5b50 Agent \u72b6\u6001\u548c\u5386\u53f2\u5217\u8868\uff1b\u65b0\u4efb\u52a1\u4ece\u5de6\u4fa7\u7684\u201c\u5bf9\u8bdd\u201d\u9875\u53d1\u8d77\u3002",
+          process: "\u8fdb\u7a0b",
+          subAgents: "\u5b50 Agent \u72b6\u6001",
+          waiting: "\u7b49\u5f85",
+          recentRuns: "\u4efb\u52a1\u5217\u8868",
+          selectedRun: "\u5f53\u524d\u4efb\u52a1"
+        }
+      : {
+          monitorTitle: "Task Runs",
+          monitorSubtitle: "This page tracks job progress, sub-agent state, and the task list. New work starts from Conversations.",
+          process: "Process",
+          subAgents: "Sub-agent status",
+          waiting: "Waiting",
+          recentRuns: "Job List",
+          selectedRun: "Selected Job"
+        };
+    const selectedProgress = selectedFromList ? jobProgress(selectedFromList.status) : 0;
+    const agentDefinitions = [
+      { id: "main-agent", short: "main" },
+      { id: "research-agent", short: "research" },
+      { id: "writer-agent", short: "writer" },
+      { id: "image-agent", short: "image" },
+      { id: "video-agent", short: "video" },
+      { id: "test-agent", short: "test" }
+    ];
+    const timelineItems = timeline?.timeline ?? [];
+    const agentStatusCards = agentDefinitions.map((agent) => {
+      const latestEvent = timelineItems.find((item) => {
+        const actor = (item.actor ?? "").toLowerCase();
+        return actor.includes(agent.id) || actor.includes(agent.short);
+      });
+      const tone = latestEvent
+        ? selectedFromList?.status === "succeeded"
+          ? "success"
+          : selectedFromList?.status === "failed" || selectedFromList?.status === "cancelled"
+            ? "danger"
+            : "active"
+        : "idle";
+      return {
+        ...agent,
+        label: agentSequenceLabel(agent.id),
+        tone,
+        status: latestEvent ? compactEventType(latestEvent.eventType) : selectedFromList ? taskCopy.waiting : "-",
+        detail: latestEvent?.title ?? (selectedFromList ? copy.statuses[selectedFromList.status] : copy.noJobSelected)
+      };
+    });
+
+    return (
+      <section className="deskPage jobsPage" data-tour-anchor="jobs">
+        <section className="jobsProcessPanel">
+          <div className="taskMonitorHeader">
+            <div>
+              <p className="eyebrow">
+                <ListChecks size={15} aria-hidden="true" />
+                {taskCopy.process}
+              </p>
+              <h1>{taskCopy.monitorTitle}</h1>
+              <p>{taskCopy.monitorSubtitle}</p>
             </div>
-            <ol className="dispatchSteps">
-              {dispatchSteps.map((step, index) => (
-                <li className={step.state} key={step.label}>
-                  <span>{index + 1}</span>
-                  <strong>{step.label}</strong>
-                </li>
-              ))}
-            </ol>
-          </aside>
+            <button className="secondaryButton compactButton" type="button" onClick={() => setActiveView("conversations")}>
+              <MessageSquare size={15} aria-hidden="true" />
+              {copy.openConversations}
+            </button>
+          </div>
+          <div className="selectedRunProgress">
+            <div>
+              <span>{selectedFromList?.id ?? taskCopy.selectedRun}</span>
+              <strong>{selectedFromList ? copy.statuses[selectedFromList.status] : copy.noJobSelected}</strong>
+            </div>
+            <div className="processMeter" aria-label={taskCopy.process}>
+              <span style={{ width: `${selectedProgress}%` }} />
+            </div>
+          </div>
+          <div className="agentStatusGrid" aria-label={taskCopy.subAgents}>
+            {agentStatusCards.map((agent) => (
+              <article className={`agentStatusCard ${agent.tone}`} key={agent.id}>
+                <span className={`dot ${agent.tone === "idle" ? "active" : agent.tone}`} />
+                <strong>{agent.label}</strong>
+                <em>{agent.status}</em>
+                <small>{agent.detail}</small>
+              </article>
+            ))}
+          </div>
         </section>
 
         <div className="jobsSummaryStrip">
@@ -3884,6 +4075,7 @@ function App() {
       );
     }
     if (activeView === "setup") return renderDashboard();
+    if (activeView === "conversations") return renderConversations();
     if (activeView === "jobs") return renderJobs();
     if (activeView === "approvals") return renderApprovals();
     if (activeView === "agents") return renderAgents();
@@ -3916,7 +4108,13 @@ function App() {
                 key={item.id}
                 className={activeView === item.id ? "railButton active" : "railButton"}
                 data-testid={
-                  item.id === "setup" ? "setup-view-tab" : item.id === "jobs" ? "console-view-tab" : undefined
+                  item.id === "setup"
+                    ? "setup-view-tab"
+                    : item.id === "conversations"
+                      ? "conversation-view-tab"
+                      : item.id === "jobs"
+                        ? "console-view-tab"
+                        : undefined
                 }
                 type="button"
                 title={item.label}
@@ -3958,7 +4156,13 @@ function App() {
                     key={item.id}
                     className={activeView === item.id ? "navItem active" : "navItem"}
                     data-testid={
-                      item.id === "setup" ? "setup-view-tab-secondary" : item.id === "jobs" ? "console-view-tab-secondary" : undefined
+                      item.id === "setup"
+                        ? "setup-view-tab-secondary"
+                        : item.id === "conversations"
+                          ? "conversation-view-tab-secondary"
+                          : item.id === "jobs"
+                            ? "console-view-tab-secondary"
+                            : undefined
                     }
                     type="button"
                     onClick={() => setActiveView(item.id)}

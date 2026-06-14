@@ -1,6 +1,14 @@
 # Honeycomb Task Page Redesign
 
-Status: local implementation complete; editable Figma canvas pending MCP quota.
+Status: superseded by the Conversation + Task IA split; editable Figma canvas
+still pending MCP quota.
+
+2026-06-14 update:
+
+- New work intake now belongs on the `Conversations` page.
+- The `Tasks` page should focus on task progress, sub-agent status, task list,
+  and selected timeline.
+- See `docs/conversation-task-ia.md` for the current product direction.
 
 Figma file:
 https://www.figma.com/design/kKMnDmAbXBxQZT2SE7CgRm

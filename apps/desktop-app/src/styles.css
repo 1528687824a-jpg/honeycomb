@@ -666,6 +666,315 @@ select {
   font-size: 16px;
 }
 
+.conversationsPage {
+  display: grid;
+  grid-template-columns: minmax(250px, 300px) minmax(0, 1fr) minmax(230px, 280px);
+  gap: 12px;
+  min-height: calc(100vh - 64px);
+}
+
+.conversationIndex,
+.conversationCanvas,
+.conversationAgentPanel,
+.jobsProcessPanel {
+  min-width: 0;
+  border: 1px solid #252a32;
+  border-radius: 6px;
+  background: #151922;
+}
+
+.conversationIndex,
+.conversationAgentPanel,
+.jobsProcessPanel {
+  padding: 14px;
+}
+
+.conversationIndex {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.projectPathField,
+.conversationComposer {
+  display: grid;
+  gap: 8px;
+  color: #dce4ef;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.mutedText {
+  margin: -4px 0 0;
+  color: #8c97a7;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.conversationListBlock {
+  min-height: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.conversationRow {
+  width: 100%;
+  min-height: 68px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  border: 1px solid #303641;
+  border-radius: 6px;
+  background: #11151c;
+  color: #dce4ef;
+  text-align: left;
+}
+
+.conversationRow.active {
+  border-color: #76d0ff;
+  background: rgba(118, 208, 255, 0.08);
+}
+
+.conversationRow strong,
+.conversationRow small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversationRow small {
+  margin-top: 4px;
+  color: #8c97a7;
+  font-size: 12px;
+}
+
+.conversationCanvas {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(260px, 1fr) auto;
+  overflow: hidden;
+}
+
+.conversationHeader {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  gap: 16px;
+  padding: 18px;
+  border-bottom: 1px solid #252a32;
+}
+
+.conversationHeader h1,
+.taskMonitorHeader h1 {
+  margin: 4px 0 6px;
+  color: #ffffff;
+  font-size: 24px;
+  line-height: 1.14;
+}
+
+.conversationHeader p,
+.taskMonitorHeader p {
+  max-width: 760px;
+  margin: 0;
+  color: #aeb8c7;
+  line-height: 1.45;
+}
+
+.conversationTranscript {
+  min-height: 0;
+  padding: 18px;
+  overflow: auto;
+}
+
+.agentMessage {
+  max-width: 680px;
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  padding: 14px;
+  border: 1px solid #303641;
+  border-radius: 6px;
+  background: #11151c;
+}
+
+.agentAvatar {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #3f4a58;
+  border-radius: 50%;
+  background: #18202b;
+  color: #76d0ff;
+  font-weight: 800;
+}
+
+.agentMessage strong,
+.agentStatusCard strong {
+  color: #ffffff;
+}
+
+.agentMessage p {
+  margin: 5px 0;
+  color: #aeb8c7;
+  line-height: 1.45;
+}
+
+.agentMessage small {
+  color: #8c97a7;
+}
+
+.conversationComposer {
+  padding: 16px 18px 18px;
+  border-top: 1px solid #252a32;
+  background: #11151c;
+}
+
+.conversationComposer textarea {
+  min-height: 108px;
+  resize: vertical;
+  font-weight: 500;
+}
+
+.conversationComposerActions {
+  display: grid;
+  grid-template-columns: 116px max-content;
+  justify-content: end;
+  align-items: end;
+  gap: 10px;
+}
+
+.conversationAgentPanel {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+}
+
+.conversationSteps li {
+  grid-template-columns: 30px minmax(0, 1fr);
+  min-height: 66px;
+}
+
+.conversationSteps small {
+  grid-column: 2;
+  min-width: 0;
+  color: #8c97a7;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jobsProcessPanel {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 12px;
+}
+
+.taskMonitorHeader {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  gap: 16px;
+  align-items: start;
+}
+
+.selectedRunProgress {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #303641;
+  border-radius: 6px;
+  background: #11151c;
+}
+
+.selectedRunProgress > div:first-child {
+  min-width: 0;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: #8c97a7;
+  font-size: 12px;
+}
+
+.selectedRunProgress strong,
+.selectedRunProgress span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.selectedRunProgress strong {
+  color: #ffffff;
+}
+
+.processMeter {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #252a32;
+}
+
+.processMeter span {
+  height: 100%;
+  display: block;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #76d0ff, #66d196);
+}
+
+.agentStatusGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.agentStatusCard {
+  min-width: 0;
+  min-height: 92px;
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr);
+  gap: 6px 9px;
+  align-content: start;
+  padding: 10px;
+  border: 1px solid #303641;
+  border-radius: 6px;
+  background: #11151c;
+}
+
+.agentStatusCard strong,
+.agentStatusCard em,
+.agentStatusCard small {
+  min-width: 0;
+  grid-column: 2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agentStatusCard em {
+  color: #aeb8c7;
+  font-size: 12px;
+  font-style: normal;
+}
+
+.agentStatusCard small {
+  color: #8c97a7;
+  font-size: 11px;
+}
+
+.agentStatusCard.success {
+  border-color: rgba(102, 209, 150, 0.5);
+}
+
+.agentStatusCard.danger {
+  border-color: rgba(228, 109, 109, 0.55);
+}
+
+.agentStatusCard.active {
+  border-color: rgba(118, 208, 255, 0.55);
+}
+
 .composerControls {
   display: grid;
   grid-template-columns: minmax(260px, 1fr) 64px 96px 130px;
@@ -3436,6 +3745,9 @@ select {
 
   .overviewGrid,
   .dashboardContent,
+  .conversationsPage,
+  .conversationHeader,
+  .conversationComposerActions,
   .settingsGrid,
   .modelLayout,
   .modelRoutingList,
@@ -3445,6 +3757,8 @@ select {
   .taskCommandCenter,
   .jobsSummaryStrip,
   .jobWorkspace,
+  .taskMonitorHeader,
+  .agentStatusGrid,
   .approvalDetails,
   .approvalPayloads,
   .composerControls,
