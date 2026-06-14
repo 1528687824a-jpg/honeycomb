@@ -1,9 +1,13 @@
 # Honeycomb Conversation And Task IA
 
-Status: first desktop UI pass implemented locally.
+Status: first desktop UI pass implemented locally; editable Figma canvas is
+blocked by the Figma MCP Starter-plan tool-call limit.
 
 Reference:
 https://github.com/qingchencloud/clawpanel/blob/main/docs/hermes-agent.md
+
+Figma handoff:
+`docs/figma-conversation-task-ia-handoff.md`
 
 ## Decision
 
