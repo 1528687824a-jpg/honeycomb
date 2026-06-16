@@ -1378,7 +1378,9 @@ async function main() {
             "http://localhost:5173",
             "http://127.0.0.1:5173",
             "http://127.0.0.1:5174",
-            "tauri://localhost"
+            "tauri://localhost",
+            "http://tauri.localhost",
+            "https://tauri.localhost"
           ].join(",")
         }
       });

@@ -1896,6 +1896,7 @@ function App() {
   const [approvalError, setApprovalError] = useState("");
   const [approvalMessage, setApprovalMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [manualRefreshBusy, setManualRefreshBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [resetFlow, setResetFlow] = useState<FirstRunFlow | null>(null);
   const [setupComplete, setSetupComplete] = useState(
@@ -2230,6 +2231,35 @@ function App() {
     await refreshJob(nextSelectedId);
   }
 
+  async function probeOpenClawStatus() {
+    try {
+      await getHealth();
+      setApiState("online");
+      return true;
+    } catch {
+      setApiState("offline");
+      return false;
+    }
+  }
+
+  async function refreshFromBackend(targetJobId = selectedJobId) {
+    if (manualRefreshBusy) return;
+    setManualRefreshBusy(true);
+    try {
+      const online = await probeOpenClawStatus();
+      if (!online) {
+        setError(language === "zh" ? "OpenClaw 后端仍然无法连接。" : "OpenClaw backend is still unreachable.");
+        return;
+      }
+      await refreshAll(targetJobId);
+      setError(null);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setManualRefreshBusy(false);
+    }
+  }
+
   async function refreshExperiences() {
     const response = await listExperiences(experienceFilter === "all" ? undefined : experienceFilter);
     setExperiences(response.experiences);
@@ -2381,7 +2411,8 @@ function App() {
     setPrompt("");
     setAttachmentMenuOpen(false);
     setError(null);
-    if (apiState !== "online") {
+    const backendOnline = apiState === "online" || await probeOpenClawStatus();
+    if (!backendOnline) {
       const offlineMessage = createConversationMessage(
         "system",
         language === "zh"
@@ -3156,8 +3187,9 @@ function App() {
     async function checkOpenClawStatus() {
       try {
         await getHealth();
-        if (cancelled) return;
-        setApiState("online");
+        if (!cancelled) {
+          setApiState("online");
+        }
       } catch {
         if (!cancelled) {
           setApiState("offline");
@@ -5421,7 +5453,7 @@ function App() {
         </nav>
         <div className="sideFooter">
           <span className={`status ${apiState}`}>{statusText}</span>
-          <button className="secondaryButton compactButton" type="button" onClick={() => refreshAll().catch((caught) => setError(caught instanceof Error ? caught.message : String(caught)))} disabled={apiState !== "online" || busy}>
+          <button className="secondaryButton compactButton" type="button" onClick={() => void refreshFromBackend()} disabled={busy || manualRefreshBusy}>
             <RefreshCw size={15} aria-hidden="true" />
             {copy.refresh}
           </button>

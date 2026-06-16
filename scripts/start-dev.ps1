@@ -7,6 +7,15 @@ $dockerProbeTimeoutSeconds = 10
 $dockerCommandTimeoutSeconds = 60
 $dockerReadyWaitSeconds = 300
 $postgresReadyWaitSeconds = 120
+$desktopCorsOrigins = @(
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  "http://localhost:5174",
+  "http://127.0.0.1:5174",
+  "tauri://localhost",
+  "http://tauri.localhost",
+  "https://tauri.localhost"
+) -join ","
 $env:Path = "C:\Program Files\Docker\Docker\resources\bin;$env:Path"
 
 if (-not (Test-Path -LiteralPath $dockerCli)) {
@@ -243,7 +252,7 @@ foreach ($process in $managedProcesses) {
 
 Stop-NonDockerPortListeners -Port 3000
 
-$apiCmd = "cd '$root'; npm run dev:api *> '$root\logs\api.log'"
+$apiCmd = "cd '$root'; `$env:ORCHESTRATOR_CORS_ORIGINS='$desktopCorsOrigins'; npm run dev:api *> '$root\logs\api.log'"
 
 $api = Start-Process -FilePath powershell -WindowStyle Hidden -PassThru -ArgumentList @(
   "-NoProfile",

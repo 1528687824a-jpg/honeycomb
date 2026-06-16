@@ -20,6 +20,15 @@ $desktopBuildTimeoutSeconds = 600
 $apiHealthUrl = "http://127.0.0.1:3000/health"
 $apiProtectedProbeUrl = "http://127.0.0.1:3000/agents"
 $desktopLaunched = $false
+$desktopCorsOrigins = @(
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  "http://localhost:5174",
+  "http://127.0.0.1:5174",
+  "tauri://localhost",
+  "http://tauri.localhost",
+  "https://tauri.localhost"
+) -join ","
 
 Set-Location $root
 New-Item -ItemType Directory -Force -Path "logs", ".runtime" | Out-Null
@@ -34,6 +43,7 @@ $env:AGENT_CLUSTER_CONFIG_PATH = "/app/honeycomb-runtime/cluster.config.json"
 $env:HONEYCOMB_AGENT_MODEL_CONFIG_PATH = "/app/honeycomb-runtime/agent-model-configs.json"
 $env:HONEYCOMB_FIRST_RUN_AGENTS_DIR = "/app/honeycomb-runtime/agents"
 $env:HONEYCOMB_PANEL_SUPERVISOR_AGENT_ID = "panel-supervisor-agent"
+$env:ORCHESTRATOR_CORS_ORIGINS = $desktopCorsOrigins
 
 function Write-LaunchLog($Message) {
   $line = "$(Get-Date -Format o) $Message"
