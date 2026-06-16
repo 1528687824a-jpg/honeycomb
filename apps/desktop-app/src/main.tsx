@@ -4,9 +4,11 @@ import {
   AlertTriangle,
   Bot,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
   Eye,
   EyeOff,
+  FolderPlus,
   FolderOpen,
   Gauge,
   History,
@@ -19,6 +21,7 @@ import {
   PanelLeftOpen,
   Play,
   Plus,
+  MoreHorizontal,
   RefreshCw,
   Search,
   Send,
@@ -1619,6 +1622,7 @@ function App() {
   const [sideCollapsed, setSideCollapsed] = useState(
     () => window.localStorage.getItem("honeycomb.sideCollapsed") === "true"
   );
+  const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [securityRecord, setSecurityRecord] = useState<SecurityRecord | null>(loadSecurityRecord);
   const [locked, setLocked] = useState(() => Boolean(loadSecurityRecord()) && window.sessionStorage.getItem("agentOpenClaw.unlocked") !== "true");
   const [unlockPassword, setUnlockPassword] = useState("");
@@ -2907,54 +2911,58 @@ function App() {
   function renderConversations() {
     const conversationCopy = language === "zh"
       ? {
-          pageTitle: "\u5bf9\u8bdd",
-          pageSubtitle: "\u9009\u62e9\u9879\u76ee\u4f4d\u7f6e\uff0c\u5728\u9879\u76ee\u91cc\u65b0\u5efa\u5bf9\u8bdd\uff0c\u7531\u9762\u677f Agent \u8d1f\u8d23\u8bfb\u53d6\u76ee\u6807\u5e76\u6d3e\u751f\u4efb\u52a1\u3002",
-          project: "\u9879\u76ee\u4f4d\u7f6e",
-          projectHint: "\u5f53\u524d\u5bf9\u8bdd\u548c\u4efb\u52a1\u4f1a\u5e26\u4e0a\u8fd9\u4e2a\u5de5\u4f5c\u76ee\u5f55\u4e0a\u4e0b\u6587\u3002",
-          projectUnset: "\u672a\u8bbe\u7f6e\u9879\u76ee\u4f4d\u7f6e",
-          newConversation: "\u65b0\u5efa\u5bf9\u8bdd",
-          conversations: "\u5bf9\u8bdd\u5217\u8868",
+          pinned: "\u7f6e\u9876",
+          pinnedTitle: "\u4ece\u73b0\u5728\u5f00\u59cb\uff0c\u4e4b\u540e\u7684\u6240\u6709\u4efb\u52a1\u2026",
+          project: "\u9879\u76ee",
+          collapse: "\u6298\u53e0",
+          more: "\u66f4\u591a",
+          addProject: "\u6dfb\u52a0\u9879\u76ee",
+          newBlankProject: "\u65b0\u5efa\u7a7a\u767d\u9879\u76ee",
+          useExistingFolder: "\u4f7f\u7528\u73b0\u6709\u6587\u4ef6\u5939",
+          projectUnset: "\u9009\u62e9\u9879\u76ee\u6587\u4ef6\u5939",
           activeConversation: "\u65b0\u5bf9\u8bdd",
           panelAgent: "\u9762\u677f Agent",
-          panelAgentHint: "\u8d1f\u8d23\u7406\u89e3\u5bf9\u8bdd\u3001\u7ed1\u5b9a\u9879\u76ee\u4e0a\u4e0b\u6587\uff0c\u7136\u540e\u751f\u6210\u53ef\u8ffd\u8e2a\u7684\u4efb\u52a1\u3002",
-          messageLabel: "\u4efb\u52a1\u6216\u5bf9\u8bdd\u5185\u5bb9",
-          messagePlaceholder: "\u4f8b\u5982\uff1a\u5e2e\u6211\u5728\u8fd9\u4e2a\u9879\u76ee\u91cc\u8bbe\u8ba1\u4e00\u5f20\u4e52\u4e53\u7403\u6d77\u62a5\u5ba3\u4f20\u56fe\u3002",
-          agentPanel: "Agent \u9762\u677f",
-          context: "\u9879\u76ee\u4e0a\u4e0b\u6587",
-          routing: "\u667a\u80fd\u7f16\u6392",
-          taskHandoff: "\u751f\u6210\u4efb\u52a1",
-          timeline: "\u8f6c\u5165\u4efb\u52a1\u76d1\u63a7",
+          assistantIntro: "\u9009\u597d\u9879\u76ee\u540e\uff0c\u76f4\u63a5\u5728\u4e0b\u65b9\u8f93\u5165\u4efb\u52a1\u3002\u6211\u4f1a\u628a\u9879\u76ee\u8def\u5f84\u3001\u6280\u80fd\u548c MCP \u4e0a\u4e0b\u6587\u4e00\u8d77\u4ea4\u7ed9 Agent \u56e2\u961f\u3002",
+          threadOne: "\u4f60\u6709\u54ea\u4e9b\u63d2\u4ef6\u53ef\u4ee5\u8fd0\u7528\u5230\u2026",
+          threadTwo: "\u4f60\u662f\u4ece\u65e7 Codex \u7ebf\u7a0b 2 \u2026",
+          threadThree: "\u5e2e\u6211\u89e3\u51b3\u4e00\u4e0b\u5728 codex \u91cc\u2026",
+          inputPlaceholder: "\u8f93\u5165\u4efb\u52a1\u6216\u6d88\u606f...",
+          fullAccess: "\u5b8c\u5168\u8bbf\u95ee",
+          modelLabel: "5.5 \u8d85\u9ad8",
           ready: "\u53ef\u53d1\u9001",
           waitingPrompt: "\u7b49\u5f85\u8f93\u5165",
           waitingBackend: "\u7b49\u5f85\u540e\u7aef\u5728\u7ebf",
           launching: "\u6b63\u5728\u53d1\u9001...",
-          send: "\u53d1\u9001\u7ed9 Agent",
-          budget: "\u8c03\u7528\u4e0a\u9650"
+          send: "\u53d1\u9001",
+          budget: "\u8c03\u7528\u4e0a\u9650",
+          latestJob: "\u6700\u65b0\u4efb\u52a1"
         }
       : {
-          pageTitle: "Conversations",
-          pageSubtitle: "Choose a project location, create a conversation inside that project, and let the panel agent turn the exchange into trackable work.",
-          project: "Project location",
-          projectHint: "Conversation and task requests include this local workspace path as context.",
-          projectUnset: "Project location not set",
-          newConversation: "New conversation",
-          conversations: "Conversation list",
+          pinned: "Pinned",
+          pinnedTitle: "From now on, all later tasks...",
+          project: "Projects",
+          collapse: "Collapse",
+          more: "More",
+          addProject: "Add project",
+          newBlankProject: "New blank project",
+          useExistingFolder: "Use existing folder",
+          projectUnset: "Choose project folder",
           activeConversation: "New conversation",
           panelAgent: "Panel agent",
-          panelAgentHint: "Understands the conversation, binds project context, and creates a trackable job for the task monitor.",
-          messageLabel: "Task or conversation message",
-          messagePlaceholder: "Example: Design a fresh table tennis poster image inside this project.",
-          agentPanel: "Agent panel",
-          context: "Project context",
-          routing: "Smart routing",
-          taskHandoff: "Create job",
-          timeline: "Open task monitor",
+          assistantIntro: "Pick a project, then type the task below. I will attach the project path, skills, and MCP context before handing it to the agent team.",
+          threadOne: "Which plugins can I use for...",
+          threadTwo: "You are from old Codex thread 2...",
+          threadThree: "Help me solve this inside Codex...",
+          inputPlaceholder: "Type a task or message...",
+          fullAccess: "Full access",
+          modelLabel: "5.5 high",
           ready: "Ready to send",
           waitingPrompt: "Waiting for message",
           waitingBackend: "Waiting for backend",
           launching: "Sending...",
-          send: "Send to Agent",
-          budget: "Call limit"
+          send: "Send",
+          budget: "Call limit",
+          latestJob: "Latest job"
         };
     const canStartJob = apiState === "online" && !busy && Boolean(prompt.trim());
     const launchState = busy
@@ -2964,138 +2972,183 @@ function App() {
         : prompt.trim()
           ? conversationCopy.ready
           : conversationCopy.waitingPrompt;
-    const projectPath = workbenchConfig.workspacePath.trim() || conversationCopy.projectUnset;
-    const conversationTitle = prompt.trim() ? prompt.trim().slice(0, 64) : conversationCopy.activeConversation;
-    const conversationSteps = [
-      { label: conversationCopy.context, detail: projectPath, state: workbenchConfig.workspacePath.trim() ? "ready" : "idle" },
-      { label: conversationCopy.routing, detail: routingLabel(inferredRoutingMode), state: prompt.trim() ? "ready" : "idle" },
-      { label: conversationCopy.taskHandoff, detail: statusText, state: busy ? "active" : "idle" },
-      { label: conversationCopy.timeline, detail: latestJob?.id ?? copy.noLatestJob, state: latestJob ? "ready" : "idle" }
+    const workspacePath = workbenchConfig.workspacePath.trim();
+    const primaryProjectName = workspacePath ? workspacePath.split(/[\\/]/).filter(Boolean).at(-1) ?? workspacePath : "1";
+    const conversationTitle = workspacePath || prompt.trim() || conversationCopy.activeConversation;
+    const recentThreads = [
+      { title: workspacePath || "C:\\Users\\Administrator...", time: language === "zh" ? "11 \u5c0f\u65f6" : "11 h", active: true },
+      { title: conversationCopy.threadOne, time: language === "zh" ? "3 \u5929" : "3 d", active: false }
+    ];
+    const secondaryThreads = [
+      { title: conversationCopy.threadTwo, time: language === "zh" ? "3 \u5929" : "3 d" },
+      { title: conversationCopy.threadThree, time: language === "zh" ? "1 \u5468" : "1 wk" }
     ];
 
     return (
-      <section className="deskPage conversationsPage" data-tour-anchor="conversations">
-        <aside className="conversationIndex">
-          <div className="sectionHeader">
-            <h2>{conversationCopy.project}</h2>
-            <FolderOpen size={16} aria-hidden="true" />
-          </div>
-          <label className="projectPathField">
-            <span>{copy.workbenchWorkspaceLabel}</span>
-            <input
-              value={workbenchConfig.workspacePath}
-              placeholder={copy.workbenchWorkspacePlaceholder}
-              onChange={(event) => updateWorkbenchConfig((current) => ({ ...current, workspacePath: event.target.value }))}
-            />
-          </label>
-          <p className="mutedText">{conversationCopy.projectHint}</p>
-          <button
-            className="secondaryButton compactButton"
-            type="button"
-            onClick={() => {
-              setPrompt("");
-              setError(null);
-            }}
-          >
-            <Plus size={14} aria-hidden="true" />
-            {conversationCopy.newConversation}
-          </button>
-
-          <div className="conversationListBlock">
-            <div className="sectionHeader flushHeader">
-              <h2>{conversationCopy.conversations}</h2>
-              <span>1</span>
-            </div>
-            <button className="conversationRow active" type="button">
-              <MessageSquare size={16} aria-hidden="true" />
-              <span>
-                <strong>{conversationTitle}</strong>
-                <small>{projectPath}</small>
-              </span>
+      <section className="deskPage conversationsPage codexConversationsPage" data-tour-anchor="conversations">
+        <aside className="codexProjectSidebar">
+          <section className="codexPinnedBlock">
+            <p>{conversationCopy.pinned}</p>
+            <button className="codexThreadItem" type="button">
+              <span>{conversationCopy.pinnedTitle}</span>
+              <small>{language === "zh" ? "4 \u5468" : "4 wk"}</small>
             </button>
-          </div>
+          </section>
+
+          <section className="codexProjectBlock">
+            <div className="codexProjectToolbar">
+              <button className="codexProjectTitle" type="button">
+                {conversationCopy.project}
+                <ChevronDown size={13} aria-hidden="true" />
+              </button>
+              <div className="codexProjectActions">
+                <button type="button" title={conversationCopy.collapse} aria-label={conversationCopy.collapse}>
+                  <PanelLeftClose size={14} aria-hidden="true" />
+                </button>
+                <button type="button" title={conversationCopy.more} aria-label={conversationCopy.more}>
+                  <MoreHorizontal size={14} aria-hidden="true" />
+                </button>
+                <div className="codexAddProject">
+                  <button
+                    className={projectMenuOpen ? "active" : ""}
+                    type="button"
+                    title={conversationCopy.addProject}
+                    aria-label={conversationCopy.addProject}
+                    onClick={() => setProjectMenuOpen((open) => !open)}
+                  >
+                    <FolderPlus size={14} aria-hidden="true" />
+                  </button>
+                  {projectMenuOpen ? (
+                    <div className="codexProjectMenu">
+                      <button type="button" onClick={() => setProjectMenuOpen(false)}>
+                        <FolderPlus size={15} aria-hidden="true" />
+                        {conversationCopy.newBlankProject}
+                      </button>
+                      <button type="button" onClick={() => setProjectMenuOpen(false)}>
+                        <FolderOpen size={15} aria-hidden="true" />
+                        {conversationCopy.useExistingFolder}
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+
+            <div className="codexProjectList">
+              <article className="codexProjectGroup active">
+                <button className="codexProjectRow" type="button">
+                  <FolderOpen size={15} aria-hidden="true" />
+                  <strong>{primaryProjectName}</strong>
+                </button>
+                <div className="codexThreadList">
+                  {recentThreads.map((thread) => (
+                    <button className={thread.active ? "codexThreadItem active" : "codexThreadItem"} type="button" key={thread.title}>
+                      <span>{thread.title}</span>
+                      <small>{thread.time}</small>
+                    </button>
+                  ))}
+                </div>
+              </article>
+
+              <article className="codexProjectGroup">
+                <button className="codexProjectRow" type="button">
+                  <FolderOpen size={15} aria-hidden="true" />
+                  <strong>project1</strong>
+                </button>
+                <div className="codexThreadList">
+                  {secondaryThreads.map((thread) => (
+                    <button className="codexThreadItem" type="button" key={thread.title}>
+                      <span>{thread.title}</span>
+                      <small>{thread.time}</small>
+                    </button>
+                  ))}
+                </div>
+              </article>
+            </div>
+          </section>
         </aside>
 
-        <section className="conversationCanvas">
-          <header className="conversationHeader">
+        <section className="codexChatPane">
+          <header className="codexChatHeader">
+            <strong>{conversationTitle}</strong>
             <div>
-              <p className="eyebrow">
-                <MessageSquare size={15} aria-hidden="true" />
-                {conversationCopy.pageTitle}
-              </p>
-              <h1>{conversationTitle}</h1>
-              <p>{conversationCopy.pageSubtitle}</p>
+              <button type="button" aria-label={conversationCopy.more}>
+                <MoreHorizontal size={17} aria-hidden="true" />
+              </button>
+              <button type="button" aria-label={copy.jobsView} onClick={() => setActiveView("jobs")}>
+                <ListChecks size={16} aria-hidden="true" />
+              </button>
             </div>
-            <span className={`status ${apiState}`}>{statusText}</span>
           </header>
 
-          <div className="conversationTranscript">
-            <article className="agentMessage">
-              <div className="agentAvatar">H</div>
-              <div>
-                <strong>{conversationCopy.panelAgent}</strong>
-                <p>{conversationCopy.panelAgentHint}</p>
-                <small>{projectPath}</small>
-              </div>
+          <div className="codexChatBody">
+            <article className="codexAssistantMessage">
+              <ul>
+                <li>
+                  <strong>{conversationCopy.panelAgent}</strong>
+                  <p>{conversationCopy.assistantIntro}</p>
+                </li>
+                <li>
+                  <strong>{copy.smartRouting}</strong>
+                  <p>
+                    {copy.smartRoutingHint} <code>{routingLabel(inferredRoutingMode)}</code>
+                  </p>
+                </li>
+                <li>
+                  <strong>{conversationCopy.latestJob}</strong>
+                  <p>{latestJob?.id ?? copy.noLatestJob}</p>
+                </li>
+              </ul>
             </article>
           </div>
 
           <form
-            className="conversationComposer"
+            className="codexComposer"
             onSubmit={(event) => {
               event.preventDefault();
               submitJob();
             }}
           >
-            <label htmlFor="prompt">{conversationCopy.messageLabel}</label>
+            <label className="visuallyHidden" htmlFor="prompt">{conversationCopy.inputPlaceholder}</label>
             <textarea
               id="prompt"
               value={prompt}
-              placeholder={conversationCopy.messagePlaceholder}
+              placeholder={conversationCopy.inputPlaceholder}
               onChange={(event) => setPrompt(event.target.value)}
             />
-            <div className="conversationComposerActions">
-              <label className="budgetControl" htmlFor="maxModelCalls">
-                <span>{conversationCopy.budget}</span>
-                <input
-                  id="maxModelCalls"
-                  type="number"
-                  min="1"
-                  max="100"
-                  value={maxModelCalls}
-                  onChange={(event) => setMaxModelCalls(Number(event.target.value))}
-                />
-              </label>
-              <button data-testid="start-job-button" className="primaryButton taskLaunchButton" type="submit" disabled={!canStartJob}>
-                <Send size={16} aria-hidden="true" />
-                {busy ? conversationCopy.launching : conversationCopy.send}
-              </button>
+            <div className="codexComposerFooter">
+              <div className="codexComposerLeft">
+                <button className="codexIconButton" type="button" aria-label={conversationCopy.addProject}>
+                  <Plus size={18} aria-hidden="true" />
+                </button>
+                <span className="accessPill">{conversationCopy.fullAccess}</span>
+              </div>
+              <div className="codexComposerRight">
+                <div className="smartRoutingBadge codexRoutingBadge" data-testid="smart-routing-badge">
+                  <strong>{copy.smartRouting}</strong>
+                  <em>{routingLabel(inferredRoutingMode)}</em>
+                </div>
+                <label className="callLimitControl" htmlFor="maxModelCalls">
+                  <span>{conversationCopy.modelLabel}</span>
+                  <input
+                    id="maxModelCalls"
+                    type="number"
+                    min="1"
+                    max="100"
+                    value={maxModelCalls}
+                    aria-label={conversationCopy.budget}
+                    onChange={(event) => setMaxModelCalls(Number(event.target.value))}
+                  />
+                </label>
+                <small className={`codexLaunchState ${canStartJob ? "ready" : ""}`}>{launchState}</small>
+                <button data-testid="start-job-button" className="codexSendButton" type="submit" disabled={!canStartJob} aria-label={conversationCopy.send}>
+                  <Send size={18} aria-hidden="true" />
+                </button>
+              </div>
             </div>
-            <p className={`taskLaunchState ${canStartJob ? "ready" : ""}`}>{launchState}</p>
             {error ? <p className="error">{error}</p> : null}
           </form>
         </section>
-
-        <aside className="conversationAgentPanel">
-          <div className="sectionHeader">
-            <h2>{conversationCopy.agentPanel}</h2>
-            <Bot size={16} aria-hidden="true" />
-          </div>
-          <div className="smartRoutingBadge" data-testid="smart-routing-badge">
-            <strong>{copy.smartRouting}</strong>
-            <span>{copy.smartRoutingHint}</span>
-            <em>{routingLabel(inferredRoutingMode)}</em>
-          </div>
-          <ol className="dispatchSteps conversationSteps">
-            {conversationSteps.map((step, index) => (
-              <li className={step.state} key={step.label}>
-                <span>{index + 1}</span>
-                <strong>{step.label}</strong>
-                <small>{step.detail}</small>
-              </li>
-            ))}
-          </ol>
-        </aside>
       </section>
     );
   }

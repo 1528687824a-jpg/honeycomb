@@ -1,7 +1,7 @@
 # Honeycomb Conversation And Task IA
 
-Status: first desktop UI pass implemented locally; editable Figma canvas is
-blocked by the Figma MCP Starter-plan tool-call limit.
+Status: Codex-style conversation layout implemented locally; editable Figma
+canvas is blocked by the Figma MCP Starter-plan tool-call limit.
 
 Reference:
 https://github.com/qingchencloud/clawpanel/blob/main/docs/hermes-agent.md
@@ -37,12 +37,14 @@ Current behavior:
 - Left navigation now has a `Conversations` entry before `Jobs`.
 - Dashboard primary action opens `Conversations`.
 - The conversation page has:
-  - project path input backed by the existing supervisor workbench config;
-  - a conversation list skeleton;
-  - a Codex-like conversation canvas;
-  - panel-agent context copy;
-  - message composer and call-limit control;
-  - routing/agent handoff panel.
+  - a light Codex-style project sidebar;
+  - pinned conversation row;
+  - project dropdown and project actions;
+  - add-project menu with "new blank project" and "use existing folder";
+  - project rows with conversation summaries;
+  - a white chat pane with a compact top bar;
+  - a bottom rounded composer with access status, routing badge, call limit,
+    and send button.
 - Sending from Conversations still creates a normal backend job, then the app
   opens the Tasks page so the user can monitor it.
 - The Tasks page no longer owns the new-task composer. It now shows:
@@ -60,10 +62,11 @@ Honeycomb
 ├─ Dashboard
 │  └─ runtime health, latest job, next action
 ├─ Conversations
-│  ├─ project picker / project path
-│  ├─ project conversation list
-│  ├─ panel-agent conversation
-│  └─ send message -> create/continue task
+│  ├─ pinned conversation
+│  ├─ project list and project actions
+│  ├─ per-project conversation summaries
+│  ├─ white chat pane
+│  └─ bottom composer -> create/continue task
 ├─ Tasks
 │  ├─ active task process
 │  ├─ sub-agent states

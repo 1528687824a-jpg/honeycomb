@@ -666,106 +666,423 @@ select {
   font-size: 16px;
 }
 
-.conversationsPage {
-  display: grid;
-  grid-template-columns: minmax(250px, 300px) minmax(0, 1fr) minmax(230px, 280px);
-  gap: 12px;
+.conversationsPage.codexConversationsPage {
   min-height: calc(100vh - 64px);
-}
-
-.conversationIndex,
-.conversationCanvas,
-.conversationAgentPanel,
-.jobsProcessPanel {
-  min-width: 0;
-  border: 1px solid #252a32;
+  display: grid;
+  grid-template-columns: 258px minmax(0, 1fr);
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid #dfe5ec;
   border-radius: 6px;
-  background: #151922;
+  background: #ffffff;
 }
 
-.conversationIndex,
-.conversationAgentPanel,
-.jobsProcessPanel {
-  padding: 14px;
+.codexProjectSidebar {
+  min-width: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 18px;
+  padding: 12px 8px;
+  background: #edf3fa;
+  color: #20252c;
+  overflow: hidden;
 }
 
-.conversationIndex {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.projectPathField,
-.conversationComposer {
+.codexPinnedBlock,
+.codexProjectBlock {
+  min-width: 0;
   display: grid;
   gap: 8px;
-  color: #dce4ef;
+}
+
+.codexPinnedBlock p {
+  margin: 0 0 4px;
+  color: #9aa5b1;
   font-size: 13px;
   font-weight: 700;
 }
 
-.mutedText {
-  margin: -4px 0 0;
-  color: #8c97a7;
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.conversationListBlock {
-  min-height: 0;
+.codexProjectToolbar {
+  height: 28px;
   display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
   gap: 8px;
+  align-items: center;
 }
 
-.conversationRow {
+.codexProjectTitle,
+.codexProjectActions button,
+.codexChatHeader button,
+.codexIconButton {
+  border: 0;
+  background: transparent;
+}
+
+.codexProjectTitle {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  color: #8c97a5;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.codexProjectActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.codexProjectActions button {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  color: #6e7885;
+}
+
+.codexProjectActions button:hover,
+.codexProjectActions button.active {
+  background: #dfe8f2;
+  color: #1f252d;
+}
+
+.codexAddProject {
+  position: relative;
+}
+
+.codexProjectMenu {
+  position: absolute;
+  top: 28px;
+  right: 0;
+  z-index: 5;
+  width: 174px;
+  padding: 6px;
+  border: 1px solid #d8dee6;
+  border-radius: 6px;
+  background: #ffffff;
+  box-shadow: 0 12px 30px rgba(35, 44, 56, 0.15);
+}
+
+.codexProjectMenu button {
   width: 100%;
-  min-height: 68px;
+  height: 32px;
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr);
-  gap: 10px;
+  gap: 8px;
   align-items: center;
-  border: 1px solid #303641;
-  border-radius: 6px;
-  background: #11151c;
-  color: #dce4ef;
+  justify-content: start;
+  padding: 0 7px;
+  color: #1f252d;
+  font-size: 13px;
   text-align: left;
 }
 
-.conversationRow.active {
-  border-color: #76d0ff;
-  background: rgba(118, 208, 255, 0.08);
+.codexProjectMenu button:hover {
+  background: #f1f4f8;
 }
 
-.conversationRow strong,
-.conversationRow small {
-  display: block;
+.codexProjectList,
+.codexThreadList {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.codexProjectGroup {
+  display: grid;
+  gap: 4px;
+}
+
+.codexProjectGroup + .codexProjectGroup {
+  margin-top: 12px;
+}
+
+.codexProjectRow {
+  min-width: 0;
+  height: 28px;
+  display: grid;
+  grid-template-columns: 17px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: #26303a;
+  text-align: left;
+}
+
+.codexProjectRow strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.codexThreadItem {
+  min-width: 0;
+  height: 32px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  gap: 8px;
+  align-items: center;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #3e4650;
+  text-align: left;
+}
+
+.codexThreadItem.active {
+  background: #dfe7f0;
+}
+
+.codexThreadItem span,
+.codexThreadItem small {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.conversationRow small {
-  margin-top: 4px;
-  color: #8c97a7;
+.codexThreadItem span {
+  font-size: 13px;
+}
+
+.codexThreadItem small {
+  color: #8b95a1;
   font-size: 12px;
 }
 
-.conversationCanvas {
+.codexChatPane {
+  min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: auto minmax(260px, 1fr) auto;
-  overflow: hidden;
+  grid-template-rows: 38px minmax(0, 1fr) auto;
+  background: #ffffff;
+  color: #111820;
 }
 
-.conversationHeader {
+.codexChatHeader {
+  min-width: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) max-content;
-  gap: 16px;
-  padding: 18px;
-  border-bottom: 1px solid #252a32;
+  gap: 12px;
+  align-items: center;
+  padding: 0 12px;
+  border-bottom: 1px solid #e5e7eb;
 }
 
-.conversationHeader h1,
+.codexChatHeader strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #111820;
+  font-size: 14px;
+}
+
+.codexChatHeader div {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.codexChatHeader button {
+  width: 25px;
+  height: 25px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  color: #717b86;
+}
+
+.codexChatHeader button:hover {
+  background: #f3f4f6;
+  color: #1f252d;
+}
+
+.codexChatBody {
+  min-height: 0;
+  padding: 20px 22px 16px;
+  overflow: auto;
+}
+
+.codexAssistantMessage {
+  max-width: 760px;
+  color: #111820;
+  line-height: 1.65;
+}
+
+.codexAssistantMessage ul {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding-left: 21px;
+}
+
+.codexAssistantMessage li {
+  padding-left: 2px;
+}
+
+.codexAssistantMessage strong {
+  font-weight: 700;
+}
+
+.codexAssistantMessage p {
+  margin: 3px 0 0;
+  color: #2e353e;
+}
+
+.codexAssistantMessage code {
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: #eef1f4;
+  color: #121820;
+  font-size: 12px;
+}
+
+.codexComposer {
+  display: grid;
+  gap: 8px;
+  margin: 0 20px 18px;
+  padding: 10px 12px 11px;
+  border: 1px solid #e0e3e8;
+  border-radius: 18px;
+  background: #ffffff;
+  box-shadow: 0 8px 28px rgba(20, 30, 45, 0.08);
+}
+
+.codexComposer textarea {
+  min-height: 76px;
+  max-height: 190px;
+  resize: vertical;
+  border: 0;
+  background: transparent;
+  color: #111820;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.codexComposer textarea:focus {
+  outline: none;
+  box-shadow: none;
+}
+
+.codexComposerFooter {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  gap: 12px;
+  align-items: center;
+}
+
+.codexComposerLeft,
+.codexComposerRight {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.codexComposerRight {
+  justify-content: end;
+}
+
+.codexIconButton,
+.codexSendButton {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+}
+
+.codexIconButton {
+  color: #5f6975;
+}
+
+.codexIconButton:hover {
+  background: #f3f4f6;
+}
+
+.accessPill {
+  color: #f26d42;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.codexRoutingBadge {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border: 0;
+  background: #f5f6f8;
+}
+
+.codexRoutingBadge span {
+  display: none;
+}
+
+.callLimitControl {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #6f7884;
+  font-size: 12px;
+}
+
+.callLimitControl input {
+  width: 46px;
+  min-height: 28px;
+  padding: 0 4px;
+  border: 1px solid #e2e5e9;
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #20252c;
+  text-align: center;
+}
+
+.codexLaunchState {
+  max-width: 132px;
+  overflow: hidden;
+  color: #9a6b14;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.codexLaunchState.ready {
+  color: #267345;
+}
+
+.codexSendButton {
+  border: 0;
+  background: #111820;
+  color: #ffffff;
+}
+
+.codexSendButton:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.visuallyHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .taskMonitorHeader h1 {
   margin: 4px 0 6px;
   color: #ffffff;
@@ -773,7 +1090,6 @@ select {
   line-height: 1.14;
 }
 
-.conversationHeader p,
 .taskMonitorHeader p {
   max-width: 760px;
   margin: 0;
@@ -781,96 +1097,19 @@ select {
   line-height: 1.45;
 }
 
-.conversationTranscript {
-  min-height: 0;
-  padding: 18px;
-  overflow: auto;
-}
-
-.agentMessage {
-  max-width: 680px;
-  display: grid;
-  grid-template-columns: 38px minmax(0, 1fr);
-  gap: 12px;
-  align-items: start;
-  padding: 14px;
-  border: 1px solid #303641;
-  border-radius: 6px;
-  background: #11151c;
-}
-
-.agentAvatar {
-  width: 34px;
-  height: 34px;
-  display: grid;
-  place-items: center;
-  border: 1px solid #3f4a58;
-  border-radius: 50%;
-  background: #18202b;
-  color: #76d0ff;
-  font-weight: 800;
-}
-
-.agentMessage strong,
 .agentStatusCard strong {
   color: #ffffff;
 }
 
-.agentMessage p {
-  margin: 5px 0;
-  color: #aeb8c7;
-  line-height: 1.45;
-}
-
-.agentMessage small {
-  color: #8c97a7;
-}
-
-.conversationComposer {
-  padding: 16px 18px 18px;
-  border-top: 1px solid #252a32;
-  background: #11151c;
-}
-
-.conversationComposer textarea {
-  min-height: 108px;
-  resize: vertical;
-  font-weight: 500;
-}
-
-.conversationComposerActions {
-  display: grid;
-  grid-template-columns: 116px max-content;
-  justify-content: end;
-  align-items: end;
-  gap: 10px;
-}
-
-.conversationAgentPanel {
-  display: grid;
-  align-content: start;
-  gap: 12px;
-}
-
-.conversationSteps li {
-  grid-template-columns: 30px minmax(0, 1fr);
-  min-height: 66px;
-}
-
-.conversationSteps small {
-  grid-column: 2;
-  min-width: 0;
-  color: #8c97a7;
-  font-size: 11px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .jobsProcessPanel {
+  min-width: 0;
   display: grid;
   gap: 14px;
   margin-bottom: 12px;
+  padding: 14px;
+  border: 1px solid #252a32;
+  border-radius: 6px;
+  background: #151922;
 }
 
 .taskMonitorHeader {
@@ -3746,8 +3985,8 @@ select {
   .overviewGrid,
   .dashboardContent,
   .conversationsPage,
-  .conversationHeader,
-  .conversationComposerActions,
+  .codexChatHeader,
+  .codexComposerFooter,
   .settingsGrid,
   .modelLayout,
   .modelRoutingList,
@@ -3798,6 +4037,29 @@ select {
 
   .taskComposerHeader {
     grid-template-columns: 1fr;
+  }
+
+  .conversationsPage.codexConversationsPage {
+    grid-template-columns: 1fr;
+    min-height: auto;
+  }
+
+  .codexProjectSidebar {
+    max-height: 260px;
+    overflow: auto;
+  }
+
+  .codexChatPane {
+    min-height: 560px;
+  }
+
+  .codexComposer {
+    margin: 0 10px 10px;
+  }
+
+  .codexComposerRight {
+    justify-content: start;
+    flex-wrap: wrap;
   }
 
   .timelineItem {

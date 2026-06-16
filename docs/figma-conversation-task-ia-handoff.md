@@ -24,13 +24,14 @@ Honeycomb Conversation + Task IA
 
 Use two adjacent screens inside the frame:
 
-- Left screen: Conversations.
+- Left screen: Conversations, now matching a Codex-style project sidebar and
+  chat pane.
 - Right screen: Tasks.
 
 The point of the Figma design is to make the product split obvious:
 
-- Conversations = user intake, project path, project conversations, panel-agent
-  chat, message composer.
+- Conversations = user intake, pinned items, projects, project actions,
+  per-project conversation summaries, chat pane, message composer.
 - Tasks = progress, sub-agent state, task list, selected timeline.
 
 ## Conversations Screen
@@ -41,28 +42,35 @@ Structure:
 App shell
 - Left rail
 - Section sidebar
-  - Project location
-  - New conversation
-  - Conversation list
+  - Pinned
+  - Project header dropdown
+  - Collapse / more / add project actions
+  - Add-project menu
+    - New blank project
+    - Use existing folder
+  - Project rows
+  - Conversation summary rows under each project
 - Conversation canvas
-  - Header: Conversations / current conversation title / backend status
-  - Panel-agent message
-  - Composer
-- Agent panel
-  - Smart routing
-  - Project context
-  - Create job
-  - Open task monitor
+  - Top bar: current project path / more / task monitor shortcut
+  - Assistant message
+  - Bottom rounded composer
+    - Plus button
+    - Access status
+    - Smart routing badge
+    - Model/call-limit control
+    - Send button
 ```
 
 Recommended labels:
 
-- Conversations
-- Project location
-- New conversation
+- Pinned
+- Projects
+- New blank project
+- Use existing folder
 - Panel agent
-- Task or conversation message
-- Send to Agent
+- Type a task or message
+- Full access
+- Send
 - Smart routing
 
 ## Tasks Screen
