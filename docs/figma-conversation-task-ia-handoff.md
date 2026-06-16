@@ -60,8 +60,10 @@ App shell
   - Assistant message
   - Bottom rounded composer
     - Plus button -> Add photos and files
-    - Access status
     - Send button
+  - Message stream
+    - User messages appear immediately after send
+    - Panel/status messages show task handoff or offline failure
   - Settings archive panel
     - Archived conversations: restore or delete
     - Archived projects: restore or delete
@@ -75,7 +77,6 @@ Recommended labels:
 - Add photos and files
 - Panel agent
 - Type a task or message
-- Full access
 - Send
 - Smart routing
 

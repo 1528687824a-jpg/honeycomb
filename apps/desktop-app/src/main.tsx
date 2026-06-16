@@ -147,6 +147,7 @@ type ConversationThread = {
   unread?: boolean;
   archivedAt?: string;
   attachments?: ConversationAttachment[];
+  messages?: ConversationMessage[];
 };
 
 type ConversationAttachment = {
@@ -154,6 +155,16 @@ type ConversationAttachment = {
   name: string;
   path: string;
   addedAt: string;
+};
+
+type ConversationMessage = {
+  id: string;
+  role: "user" | "assistant" | "system";
+  body: string;
+  createdAt: string;
+  jobId?: string;
+  status?: "sent" | "failed" | "offline";
+  attachments?: ConversationAttachment[];
 };
 
 type ConversationProject = {
@@ -1549,6 +1560,20 @@ function createConversationAttachment(path: string): ConversationAttachment {
   };
 }
 
+function createConversationMessage(
+  role: ConversationMessage["role"],
+  body: string,
+  options: Partial<Pick<ConversationMessage, "jobId" | "status" | "attachments">> = {}
+): ConversationMessage {
+  return {
+    id: createConversationId("message"),
+    role,
+    body,
+    createdAt: new Date().toISOString(),
+    ...options
+  };
+}
+
 function createConversationProject(name: string, path = ""): ConversationProject {
   const thread = createConversationThread("New conversation");
   return {
@@ -1593,6 +1618,54 @@ function normalizeConversationWorkspaceState(value: Partial<ConversationWorkspac
           if (!rawThread || typeof rawThread !== "object") return [];
           const thread = rawThread as Partial<ConversationThread>;
           const id = typeof thread.id === "string" && thread.id ? thread.id : createConversationId("thread");
+          const attachments = Array.isArray(thread.attachments)
+            ? thread.attachments.flatMap((rawAttachment): ConversationAttachment[] => {
+                if (!rawAttachment || typeof rawAttachment !== "object") return [];
+                const attachment = rawAttachment as Partial<ConversationAttachment>;
+                const path = typeof attachment.path === "string" ? attachment.path : "";
+                const name = typeof attachment.name === "string" && attachment.name.trim() ? attachment.name.trim() : nameFromLocalPath(path);
+                if (!path && !name) return [];
+                return [{
+                  id: typeof attachment.id === "string" && attachment.id ? attachment.id : createConversationId("attachment"),
+                  name,
+                  path: path || name,
+                  addedAt: typeof attachment.addedAt === "string" ? attachment.addedAt : new Date().toISOString()
+                }];
+              })
+            : [];
+          const messages = Array.isArray(thread.messages)
+            ? thread.messages.flatMap((rawMessage): ConversationMessage[] => {
+                if (!rawMessage || typeof rawMessage !== "object") return [];
+                const message = rawMessage as Partial<ConversationMessage>;
+                const role = message.role === "assistant" || message.role === "system" || message.role === "user" ? message.role : "user";
+                const body = typeof message.body === "string" ? message.body : "";
+                if (!body.trim()) return [];
+                const messageAttachments = Array.isArray(message.attachments)
+                  ? message.attachments.flatMap((rawAttachment): ConversationAttachment[] => {
+                      if (!rawAttachment || typeof rawAttachment !== "object") return [];
+                      const attachment = rawAttachment as Partial<ConversationAttachment>;
+                      const path = typeof attachment.path === "string" ? attachment.path : "";
+                      const name = typeof attachment.name === "string" && attachment.name.trim() ? attachment.name.trim() : nameFromLocalPath(path);
+                      if (!path && !name) return [];
+                      return [{
+                        id: typeof attachment.id === "string" && attachment.id ? attachment.id : createConversationId("attachment"),
+                        name,
+                        path: path || name,
+                        addedAt: typeof attachment.addedAt === "string" ? attachment.addedAt : new Date().toISOString()
+                      }];
+                    })
+                  : [];
+                return [{
+                  id: typeof message.id === "string" && message.id ? message.id : createConversationId("message"),
+                  role,
+                  body,
+                  createdAt: typeof message.createdAt === "string" ? message.createdAt : new Date().toISOString(),
+                  jobId: typeof message.jobId === "string" ? message.jobId : undefined,
+                  status: message.status === "sent" || message.status === "failed" || message.status === "offline" ? message.status : undefined,
+                  attachments: messageAttachments
+                }];
+              })
+            : [];
           return [{
             id,
             title: typeof thread.title === "string" && thread.title.trim() ? thread.title.trim() : "New conversation",
@@ -1601,21 +1674,8 @@ function normalizeConversationWorkspaceState(value: Partial<ConversationWorkspac
             pinned: Boolean(thread.pinned),
             unread: Boolean(thread.unread),
             archivedAt: typeof thread.archivedAt === "string" ? thread.archivedAt : undefined,
-            attachments: Array.isArray(thread.attachments)
-              ? thread.attachments.flatMap((rawAttachment): ConversationAttachment[] => {
-                  if (!rawAttachment || typeof rawAttachment !== "object") return [];
-                  const attachment = rawAttachment as Partial<ConversationAttachment>;
-                  const path = typeof attachment.path === "string" ? attachment.path : "";
-                  const name = typeof attachment.name === "string" && attachment.name.trim() ? attachment.name.trim() : nameFromLocalPath(path);
-                  if (!path && !name) return [];
-                  return [{
-                    id: typeof attachment.id === "string" && attachment.id ? attachment.id : createConversationId("attachment"),
-                    name,
-                    path: path || name,
-                    addedAt: typeof attachment.addedAt === "string" ? attachment.addedAt : new Date().toISOString()
-                  }];
-                })
-              : []
+            attachments,
+            messages
           }];
         })
       : [];
@@ -2253,16 +2313,73 @@ function App() {
       setError(language === "zh" ? "\u8bf7\u5148\u5199\u4e0b\u8981\u4ea4\u7ed9 Agent \u56e2\u961f\u7684\u4efb\u52a1\u3002" : "Describe the task before launching it.");
       return;
     }
+    const activeProject = conversationState.projects.find((project) => project.id === conversationState.activeProjectId);
+    const activeThread = activeProject?.threads.find((thread) => thread.id === conversationState.activeThreadId && !thread.archivedAt);
+    if (!activeProject || !activeThread) {
+      setError(language === "zh" ? "\u8bf7\u5148\u9009\u62e9\u4e00\u4e2a\u53ef\u7528\u5bf9\u8bdd\u3002" : "Choose an available conversation first.");
+      return;
+    }
+    const activeWorkspacePath = activeProject.path || workbenchConfig.workspacePath;
+    const outgoingAttachments = activeThread.attachments ?? [];
+    const userMessage = createConversationMessage("user", trimmedPrompt, {
+      attachments: outgoingAttachments
+    });
+    const updatedAt = userMessage.createdAt;
+    const stateWithUserMessage = persistConversationState({
+      ...conversationState,
+      projects: conversationState.projects.map((project) =>
+        project.id === activeProject.id
+          ? {
+              ...project,
+              updatedAt,
+              threads: project.threads.map((thread) =>
+                thread.id === activeThread.id
+                  ? {
+                      ...thread,
+                      draft: "",
+                      attachments: [],
+                      messages: [...(thread.messages ?? []), userMessage],
+                      title: thread.title === "New conversation" || thread.title === "\u65b0\u5bf9\u8bdd"
+                        ? trimmedPrompt.slice(0, 64)
+                        : thread.title,
+                      updatedAt
+                    }
+                  : thread
+              )
+            }
+          : project
+      )
+    });
+    setPrompt("");
+    setAttachmentMenuOpen(false);
+    setError(null);
     if (apiState !== "online") {
-      setError(language === "zh" ? "\u540e\u7aef\u8fd8\u672a\u5c31\u7eea\uff0c\u8bf7\u5148\u7b49 OpenClaw \u53d8\u4e3a\u5728\u7ebf\u3002" : "OpenClaw is not ready yet. Wait until it is online, then launch the task.");
+      const offlineMessage = createConversationMessage(
+        "system",
+        language === "zh"
+          ? "OpenClaw \u540e\u7aef\u6682\u65f6\u79bb\u7ebf\uff0c\u5185\u5bb9\u5df2\u4fdd\u5b58\u5230\u5f53\u524d\u5bf9\u8bdd\u3002\u540e\u7aef\u5728\u7ebf\u540e\u53ef\u4ee5\u7ee7\u7eed\u53d1\u9001\u65b0\u4efb\u52a1\u3002"
+          : "OpenClaw is offline. The message is saved in this conversation; send a new task once the backend is online.",
+        { status: "offline" }
+      );
+      persistConversationState({
+        ...stateWithUserMessage,
+        projects: stateWithUserMessage.projects.map((project) =>
+          project.id === activeProject.id
+            ? {
+                ...project,
+                threads: project.threads.map((thread) =>
+                  thread.id === activeThread.id
+                    ? { ...thread, messages: [...(thread.messages ?? []), offlineMessage], updatedAt: offlineMessage.createdAt }
+                    : thread
+                )
+              }
+            : project
+        )
+      });
       return;
     }
     setBusy(true);
-    setError(null);
     try {
-      const activeProject = conversationState.projects.find((project) => project.id === conversationState.activeProjectId);
-      const activeThread = activeProject?.threads.find((thread) => thread.id === conversationState.activeThreadId && !thread.archivedAt);
-      const activeWorkspacePath = activeProject?.path || workbenchConfig.workspacePath;
       const effectiveWorkbenchConfig = {
         ...workbenchConfig,
         workspacePath: activeWorkspacePath
@@ -2279,10 +2396,52 @@ function App() {
         routingMode: inferredRoutingMode,
         maxModelCalls
       });
+      const assistantMessage = createConversationMessage(
+        "assistant",
+        language === "zh"
+          ? `\u5df2\u53d1\u9001\u7ed9 Agent \u56e2\u961f\uff1a${created.jobId}\u3002\u4f60\u53ef\u4ee5\u5728 Tasks \u9875\u67e5\u770b\u8fdb\u7a0b\u3002`
+          : `Sent to the agent team: ${created.jobId}. You can inspect progress in Tasks.`,
+        { jobId: created.jobId, status: "sent" }
+      );
+      persistConversationState({
+        ...stateWithUserMessage,
+        projects: stateWithUserMessage.projects.map((project) =>
+          project.id === activeProject.id
+            ? {
+                ...project,
+                threads: project.threads.map((thread) =>
+                  thread.id === activeThread.id
+                    ? { ...thread, messages: [...(thread.messages ?? []), assistantMessage], updatedAt: assistantMessage.createdAt }
+                    : thread
+                )
+              }
+            : project
+        )
+      });
       await refreshAll(created.jobId);
-      setActiveView("jobs");
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      const errorMessage = caught instanceof Error ? caught.message : String(caught);
+      const failedMessage = createConversationMessage(
+        "system",
+        language === "zh" ? `\u53d1\u9001\u5230 Agent \u56e2\u961f\u5931\u8d25\uff1a${errorMessage}` : `Failed to send to the agent team: ${errorMessage}`,
+        { status: "failed" }
+      );
+      persistConversationState({
+        ...stateWithUserMessage,
+        projects: stateWithUserMessage.projects.map((project) =>
+          project.id === activeProject.id
+            ? {
+                ...project,
+                threads: project.threads.map((thread) =>
+                  thread.id === activeThread.id
+                    ? { ...thread, messages: [...(thread.messages ?? []), failedMessage], updatedAt: failedMessage.createdAt }
+                    : thread
+                )
+              }
+            : project
+        )
+      });
+      setError(errorMessage);
     } finally {
       setBusy(false);
     }
@@ -3588,7 +3747,6 @@ function App() {
           panelAgent: "\u9762\u677f Agent",
           assistantIntro: "\u9009\u597d\u9879\u76ee\u540e\uff0c\u76f4\u63a5\u5728\u4e0b\u65b9\u8f93\u5165\u4efb\u52a1\u3002\u6211\u4f1a\u628a\u9879\u76ee\u8def\u5f84\u3001\u6280\u80fd\u548c MCP \u4e0a\u4e0b\u6587\u4e00\u8d77\u4ea4\u7ed9 Agent \u56e2\u961f\u3002",
           inputPlaceholder: "\u8f93\u5165\u4efb\u52a1\u6216\u6d88\u606f...",
-          fullAccess: "\u5b8c\u5168\u8bbf\u95ee",
           send: "\u53d1\u9001",
           latestJob: "\u6700\u65b0\u4efb\u52a1"
         }
@@ -3620,16 +3778,16 @@ function App() {
           panelAgent: "Panel agent",
           assistantIntro: "Pick a project, then type the task below. I will attach the project path, skills, and MCP context before handing it to the agent team.",
           inputPlaceholder: "Type a task or message...",
-          fullAccess: "Full access",
           send: "Send",
           latestJob: "Latest job"
         };
-    const canStartJob = apiState === "online" && !busy && Boolean(prompt.trim());
+    const canStartJob = !busy && Boolean(prompt.trim());
     const activeProject = conversationState.projects.find((project) => project.id === conversationState.activeProjectId) ?? conversationState.projects[0];
     const activeThread = activeProject?.threads.find((thread) => thread.id === conversationState.activeThreadId) ?? activeProject?.threads[0];
     const activeProjectPath = activeProject?.path || workbenchConfig.workspacePath.trim();
     const conversationTitle = activeProjectPath || activeProject?.name || activeThread?.title || conversationCopy.activeConversation;
     const activeAttachments = activeThread?.attachments ?? [];
+    const activeMessages = activeThread?.messages ?? [];
     const visibleProjects = visibleConversationProjects(conversationState.projects);
     const pinnedThreads = visibleProjects.flatMap((project) =>
       visibleConversationThreads(project).filter((thread) => thread.pinned).map((thread) => ({ project, thread }))
@@ -3851,6 +4009,35 @@ function App() {
                 </li>
               </ul>
             </article>
+            {activeMessages.length ? (
+              <div className="codexMessageList">
+                {activeMessages.map((message) => (
+                  <article className={`codexMessageBubble ${message.role}`} key={message.id}>
+                    <div>
+                      <strong>
+                        {message.role === "user"
+                          ? (language === "zh" ? "\u4f60" : "You")
+                          : message.role === "assistant"
+                            ? conversationCopy.panelAgent
+                            : "Honeycomb"}
+                      </strong>
+                      <small>{formatTime(message.createdAt, language)}</small>
+                    </div>
+                    <p>{message.body}</p>
+                    {message.attachments?.length ? (
+                      <div className="codexMessageAttachments">
+                        {message.attachments.map((attachment) => (
+                          <span key={attachment.id}>
+                            <Paperclip size={12} aria-hidden="true" />
+                            {attachment.name}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                  </article>
+                ))}
+              </div>
+            ) : null}
           </div>
 
           <form
@@ -3907,7 +4094,6 @@ function App() {
                     event.currentTarget.value = "";
                   }}
                 />
-                <span className="accessPill">{conversationCopy.fullAccess}</span>
               </div>
               <div className="codexComposerRight">
                 <button data-testid="start-job-button" className="codexSendButton" type="submit" disabled={!canStartJob} aria-label={conversationCopy.send}>

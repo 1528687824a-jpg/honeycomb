@@ -49,14 +49,17 @@ Current behavior:
     Tauri system folder picker;
   - project rows with persisted conversation summaries;
   - a dark chat pane with a compact top bar;
-  - a bottom rounded composer with an attachment menu, access status, and a
-    real send button.
+  - a bottom rounded composer with an attachment menu and a real send button.
 - Project/conversation state is persisted in localStorage under
   `honeycomb.conversationWorkspace`.
 - Selecting a folder-backed project syncs the supervisor workbench workspace;
   sending from Conversations uses that path as the backend job `workdir`.
 - Attached photos/files are stored on the active conversation and their paths
   are included in the supervisor prompt when a task is sent.
+- The send button first appends the user's content to the active conversation
+  and clears the composer. If the backend is online it also creates a task and
+  writes the job handoff back into the conversation; if offline, it keeps the
+  message in the thread with an offline notice.
 - Archived conversations/projects are hidden from Conversations and managed
   from Settings, where they can be restored or deleted.
 - The desktop shell enforces a single operation panel instance with a local

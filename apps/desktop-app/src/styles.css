@@ -1057,6 +1057,76 @@ select {
   font-size: 12px;
 }
 
+.codexMessageList {
+  max-width: 820px;
+  display: grid;
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.codexMessageBubble {
+  width: fit-content;
+  max-width: min(680px, 86%);
+  display: grid;
+  gap: 7px;
+  padding: 10px 12px;
+  border: 1px solid #303641;
+  border-radius: 10px;
+  background: #151922;
+}
+
+.codexMessageBubble.user {
+  justify-self: end;
+  border-color: #2e5d72;
+  background: #142635;
+}
+
+.codexMessageBubble.system {
+  border-color: #574424;
+  background: #1c1710;
+}
+
+.codexMessageBubble > div:first-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.codexMessageBubble strong {
+  color: #ffffff;
+  font-size: 13px;
+}
+
+.codexMessageBubble small {
+  color: #8c97a7;
+  font-size: 12px;
+}
+
+.codexMessageBubble p {
+  margin: 0;
+  color: #dce4ef;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.codexMessageAttachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.codexMessageAttachments span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 6px;
+  border-radius: 5px;
+  background: #202631;
+  color: #aeb8c7;
+  font-size: 12px;
+}
+
 .codexComposer {
   display: grid;
   gap: 8px;
@@ -1153,12 +1223,6 @@ select {
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.accessPill {
-  color: #f26d42;
-  font-size: 12px;
-  font-weight: 700;
 }
 
 .codexSendButton {

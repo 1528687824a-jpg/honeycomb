@@ -541,6 +541,17 @@ async function runUiFlow(page: CdpClient) {
       if (!jobRequestIncludesWorkbench) {
         throw new Error("job request did not include supervisor workbench context");
       }
+      await waitFor(
+        () => document.body.textContent.includes("Sent to the agent team") ||
+          document.body.textContent.includes("已发送给 Agent 团队"),
+        "conversation did not render the sent message"
+      );
+      const jobsTab = await waitFor(
+        () => document.querySelector('[data-testid="console-view-tab"]') || document.querySelector('[data-testid="console-view-tab-secondary"]'),
+        "jobs tab missing after conversation send"
+      );
+      jobsTab.click();
+      await waitFor(() => document.querySelector(".jobRow"), "job list missing after opening jobs");
 
       const jobId = await waitFor(() => {
         const rows = Array.from(document.querySelectorAll(".jobRow"));
