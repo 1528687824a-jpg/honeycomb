@@ -1175,11 +1175,22 @@ select {
 
 .codexIconButton,
 .codexSendButton {
-  width: 30px;
-  height: 30px;
-  display: grid;
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  min-height: 34px;
+  display: inline-grid;
   place-items: center;
-  border-radius: 50%;
+  flex: 0 0 34px;
+  box-sizing: border-box;
+  padding: 0;
+  border-radius: 999px;
+  line-height: 1;
+}
+
+.codexIconButton svg,
+.codexSendButton svg {
+  display: block;
 }
 
 .codexIconButton {
@@ -1297,6 +1308,111 @@ select {
 .archiveList article small {
   color: #8c97a7;
   font-size: 12px;
+}
+
+.archiveDeleteOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  padding: 24px;
+  background: rgba(5, 7, 11, 0.68);
+  backdrop-filter: blur(8px);
+}
+
+.archiveDeleteDialog {
+  position: relative;
+  width: min(420px, 100%);
+  display: grid;
+  gap: 12px;
+  box-sizing: border-box;
+  padding: 22px;
+  border: 1px solid #3a2430;
+  border-radius: 8px;
+  background: #171c24;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.52);
+}
+
+.archiveDeleteClose {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  min-height: 30px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #9aa5b5;
+}
+
+.archiveDeleteClose:hover {
+  background: #202631;
+  color: #ffffff;
+}
+
+.archiveDeleteIcon {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #3a1717;
+  color: #ff9a9a;
+}
+
+.archiveDeleteDialog h2 {
+  margin: 2px 36px 0 0;
+  color: #ffffff;
+  font-size: 20px;
+  line-height: 1.2;
+}
+
+.archiveDeleteDialog p {
+  margin: 0;
+  color: #aeb8c7;
+  line-height: 1.5;
+}
+
+.archiveDeleteTarget {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid #303641;
+  border-radius: 6px;
+  background: #11151c;
+}
+
+.archiveDeleteTarget b,
+.archiveDeleteTarget small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.archiveDeleteTarget b {
+  color: #ffffff;
+  font-size: 13px;
+}
+
+.archiveDeleteTarget small {
+  color: #8c97a7;
+  font-size: 12px;
+}
+
+.archiveDeleteActions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 4px;
 }
 
 .visuallyHidden {

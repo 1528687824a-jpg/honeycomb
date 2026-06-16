@@ -193,6 +193,22 @@ type ConversationContextMenuState =
     }
   | null;
 
+type ArchiveDeleteTarget =
+  | {
+      kind: "conversation";
+      projectId: string;
+      threadId: string;
+      title: string;
+      subtitle: string;
+    }
+  | {
+      kind: "project";
+      projectId: string;
+      title: string;
+      subtitle: string;
+      archived: boolean;
+    };
+
 type WorkbenchStepState = "done" | "active" | "pending" | "blocked";
 
 type WorkbenchPlanStep = {
@@ -1900,6 +1916,7 @@ function App() {
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [openProjectMenuId, setOpenProjectMenuId] = useState("");
   const [conversationContextMenu, setConversationContextMenu] = useState<ConversationContextMenuState>(null);
+  const [archiveDeleteTarget, setArchiveDeleteTarget] = useState<ArchiveDeleteTarget | null>(null);
   const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
   const [projectListCollapsed, setProjectListCollapsed] = useState(false);
   const [securityRecord, setSecurityRecord] = useState<SecurityRecord | null>(loadSecurityRecord);
@@ -2027,6 +2044,17 @@ function App() {
   useEffect(() => {
     window.localStorage.setItem("honeycomb.sideCollapsed", String(sideCollapsed));
   }, [sideCollapsed]);
+
+  useEffect(() => {
+    if (!archiveDeleteTarget) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setArchiveDeleteTarget(null);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [archiveDeleteTarget]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2911,9 +2939,20 @@ function App() {
     syncPromptFromConversationState(nextState);
   }
 
-  function deleteConversation(projectId: string, threadId: string) {
-    const ok = window.confirm(language === "zh" ? "\u6c38\u4e45\u5220\u9664\u8fd9\u4e2a\u5bf9\u8bdd\uff1f" : "Permanently delete this conversation?");
-    if (!ok) return;
+  function requestDeleteConversation(projectId: string, threadId: string) {
+    const project = conversationState.projects.find((candidate) => candidate.id === projectId);
+    const thread = project?.threads.find((candidate) => candidate.id === threadId);
+    if (!project || !thread) return;
+    setArchiveDeleteTarget({
+      kind: "conversation",
+      projectId,
+      threadId,
+      title: thread.title,
+      subtitle: project.path || project.name
+    });
+  }
+
+  function deleteConversationPermanently(projectId: string, threadId: string) {
     const nextState = persistConversationState({
       ...conversationState,
       projects: conversationState.projects.map((project) =>
@@ -2972,15 +3011,38 @@ function App() {
     syncPromptFromConversationState(nextState);
   }
 
-  function deleteProject(projectId: string) {
-    const ok = window.confirm(language === "zh" ? "\u5220\u9664\u8fd9\u4e2a\u9879\u76ee\u548c\u5176\u5bf9\u8bdd\uff1f" : "Delete this project and its conversations?");
-    if (!ok) return;
+  function requestDeleteProject(projectId: string) {
+    const project = conversationState.projects.find((candidate) => candidate.id === projectId);
+    if (!project) return;
+    setArchiveDeleteTarget({
+      kind: "project",
+      projectId,
+      title: project.path || project.name,
+      subtitle: language === "zh"
+        ? `${project.threads.length} \u4e2a\u5bf9\u8bdd`
+        : `${project.threads.length} ${project.threads.length === 1 ? "conversation" : "conversations"}`,
+      archived: Boolean(project.archivedAt)
+    });
+    setOpenProjectMenuId("");
+  }
+
+  function deleteProjectPermanently(projectId: string) {
     const nextState = persistConversationState({
       ...conversationState,
       projects: conversationState.projects.filter((project) => project.id !== projectId)
     });
     syncPromptFromConversationState(nextState);
     setOpenProjectMenuId("");
+  }
+
+  function confirmArchiveDelete() {
+    if (!archiveDeleteTarget) return;
+    if (archiveDeleteTarget.kind === "conversation") {
+      deleteConversationPermanently(archiveDeleteTarget.projectId, archiveDeleteTarget.threadId);
+    } else {
+      deleteProjectPermanently(archiveDeleteTarget.projectId);
+    }
+    setArchiveDeleteTarget(null);
   }
 
   async function openProjectInExplorer(projectId: string) {
@@ -3865,7 +3927,7 @@ function App() {
           <Archive size={15} aria-hidden="true" />
           {conversationCopy.archiveProject}
         </button>
-        <button type="button" onClick={() => deleteProject(project.id)}>
+        <button type="button" onClick={() => requestDeleteProject(project.id)}>
           <Trash2 size={15} aria-hidden="true" />
           {conversationCopy.removeProject}
         </button>
@@ -4892,7 +4954,7 @@ function App() {
           projects: "\u5f52\u6863\u9879\u76ee",
           empty: "\u6682\u65e0\u5f52\u6863\u5185\u5bb9",
           restore: "\u6062\u590d",
-          delete: "\u5220\u9664"
+          delete: "\u5f7b\u5e95\u5220\u9664"
         }
       : {
           title: "Archive",
@@ -4901,7 +4963,7 @@ function App() {
           projects: "Archived projects",
           empty: "Nothing archived",
           restore: "Restore",
-          delete: "Delete"
+          delete: "Delete permanently"
         };
     const archivedConversations = conversationState.projects.flatMap((project) =>
       project.threads
@@ -5079,7 +5141,7 @@ function App() {
                       <RefreshCw size={13} aria-hidden="true" />
                       {archiveCopy.restore}
                     </button>
-                    <button className="dangerButton compactButton" type="button" onClick={() => deleteConversation(project.id, thread.id)}>
+                    <button className="dangerButton compactButton" type="button" onClick={() => requestDeleteConversation(project.id, thread.id)}>
                       <Trash2 size={13} aria-hidden="true" />
                       {archiveCopy.delete}
                     </button>
@@ -5100,7 +5162,7 @@ function App() {
                       <RefreshCw size={13} aria-hidden="true" />
                       {archiveCopy.restore}
                     </button>
-                    <button className="dangerButton compactButton" type="button" onClick={() => deleteProject(project.id)}>
+                    <button className="dangerButton compactButton" type="button" onClick={() => requestDeleteProject(project.id)}>
                       <Trash2 size={13} aria-hidden="true" />
                       {archiveCopy.delete}
                     </button>
@@ -5149,6 +5211,66 @@ function App() {
           </section>
         </div>
       </section>
+    );
+  }
+
+  function renderArchiveDeleteDialog() {
+    if (!archiveDeleteTarget) return null;
+    const title = language === "zh"
+      ? archiveDeleteTarget.kind === "conversation"
+        ? "\u5220\u9664\u5df2\u5f52\u6863\u804a\u5929\uff1f"
+        : archiveDeleteTarget.archived
+          ? "\u5220\u9664\u5df2\u5f52\u6863\u9879\u76ee\uff1f"
+          : "\u5220\u9664\u9879\u76ee\uff1f"
+      : archiveDeleteTarget.kind === "conversation"
+        ? "Delete archived chat?"
+        : archiveDeleteTarget.archived
+          ? "Delete archived project?"
+          : "Delete project?";
+    const body = language === "zh"
+      ? archiveDeleteTarget.kind === "conversation"
+        ? "\u8fd9\u4f1a\u4ece\u672c\u673a\u5f7b\u5e95\u5220\u9664\u8fd9\u4e2a\u5df2\u5f52\u6863\u804a\u5929\uff0c\u65e0\u6cd5\u6062\u590d\u3002"
+        : "\u8fd9\u4f1a\u4ece\u672c\u673a\u5f7b\u5e95\u5220\u9664\u8fd9\u4e2a\u9879\u76ee\u548c\u5176\u5bf9\u8bdd\uff0c\u65e0\u6cd5\u6062\u590d\u3002"
+      : archiveDeleteTarget.kind === "conversation"
+        ? "This permanently deletes the archived chat from this device. It cannot be restored."
+        : "This permanently deletes the project and its conversations from this device. It cannot be restored.";
+    const cancelLabel = language === "zh" ? "\u53d6\u6d88" : "Cancel";
+    const deleteLabel = language === "zh" ? "\u5f7b\u5e95\u5220\u9664" : "Delete permanently";
+
+    return (
+      <div
+        className="archiveDeleteOverlay"
+        data-testid="archive-delete-dialog"
+        onClick={(event) => {
+          if (event.currentTarget === event.target) {
+            setArchiveDeleteTarget(null);
+          }
+        }}
+      >
+        <section className="archiveDeleteDialog" role="dialog" aria-modal="true" aria-labelledby="archive-delete-title">
+          <button className="archiveDeleteClose" type="button" aria-label={cancelLabel} onClick={() => setArchiveDeleteTarget(null)}>
+            <X size={16} aria-hidden="true" />
+          </button>
+          <div className="archiveDeleteIcon">
+            <Trash2 size={20} aria-hidden="true" />
+          </div>
+          <h2 id="archive-delete-title">{title}</h2>
+          <p>{body}</p>
+          <div className="archiveDeleteTarget">
+            <b>{archiveDeleteTarget.title}</b>
+            <small>{archiveDeleteTarget.subtitle}</small>
+          </div>
+          <div className="archiveDeleteActions">
+            <button className="secondaryButton" type="button" onClick={() => setArchiveDeleteTarget(null)}>
+              {cancelLabel}
+            </button>
+            <button className="dangerButton" type="button" onClick={confirmArchiveDelete}>
+              <Trash2 size={15} aria-hidden="true" />
+              {deleteLabel}
+            </button>
+          </div>
+        </section>
+      </div>
     );
   }
 
@@ -5307,6 +5429,8 @@ function App() {
       </aside>
 
       <section className="workspace">{renderActiveView()}</section>
+
+      {renderArchiveDeleteDialog()}
 
       {showTour ? (
         <div className="tourOverlay" data-anchor={tourStep.anchor satisfies TourAnchor}>
