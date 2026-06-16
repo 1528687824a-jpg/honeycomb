@@ -24,14 +24,14 @@ Honeycomb Conversation + Task IA
 
 Use two adjacent screens inside the frame:
 
-- Left screen: Conversations, now matching a Codex-style project sidebar and
-  chat pane.
+- Left screen: Conversations, using a Codex-like project/conversation structure
+  inside Honeycomb's dark operations theme.
 - Right screen: Tasks.
 
 The point of the Figma design is to make the product split obvious:
 
 - Conversations = user intake, pinned items, projects, project actions,
-  per-project conversation summaries, chat pane, message composer.
+  per-project conversation summaries, dark chat pane, message composer.
 - Tasks = progress, sub-agent state, task list, selected timeline.
 
 ## Conversations Screen
@@ -48,6 +48,9 @@ App shell
   - Add-project menu
     - New blank project
     - Use existing folder
+  - Overflow menu
+    - New conversation
+    - Pin / unpin current conversation
   - Project rows
   - Conversation summary rows under each project
 - Conversation canvas
@@ -105,8 +108,9 @@ Recommended sub-agent cards:
 
 ## Visual Direction
 
-Use the current Honeycomb dark operational palette, but keep layout simple and
-scan-friendly:
+Use the current Honeycomb dark operational palette. The reference screenshots
+are for structure and density only; do not copy Codex's light theme or attempt
+a one-to-one replica. Keep the result simple and scan-friendly:
 
 ```text
 Canvas background  #0F131A

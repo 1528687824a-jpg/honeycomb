@@ -673,9 +673,9 @@ select {
   gap: 0;
   padding: 0;
   overflow: hidden;
-  border: 1px solid #dfe5ec;
+  border: 1px solid #252a32;
   border-radius: 6px;
-  background: #ffffff;
+  background: #0f131a;
 }
 
 .codexProjectSidebar {
@@ -684,8 +684,9 @@ select {
   grid-template-rows: auto minmax(0, 1fr);
   gap: 18px;
   padding: 12px 8px;
-  background: #edf3fa;
-  color: #20252c;
+  border-right: 1px solid #252a32;
+  background: #11151c;
+  color: #dce4ef;
   overflow: hidden;
 }
 
@@ -693,14 +694,22 @@ select {
 .codexProjectBlock {
   min-width: 0;
   display: grid;
+  align-content: start;
   gap: 8px;
 }
 
 .codexPinnedBlock p {
   margin: 0 0 4px;
-  color: #9aa5b1;
+  color: #8c97a7;
   font-size: 13px;
   font-weight: 700;
+}
+
+.codexEmptyHint {
+  display: block;
+  padding: 4px 8px;
+  color: #66707d;
+  font-size: 12px;
 }
 
 .codexProjectToolbar {
@@ -725,7 +734,7 @@ select {
   align-items: center;
   gap: 4px;
   padding: 0;
-  color: #8c97a5;
+  color: #8c97a7;
   font-size: 13px;
   font-weight: 700;
 }
@@ -742,16 +751,17 @@ select {
   display: grid;
   place-items: center;
   border-radius: 5px;
-  color: #6e7885;
+  color: #8c97a7;
 }
 
 .codexProjectActions button:hover,
 .codexProjectActions button.active {
-  background: #dfe8f2;
-  color: #1f252d;
+  background: #202631;
+  color: #ffffff;
 }
 
-.codexAddProject {
+.codexAddProject,
+.codexProjectOverflow {
   position: relative;
 }
 
@@ -760,12 +770,12 @@ select {
   top: 28px;
   right: 0;
   z-index: 5;
-  width: 174px;
+  width: 206px;
   padding: 6px;
-  border: 1px solid #d8dee6;
+  border: 1px solid #303641;
   border-radius: 6px;
-  background: #ffffff;
-  box-shadow: 0 12px 30px rgba(35, 44, 56, 0.15);
+  background: #151922;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.35);
 }
 
 .codexProjectMenu button {
@@ -777,13 +787,13 @@ select {
   align-items: center;
   justify-content: start;
   padding: 0 7px;
-  color: #1f252d;
+  color: #dce4ef;
   font-size: 13px;
   text-align: left;
 }
 
 .codexProjectMenu button:hover {
-  background: #f1f4f8;
+  background: #202631;
 }
 
 .codexProjectList,
@@ -812,7 +822,7 @@ select {
   padding: 0 4px;
   border: 0;
   background: transparent;
-  color: #26303a;
+  color: #dce4ef;
   text-align: left;
 }
 
@@ -835,12 +845,13 @@ select {
   border: 0;
   border-radius: 8px;
   background: transparent;
-  color: #3e4650;
+  color: #aeb8c7;
   text-align: left;
 }
 
 .codexThreadItem.active {
-  background: #dfe7f0;
+  background: #202631;
+  color: #ffffff;
 }
 
 .codexThreadItem span,
@@ -855,8 +866,56 @@ select {
 }
 
 .codexThreadItem small {
-  color: #8b95a1;
+  color: #8c97a7;
   font-size: 12px;
+}
+
+.codexProjectForm {
+  display: grid;
+  gap: 8px;
+  padding: 9px;
+  border: 1px solid #303641;
+  border-radius: 6px;
+  background: #151922;
+}
+
+.codexProjectForm label {
+  display: grid;
+  gap: 6px;
+  color: #8c97a7;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.codexProjectForm input {
+  min-width: 0;
+  min-height: 34px;
+}
+
+.codexProjectForm > div {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.codexNewThreadButton {
+  width: 100%;
+  height: 32px;
+  align-self: start;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid #303641;
+  border-radius: 6px;
+  background: #151922;
+  color: #dce4ef;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.codexNewThreadButton:hover {
+  border-color: #76d0ff;
 }
 
 .codexChatPane {
@@ -864,8 +923,8 @@ select {
   min-height: 0;
   display: grid;
   grid-template-rows: 38px minmax(0, 1fr) auto;
-  background: #ffffff;
-  color: #111820;
+  background: #0f131a;
+  color: #dce4ef;
 }
 
 .codexChatHeader {
@@ -875,14 +934,14 @@ select {
   gap: 12px;
   align-items: center;
   padding: 0 12px;
-  border-bottom: 1px solid #e5e7eb;
+  border-bottom: 1px solid #252a32;
 }
 
 .codexChatHeader strong {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: #111820;
+  color: #ffffff;
   font-size: 14px;
 }
 
@@ -898,12 +957,12 @@ select {
   display: grid;
   place-items: center;
   border-radius: 6px;
-  color: #717b86;
+  color: #8c97a7;
 }
 
 .codexChatHeader button:hover {
-  background: #f3f4f6;
-  color: #1f252d;
+  background: #202631;
+  color: #ffffff;
 }
 
 .codexChatBody {
@@ -914,7 +973,7 @@ select {
 
 .codexAssistantMessage {
   max-width: 760px;
-  color: #111820;
+  color: #dce4ef;
   line-height: 1.65;
 }
 
@@ -935,14 +994,14 @@ select {
 
 .codexAssistantMessage p {
   margin: 3px 0 0;
-  color: #2e353e;
+  color: #aeb8c7;
 }
 
 .codexAssistantMessage code {
   padding: 2px 6px;
   border-radius: 5px;
-  background: #eef1f4;
-  color: #121820;
+  background: #202631;
+  color: #ffffff;
   font-size: 12px;
 }
 
@@ -951,10 +1010,10 @@ select {
   gap: 8px;
   margin: 0 20px 18px;
   padding: 10px 12px 11px;
-  border: 1px solid #e0e3e8;
+  border: 1px solid #303641;
   border-radius: 18px;
-  background: #ffffff;
-  box-shadow: 0 8px 28px rgba(20, 30, 45, 0.08);
+  background: #151922;
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.28);
 }
 
 .codexComposer textarea {
@@ -963,7 +1022,7 @@ select {
   resize: vertical;
   border: 0;
   background: transparent;
-  color: #111820;
+  color: #ffffff;
   font-size: 14px;
   line-height: 1.45;
 }
@@ -1002,11 +1061,11 @@ select {
 }
 
 .codexIconButton {
-  color: #5f6975;
+  color: #8c97a7;
 }
 
 .codexIconButton:hover {
-  background: #f3f4f6;
+  background: #202631;
 }
 
 .accessPill {
@@ -1022,7 +1081,7 @@ select {
   gap: 6px;
   padding: 0 8px;
   border: 0;
-  background: #f5f6f8;
+  background: #202631;
 }
 
 .codexRoutingBadge span {
@@ -1033,7 +1092,7 @@ select {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  color: #6f7884;
+  color: #8c97a7;
   font-size: 12px;
 }
 
@@ -1041,10 +1100,10 @@ select {
   width: 46px;
   min-height: 28px;
   padding: 0 4px;
-  border: 1px solid #e2e5e9;
+  border: 1px solid #303641;
   border-radius: 6px;
-  background: #f8fafc;
-  color: #20252c;
+  background: #11151c;
+  color: #ffffff;
   text-align: center;
 }
 
@@ -1063,8 +1122,8 @@ select {
 
 .codexSendButton {
   border: 0;
-  background: #111820;
-  color: #ffffff;
+  background: #76d0ff;
+  color: #08111a;
 }
 
 .codexSendButton:disabled {

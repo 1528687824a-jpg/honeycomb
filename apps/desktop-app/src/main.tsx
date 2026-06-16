@@ -19,6 +19,7 @@ import {
   MessageSquare,
   PanelLeftClose,
   PanelLeftOpen,
+  Pin,
   Play,
   Plus,
   MoreHorizontal,
@@ -128,6 +129,28 @@ type SupervisorWorkbenchConfig = {
   skills: string;
   mcpServers: string;
   updatedAt: string;
+};
+
+type ConversationThread = {
+  id: string;
+  title: string;
+  draft: string;
+  updatedAt: string;
+  pinned?: boolean;
+};
+
+type ConversationProject = {
+  id: string;
+  name: string;
+  path: string;
+  threads: ConversationThread[];
+  updatedAt: string;
+};
+
+type ConversationWorkspaceState = {
+  projects: ConversationProject[];
+  activeProjectId: string;
+  activeThreadId: string;
 };
 
 type WorkbenchStepState = "done" | "active" | "pending" | "blocked";
@@ -1467,6 +1490,105 @@ function loadSupervisorWorkbenchConfig(): SupervisorWorkbenchConfig {
   }
 }
 
+function createConversationId(prefix: string) {
+  const randomPart = typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return `${prefix}-${randomPart}`;
+}
+
+function createConversationThread(title: string, draft = ""): ConversationThread {
+  return {
+    id: createConversationId("thread"),
+    title,
+    draft,
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function createConversationProject(name: string, path = ""): ConversationProject {
+  const thread = createConversationThread("New conversation");
+  return {
+    id: createConversationId("project"),
+    name,
+    path,
+    threads: [thread],
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function defaultConversationWorkspaceState(): ConversationWorkspaceState {
+  const project = createConversationProject("1");
+  return {
+    projects: [project],
+    activeProjectId: project.id,
+    activeThreadId: project.threads[0]?.id ?? ""
+  };
+}
+
+function normalizeConversationWorkspaceState(value: Partial<ConversationWorkspaceState> | null): ConversationWorkspaceState {
+  const fallback = defaultConversationWorkspaceState();
+  if (!value || typeof value !== "object" || !Array.isArray(value.projects)) {
+    return fallback;
+  }
+
+  const projects = value.projects.flatMap((rawProject): ConversationProject[] => {
+    if (!rawProject || typeof rawProject !== "object") return [];
+    const project = rawProject as Partial<ConversationProject>;
+    const threads = Array.isArray(project.threads)
+      ? project.threads.flatMap((rawThread): ConversationThread[] => {
+          if (!rawThread || typeof rawThread !== "object") return [];
+          const thread = rawThread as Partial<ConversationThread>;
+          const id = typeof thread.id === "string" && thread.id ? thread.id : createConversationId("thread");
+          return [{
+            id,
+            title: typeof thread.title === "string" && thread.title.trim() ? thread.title.trim() : "New conversation",
+            draft: typeof thread.draft === "string" ? thread.draft : "",
+            updatedAt: typeof thread.updatedAt === "string" ? thread.updatedAt : new Date().toISOString(),
+            pinned: Boolean(thread.pinned)
+          }];
+        })
+      : [];
+    const safeThreads = threads.length ? threads : [createConversationThread("New conversation")];
+    return [{
+      id: typeof project.id === "string" && project.id ? project.id : createConversationId("project"),
+      name: typeof project.name === "string" && project.name.trim() ? project.name.trim() : "Project",
+      path: typeof project.path === "string" ? project.path : "",
+      threads: safeThreads,
+      updatedAt: typeof project.updatedAt === "string" ? project.updatedAt : new Date().toISOString()
+    }];
+  });
+
+  if (!projects.length) return fallback;
+  const activeProject = projects.find((project) => project.id === value.activeProjectId) ?? projects[0];
+  const activeThread = activeProject.threads.find((thread) => thread.id === value.activeThreadId) ?? activeProject.threads[0];
+  return {
+    projects,
+    activeProjectId: activeProject.id,
+    activeThreadId: activeThread?.id ?? ""
+  };
+}
+
+function loadConversationWorkspaceState(): ConversationWorkspaceState {
+  try {
+    return normalizeConversationWorkspaceState(
+      JSON.parse(window.localStorage.getItem("honeycomb.conversationWorkspace") || "null") as Partial<ConversationWorkspaceState> | null
+    );
+  } catch {
+    return defaultConversationWorkspaceState();
+  }
+}
+
+function saveConversationWorkspaceState(state: ConversationWorkspaceState) {
+  window.localStorage.setItem("honeycomb.conversationWorkspace", JSON.stringify(state));
+}
+
+function activeConversationDraft(state: ConversationWorkspaceState) {
+  const activeProject = state.projects.find((project) => project.id === state.activeProjectId) ?? state.projects[0];
+  const activeThread = activeProject?.threads.find((thread) => thread.id === state.activeThreadId) ?? activeProject?.threads[0];
+  return activeThread?.draft ?? "";
+}
+
 function saveSupervisorWorkbenchConfig(config: SupervisorWorkbenchConfig) {
   window.localStorage.setItem("honeycomb.supervisorWorkbench", JSON.stringify(config));
 }
@@ -1577,7 +1699,8 @@ function App() {
   const [language, setLanguage] = useState<Language>(getInitialLanguage);
   const [activeView, setActiveView] = useState<AppView>(getInitialView);
   const [apiState, setApiState] = useState<ApiState>("checking");
-  const [prompt, setPrompt] = useState("Draft a short launch note for a tiny multi-agent product.");
+  const [conversationState, setConversationState] = useState<ConversationWorkspaceState>(loadConversationWorkspaceState);
+  const [prompt, setPrompt] = useState(() => activeConversationDraft(conversationState));
   const [routingMode, setRoutingMode] = useState<RoutingMode>("supervisor_pipeline");
   const [maxModelCalls, setMaxModelCalls] = useState(20);
   const [jobs, setJobs] = useState<JobRecord[]>([]);
@@ -1623,6 +1746,10 @@ function App() {
     () => window.localStorage.getItem("honeycomb.sideCollapsed") === "true"
   );
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
+  const [projectOverflowOpen, setProjectOverflowOpen] = useState(false);
+  const [projectListCollapsed, setProjectListCollapsed] = useState(false);
+  const [projectCreateMode, setProjectCreateMode] = useState<"none" | "folder">("none");
+  const [projectPathDraft, setProjectPathDraft] = useState("");
   const [securityRecord, setSecurityRecord] = useState<SecurityRecord | null>(loadSecurityRecord);
   const [locked, setLocked] = useState(() => Boolean(loadSecurityRecord()) && window.sessionStorage.getItem("agentOpenClaw.unlocked") !== "true");
   const [unlockPassword, setUnlockPassword] = useState("");
@@ -2040,15 +2167,21 @@ function App() {
     setBusy(true);
     setError(null);
     try {
+      const activeProject = conversationState.projects.find((project) => project.id === conversationState.activeProjectId);
+      const activeWorkspacePath = activeProject?.path || workbenchConfig.workspacePath;
+      const effectiveWorkbenchConfig = {
+        ...workbenchConfig,
+        workspacePath: activeWorkspacePath
+      };
       const promptWithWorkbenchContext = buildSupervisorPromptWithWorkbenchContext(
         trimmedPrompt,
-        workbenchConfig,
+        effectiveWorkbenchConfig,
         panelSupervisorDisplayName,
         language
       );
       const created = await createJob({
         prompt: promptWithWorkbenchContext,
-        workdir: workbenchConfig.workspacePath.trim() || undefined,
+        workdir: activeWorkspacePath.trim() || undefined,
         routingMode: inferredRoutingMode,
         maxModelCalls
       });
@@ -2277,6 +2410,175 @@ function App() {
       updatedAt: new Date().toISOString()
     });
     setWorkbenchMessage(copy.workbenchSaved);
+  }
+
+  function persistConversationState(nextState: ConversationWorkspaceState) {
+    const normalized = normalizeConversationWorkspaceState(nextState);
+    saveConversationWorkspaceState(normalized);
+    setConversationState(normalized);
+    return normalized;
+  }
+
+  function projectNameFromPath(path: string) {
+    const trimmed = path.trim();
+    if (!trimmed) return language === "zh" ? "\u672a\u547d\u540d\u9879\u76ee" : "Untitled project";
+    return trimmed.split(/[\\/]/).filter(Boolean).at(-1) ?? trimmed;
+  }
+
+  function syncActiveWorkspace(path: string) {
+    updateWorkbenchConfig((current) => ({ ...current, workspacePath: path }));
+  }
+
+  function selectConversationProject(projectId: string) {
+    const project = conversationState.projects.find((candidate) => candidate.id === projectId);
+    if (!project) return;
+    const thread = project.threads[0] ?? createConversationThread(language === "zh" ? "\u65b0\u5bf9\u8bdd" : "New conversation");
+    persistConversationState({
+      ...conversationState,
+      projects: project.threads.length
+        ? conversationState.projects
+        : conversationState.projects.map((candidate) =>
+            candidate.id === project.id ? { ...candidate, threads: [thread] } : candidate
+          ),
+      activeProjectId: project.id,
+      activeThreadId: thread.id
+    });
+    setPrompt(thread.draft);
+    setError(null);
+    setProjectMenuOpen(false);
+    setProjectOverflowOpen(false);
+    syncActiveWorkspace(project.path);
+  }
+
+  function selectConversationThread(projectId: string, threadId: string) {
+    const project = conversationState.projects.find((candidate) => candidate.id === projectId);
+    const thread = project?.threads.find((candidate) => candidate.id === threadId);
+    if (!project || !thread) return;
+    persistConversationState({
+      ...conversationState,
+      activeProjectId: project.id,
+      activeThreadId: thread.id
+    });
+    setPrompt(thread.draft);
+    setError(null);
+    setProjectMenuOpen(false);
+    setProjectOverflowOpen(false);
+    syncActiveWorkspace(project.path);
+  }
+
+  function createBlankConversationProject() {
+    const index = conversationState.projects.length + 1;
+    const project = createConversationProject(language === "zh" ? `\u9879\u76ee ${index}` : `Project ${index}`);
+    persistConversationState({
+      projects: [...conversationState.projects, project],
+      activeProjectId: project.id,
+      activeThreadId: project.threads[0]?.id ?? ""
+    });
+    setPrompt("");
+    setProjectMenuOpen(false);
+    setProjectOverflowOpen(false);
+    setProjectCreateMode("none");
+    syncActiveWorkspace("");
+  }
+
+  function startFolderProjectFlow() {
+    setProjectPathDraft(workbenchConfig.workspacePath || "");
+    setProjectCreateMode("folder");
+    setProjectMenuOpen(false);
+    setProjectOverflowOpen(false);
+  }
+
+  function createFolderConversationProject() {
+    const path = projectPathDraft.trim();
+    if (!path) return;
+    const project = createConversationProject(projectNameFromPath(path), path);
+    persistConversationState({
+      projects: [...conversationState.projects, project],
+      activeProjectId: project.id,
+      activeThreadId: project.threads[0]?.id ?? ""
+    });
+    setPrompt("");
+    setProjectPathDraft("");
+    setProjectCreateMode("none");
+    setProjectMenuOpen(false);
+    setProjectOverflowOpen(false);
+    syncActiveWorkspace(path);
+  }
+
+  function createConversationThreadForActiveProject() {
+    const activeProject = conversationState.projects.find((project) => project.id === conversationState.activeProjectId);
+    if (!activeProject) return;
+    const thread = createConversationThread(language === "zh" ? "\u65b0\u5bf9\u8bdd" : "New conversation");
+    persistConversationState({
+      ...conversationState,
+      projects: conversationState.projects.map((project) =>
+        project.id === activeProject.id
+          ? { ...project, threads: [thread, ...project.threads], updatedAt: thread.updatedAt }
+          : project
+      ),
+      activeProjectId: activeProject.id,
+      activeThreadId: thread.id
+    });
+    setPrompt("");
+    setError(null);
+    setProjectMenuOpen(false);
+    setProjectOverflowOpen(false);
+    syncActiveWorkspace(activeProject.path);
+  }
+
+  function toggleActiveConversationPinned() {
+    setConversationState((current) => {
+      const updatedAt = new Date().toISOString();
+      const normalized = normalizeConversationWorkspaceState({
+        ...current,
+        projects: current.projects.map((project) =>
+          project.id === current.activeProjectId
+            ? {
+                ...project,
+                updatedAt,
+                threads: project.threads.map((thread) =>
+                  thread.id === current.activeThreadId
+                    ? { ...thread, pinned: !thread.pinned, updatedAt }
+                    : thread
+                )
+              }
+            : project
+        )
+      });
+      saveConversationWorkspaceState(normalized);
+      return normalized;
+    });
+    setProjectOverflowOpen(false);
+  }
+
+  function updateActiveConversationDraft(nextPrompt: string) {
+    setPrompt(nextPrompt);
+    setConversationState((current) => {
+      const updatedAt = new Date().toISOString();
+      const normalized = normalizeConversationWorkspaceState({
+        ...current,
+        projects: current.projects.map((project) =>
+          project.id === current.activeProjectId
+            ? {
+                ...project,
+                updatedAt,
+                threads: project.threads.map((thread) =>
+                  thread.id === current.activeThreadId
+                    ? {
+                        ...thread,
+                        draft: nextPrompt,
+                        title: nextPrompt.trim() ? nextPrompt.trim().slice(0, 64) : thread.title,
+                        updatedAt
+                      }
+                    : thread
+                )
+              }
+            : project
+        )
+      });
+      saveConversationWorkspaceState(normalized);
+      return normalized;
+    });
   }
 
   useEffect(() => {
@@ -2919,13 +3221,18 @@ function App() {
           addProject: "\u6dfb\u52a0\u9879\u76ee",
           newBlankProject: "\u65b0\u5efa\u7a7a\u767d\u9879\u76ee",
           useExistingFolder: "\u4f7f\u7528\u73b0\u6709\u6587\u4ef6\u5939",
+          newConversation: "\u65b0\u5efa\u5bf9\u8bdd",
+          pinConversation: "\u7f6e\u9876\u5f53\u524d\u5bf9\u8bdd",
+          unpinConversation: "\u53d6\u6d88\u7f6e\u9876",
+          folderPath: "\u6587\u4ef6\u5939\u8def\u5f84",
+          folderPathPlaceholder: "C:\\Users\\Administrator\\Desktop\\project",
+          saveProject: "\u4fdd\u5b58\u9879\u76ee",
+          cancelProject: "\u53d6\u6d88",
+          emptyPinned: "\u6682\u65e0\u7f6e\u9876\u5bf9\u8bdd",
           projectUnset: "\u9009\u62e9\u9879\u76ee\u6587\u4ef6\u5939",
           activeConversation: "\u65b0\u5bf9\u8bdd",
           panelAgent: "\u9762\u677f Agent",
           assistantIntro: "\u9009\u597d\u9879\u76ee\u540e\uff0c\u76f4\u63a5\u5728\u4e0b\u65b9\u8f93\u5165\u4efb\u52a1\u3002\u6211\u4f1a\u628a\u9879\u76ee\u8def\u5f84\u3001\u6280\u80fd\u548c MCP \u4e0a\u4e0b\u6587\u4e00\u8d77\u4ea4\u7ed9 Agent \u56e2\u961f\u3002",
-          threadOne: "\u4f60\u6709\u54ea\u4e9b\u63d2\u4ef6\u53ef\u4ee5\u8fd0\u7528\u5230\u2026",
-          threadTwo: "\u4f60\u662f\u4ece\u65e7 Codex \u7ebf\u7a0b 2 \u2026",
-          threadThree: "\u5e2e\u6211\u89e3\u51b3\u4e00\u4e0b\u5728 codex \u91cc\u2026",
           inputPlaceholder: "\u8f93\u5165\u4efb\u52a1\u6216\u6d88\u606f...",
           fullAccess: "\u5b8c\u5168\u8bbf\u95ee",
           modelLabel: "5.5 \u8d85\u9ad8",
@@ -2946,13 +3253,18 @@ function App() {
           addProject: "Add project",
           newBlankProject: "New blank project",
           useExistingFolder: "Use existing folder",
+          newConversation: "New conversation",
+          pinConversation: "Pin current conversation",
+          unpinConversation: "Unpin current conversation",
+          folderPath: "Folder path",
+          folderPathPlaceholder: "C:\\Users\\Administrator\\Desktop\\project",
+          saveProject: "Save project",
+          cancelProject: "Cancel",
+          emptyPinned: "No pinned conversations",
           projectUnset: "Choose project folder",
           activeConversation: "New conversation",
           panelAgent: "Panel agent",
           assistantIntro: "Pick a project, then type the task below. I will attach the project path, skills, and MCP context before handing it to the agent team.",
-          threadOne: "Which plugins can I use for...",
-          threadTwo: "You are from old Codex thread 2...",
-          threadThree: "Help me solve this inside Codex...",
           inputPlaceholder: "Type a task or message...",
           fullAccess: "Full access",
           modelLabel: "5.5 high",
@@ -2972,59 +3284,98 @@ function App() {
         : prompt.trim()
           ? conversationCopy.ready
           : conversationCopy.waitingPrompt;
-    const workspacePath = workbenchConfig.workspacePath.trim();
-    const primaryProjectName = workspacePath ? workspacePath.split(/[\\/]/).filter(Boolean).at(-1) ?? workspacePath : "1";
-    const conversationTitle = workspacePath || prompt.trim() || conversationCopy.activeConversation;
-    const recentThreads = [
-      { title: workspacePath || "C:\\Users\\Administrator...", time: language === "zh" ? "11 \u5c0f\u65f6" : "11 h", active: true },
-      { title: conversationCopy.threadOne, time: language === "zh" ? "3 \u5929" : "3 d", active: false }
-    ];
-    const secondaryThreads = [
-      { title: conversationCopy.threadTwo, time: language === "zh" ? "3 \u5929" : "3 d" },
-      { title: conversationCopy.threadThree, time: language === "zh" ? "1 \u5468" : "1 wk" }
-    ];
+    const activeProject = conversationState.projects.find((project) => project.id === conversationState.activeProjectId) ?? conversationState.projects[0];
+    const activeThread = activeProject?.threads.find((thread) => thread.id === conversationState.activeThreadId) ?? activeProject?.threads[0];
+    const activeProjectPath = activeProject?.path || workbenchConfig.workspacePath.trim();
+    const conversationTitle = activeProjectPath || activeProject?.name || activeThread?.title || conversationCopy.activeConversation;
+    const activeThreadPinned = Boolean(activeThread?.pinned);
+    const pinnedThreads = conversationState.projects.flatMap((project) =>
+      project.threads.filter((thread) => thread.pinned).map((thread) => ({ project, thread }))
+    );
 
     return (
       <section className="deskPage conversationsPage codexConversationsPage" data-tour-anchor="conversations">
         <aside className="codexProjectSidebar">
           <section className="codexPinnedBlock">
             <p>{conversationCopy.pinned}</p>
-            <button className="codexThreadItem" type="button">
-              <span>{conversationCopy.pinnedTitle}</span>
-              <small>{language === "zh" ? "4 \u5468" : "4 wk"}</small>
-            </button>
+            {pinnedThreads.length ? (
+              pinnedThreads.map(({ project, thread }) => (
+                <button
+                  className={thread.id === conversationState.activeThreadId ? "codexThreadItem active" : "codexThreadItem"}
+                  type="button"
+                  key={thread.id}
+                  onClick={() => selectConversationThread(project.id, thread.id)}
+                >
+                  <span>{thread.title}</span>
+                  <small>{formatTime(thread.updatedAt, language)}</small>
+                </button>
+              ))
+            ) : (
+              <span className="codexEmptyHint">{conversationCopy.emptyPinned}</span>
+            )}
           </section>
 
           <section className="codexProjectBlock">
             <div className="codexProjectToolbar">
-              <button className="codexProjectTitle" type="button">
+              <button className="codexProjectTitle" type="button" onClick={() => setProjectListCollapsed((collapsed) => !collapsed)}>
                 {conversationCopy.project}
                 <ChevronDown size={13} aria-hidden="true" />
               </button>
               <div className="codexProjectActions">
-                <button type="button" title={conversationCopy.collapse} aria-label={conversationCopy.collapse}>
-                  <PanelLeftClose size={14} aria-hidden="true" />
+                <button
+                  type="button"
+                  title={conversationCopy.collapse}
+                  aria-label={conversationCopy.collapse}
+                  onClick={() => setProjectListCollapsed((collapsed) => !collapsed)}
+                >
+                  {projectListCollapsed ? <PanelLeftOpen size={14} aria-hidden="true" /> : <PanelLeftClose size={14} aria-hidden="true" />}
                 </button>
-                <button type="button" title={conversationCopy.more} aria-label={conversationCopy.more}>
-                  <MoreHorizontal size={14} aria-hidden="true" />
-                </button>
+                <div className="codexProjectOverflow">
+                  <button
+                    className={projectOverflowOpen ? "active" : ""}
+                    type="button"
+                    title={conversationCopy.more}
+                    aria-label={conversationCopy.more}
+                    onClick={() => {
+                      setProjectOverflowOpen((open) => !open);
+                      setProjectMenuOpen(false);
+                    }}
+                  >
+                    <MoreHorizontal size={14} aria-hidden="true" />
+                  </button>
+                  {projectOverflowOpen ? (
+                    <div className="codexProjectMenu">
+                      <button type="button" onClick={createConversationThreadForActiveProject}>
+                        <MessageSquare size={15} aria-hidden="true" />
+                        {conversationCopy.newConversation}
+                      </button>
+                      <button type="button" onClick={toggleActiveConversationPinned}>
+                        <Pin size={15} aria-hidden="true" />
+                        {activeThreadPinned ? conversationCopy.unpinConversation : conversationCopy.pinConversation}
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
                 <div className="codexAddProject">
                   <button
                     className={projectMenuOpen ? "active" : ""}
                     type="button"
                     title={conversationCopy.addProject}
                     aria-label={conversationCopy.addProject}
-                    onClick={() => setProjectMenuOpen((open) => !open)}
+                    onClick={() => {
+                      setProjectMenuOpen((open) => !open);
+                      setProjectOverflowOpen(false);
+                    }}
                   >
                     <FolderPlus size={14} aria-hidden="true" />
                   </button>
                   {projectMenuOpen ? (
                     <div className="codexProjectMenu">
-                      <button type="button" onClick={() => setProjectMenuOpen(false)}>
+                      <button type="button" onClick={createBlankConversationProject}>
                         <FolderPlus size={15} aria-hidden="true" />
                         {conversationCopy.newBlankProject}
                       </button>
-                      <button type="button" onClick={() => setProjectMenuOpen(false)}>
+                      <button type="button" onClick={startFolderProjectFlow}>
                         <FolderOpen size={15} aria-hidden="true" />
                         {conversationCopy.useExistingFolder}
                       </button>
@@ -3034,37 +3385,74 @@ function App() {
               </div>
             </div>
 
-            <div className="codexProjectList">
-              <article className="codexProjectGroup active">
-                <button className="codexProjectRow" type="button">
-                  <FolderOpen size={15} aria-hidden="true" />
-                  <strong>{primaryProjectName}</strong>
-                </button>
-                <div className="codexThreadList">
-                  {recentThreads.map((thread) => (
-                    <button className={thread.active ? "codexThreadItem active" : "codexThreadItem"} type="button" key={thread.title}>
-                      <span>{thread.title}</span>
-                      <small>{thread.time}</small>
-                    </button>
-                  ))}
+            {projectCreateMode === "folder" ? (
+              <div className="codexProjectForm">
+                <label>
+                  {conversationCopy.folderPath}
+                  <input
+                    value={projectPathDraft}
+                    placeholder={conversationCopy.folderPathPlaceholder}
+                    onChange={(event) => setProjectPathDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        createFolderConversationProject();
+                      }
+                      if (event.key === "Escape") {
+                        setProjectPathDraft("");
+                        setProjectCreateMode("none");
+                      }
+                    }}
+                  />
+                </label>
+                <div>
+                  <button
+                    className="secondaryButton compactButton"
+                    type="button"
+                    onClick={() => {
+                      setProjectPathDraft("");
+                      setProjectCreateMode("none");
+                    }}
+                  >
+                    {conversationCopy.cancelProject}
+                  </button>
+                  <button className="primaryButton compactButton" type="button" onClick={createFolderConversationProject} disabled={!projectPathDraft.trim()}>
+                    {conversationCopy.saveProject}
+                  </button>
                 </div>
-              </article>
+              </div>
+            ) : null}
 
-              <article className="codexProjectGroup">
-                <button className="codexProjectRow" type="button">
-                  <FolderOpen size={15} aria-hidden="true" />
-                  <strong>project1</strong>
-                </button>
-                <div className="codexThreadList">
-                  {secondaryThreads.map((thread) => (
-                    <button className="codexThreadItem" type="button" key={thread.title}>
-                      <span>{thread.title}</span>
-                      <small>{thread.time}</small>
+            <button className="codexNewThreadButton" type="button" onClick={createConversationThreadForActiveProject}>
+              <Plus size={14} aria-hidden="true" />
+              {conversationCopy.newConversation}
+            </button>
+
+            {!projectListCollapsed ? (
+              <div className="codexProjectList">
+                {conversationState.projects.map((project) => (
+                  <article className={project.id === conversationState.activeProjectId ? "codexProjectGroup active" : "codexProjectGroup"} key={project.id}>
+                    <button className="codexProjectRow" type="button" onClick={() => selectConversationProject(project.id)}>
+                      <FolderOpen size={15} aria-hidden="true" />
+                      <strong>{project.path || project.name}</strong>
                     </button>
-                  ))}
-                </div>
-              </article>
-            </div>
+                    <div className="codexThreadList">
+                      {project.threads.map((thread) => (
+                        <button
+                          className={thread.id === conversationState.activeThreadId ? "codexThreadItem active" : "codexThreadItem"}
+                          type="button"
+                          key={thread.id}
+                          onClick={() => selectConversationThread(project.id, thread.id)}
+                        >
+                          <span>{thread.title}</span>
+                          <small>{formatTime(thread.updatedAt, language)}</small>
+                        </button>
+                      ))}
+                    </div>
+                  </article>
+                ))}
+              </div>
+            ) : null}
           </section>
         </aside>
 
@@ -3087,6 +3475,7 @@ function App() {
                 <li>
                   <strong>{conversationCopy.panelAgent}</strong>
                   <p>{conversationCopy.assistantIntro}</p>
+                  <p><code>{activeProjectPath || conversationCopy.projectUnset}</code></p>
                 </li>
                 <li>
                   <strong>{copy.smartRouting}</strong>
@@ -3114,11 +3503,11 @@ function App() {
               id="prompt"
               value={prompt}
               placeholder={conversationCopy.inputPlaceholder}
-              onChange={(event) => setPrompt(event.target.value)}
+              onChange={(event) => updateActiveConversationDraft(event.target.value)}
             />
             <div className="codexComposerFooter">
               <div className="codexComposerLeft">
-                <button className="codexIconButton" type="button" aria-label={conversationCopy.addProject}>
+                <button className="codexIconButton" type="button" aria-label={conversationCopy.newConversation} onClick={createConversationThreadForActiveProject}>
                   <Plus size={18} aria-hidden="true" />
                 </button>
                 <span className="accessPill">{conversationCopy.fullAccess}</span>
