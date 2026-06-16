@@ -2,12 +2,15 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   AlertTriangle,
+  Archive,
   Bot,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  Copy,
   Eye,
   EyeOff,
+  ExternalLink,
   FolderPlus,
   FolderOpen,
   Gauge,
@@ -16,9 +19,12 @@ import {
   Languages,
   ListChecks,
   LockKeyhole,
+  Mail,
   MessageSquare,
   PanelLeftClose,
   PanelLeftOpen,
+  Paperclip,
+  Pencil,
   Pin,
   Play,
   Plus,
@@ -30,6 +36,7 @@ import {
   ShieldQuestion,
   SlidersHorizontal,
   Sparkles,
+  Trash2,
   X
 } from "lucide-react";
 import {
@@ -137,6 +144,16 @@ type ConversationThread = {
   draft: string;
   updatedAt: string;
   pinned?: boolean;
+  unread?: boolean;
+  archivedAt?: string;
+  attachments?: ConversationAttachment[];
+};
+
+type ConversationAttachment = {
+  id: string;
+  name: string;
+  path: string;
+  addedAt: string;
 };
 
 type ConversationProject = {
@@ -145,6 +162,8 @@ type ConversationProject = {
   path: string;
   threads: ConversationThread[];
   updatedAt: string;
+  pinned?: boolean;
+  archivedAt?: string;
 };
 
 type ConversationWorkspaceState = {
@@ -152,6 +171,16 @@ type ConversationWorkspaceState = {
   activeProjectId: string;
   activeThreadId: string;
 };
+
+type ConversationContextMenuState =
+  | {
+      kind: "thread";
+      projectId: string;
+      threadId: string;
+      x: number;
+      y: number;
+    }
+  | null;
 
 type WorkbenchStepState = "done" | "active" | "pending" | "blocked";
 
@@ -1497,12 +1526,26 @@ function createConversationId(prefix: string) {
   return `${prefix}-${randomPart}`;
 }
 
+function nameFromLocalPath(path: string) {
+  const trimmed = path.trim();
+  return trimmed.split(/[\\/]/).filter(Boolean).at(-1) || trimmed || "Untitled";
+}
+
 function createConversationThread(title: string, draft = ""): ConversationThread {
   return {
     id: createConversationId("thread"),
     title,
     draft,
     updatedAt: new Date().toISOString()
+  };
+}
+
+function createConversationAttachment(path: string): ConversationAttachment {
+  return {
+    id: createConversationId("attachment"),
+    name: nameFromLocalPath(path),
+    path,
+    addedAt: new Date().toISOString()
   };
 }
 
@@ -1515,6 +1558,16 @@ function createConversationProject(name: string, path = ""): ConversationProject
     threads: [thread],
     updatedAt: new Date().toISOString()
   };
+}
+
+function visibleConversationThreads(project: ConversationProject) {
+  return project.threads.filter((thread) => !thread.archivedAt);
+}
+
+function visibleConversationProjects(projects: ConversationProject[]) {
+  return projects
+    .filter((project) => !project.archivedAt)
+    .sort((first, second) => Number(Boolean(second.pinned)) - Number(Boolean(first.pinned)));
 }
 
 function defaultConversationWorkspaceState(): ConversationWorkspaceState {
@@ -1545,7 +1598,24 @@ function normalizeConversationWorkspaceState(value: Partial<ConversationWorkspac
             title: typeof thread.title === "string" && thread.title.trim() ? thread.title.trim() : "New conversation",
             draft: typeof thread.draft === "string" ? thread.draft : "",
             updatedAt: typeof thread.updatedAt === "string" ? thread.updatedAt : new Date().toISOString(),
-            pinned: Boolean(thread.pinned)
+            pinned: Boolean(thread.pinned),
+            unread: Boolean(thread.unread),
+            archivedAt: typeof thread.archivedAt === "string" ? thread.archivedAt : undefined,
+            attachments: Array.isArray(thread.attachments)
+              ? thread.attachments.flatMap((rawAttachment): ConversationAttachment[] => {
+                  if (!rawAttachment || typeof rawAttachment !== "object") return [];
+                  const attachment = rawAttachment as Partial<ConversationAttachment>;
+                  const path = typeof attachment.path === "string" ? attachment.path : "";
+                  const name = typeof attachment.name === "string" && attachment.name.trim() ? attachment.name.trim() : nameFromLocalPath(path);
+                  if (!path && !name) return [];
+                  return [{
+                    id: typeof attachment.id === "string" && attachment.id ? attachment.id : createConversationId("attachment"),
+                    name,
+                    path: path || name,
+                    addedAt: typeof attachment.addedAt === "string" ? attachment.addedAt : new Date().toISOString()
+                  }];
+                })
+              : []
           }];
         })
       : [];
@@ -1555,15 +1625,29 @@ function normalizeConversationWorkspaceState(value: Partial<ConversationWorkspac
       name: typeof project.name === "string" && project.name.trim() ? project.name.trim() : "Project",
       path: typeof project.path === "string" ? project.path : "",
       threads: safeThreads,
-      updatedAt: typeof project.updatedAt === "string" ? project.updatedAt : new Date().toISOString()
+      updatedAt: typeof project.updatedAt === "string" ? project.updatedAt : new Date().toISOString(),
+      pinned: Boolean(project.pinned),
+      archivedAt: typeof project.archivedAt === "string" ? project.archivedAt : undefined
     }];
   });
 
-  if (!projects.length) return fallback;
-  const activeProject = projects.find((project) => project.id === value.activeProjectId) ?? projects[0];
-  const activeThread = activeProject.threads.find((thread) => thread.id === value.activeThreadId) ?? activeProject.threads[0];
+  let safeProjects = projects.length ? projects : fallback.projects;
+  if (!safeProjects.some((project) => !project.archivedAt)) {
+    safeProjects = [createConversationProject("1"), ...safeProjects];
+  }
+  safeProjects = safeProjects.map((project) =>
+    !project.archivedAt && !visibleConversationThreads(project).length
+      ? { ...project, threads: [createConversationThread("New conversation"), ...project.threads] }
+      : project
+  );
+  const activeProject =
+    safeProjects.find((project) => !project.archivedAt && project.id === value.activeProjectId) ??
+    visibleConversationProjects(safeProjects)[0] ??
+    safeProjects[0];
+  const visibleThreads = visibleConversationThreads(activeProject);
+  const activeThread = visibleThreads.find((thread) => thread.id === value.activeThreadId) ?? visibleThreads[0] ?? activeProject.threads[0];
   return {
-    projects,
+    projects: safeProjects,
     activeProjectId: activeProject.id,
     activeThreadId: activeThread?.id ?? ""
   };
@@ -1585,8 +1669,16 @@ function saveConversationWorkspaceState(state: ConversationWorkspaceState) {
 
 function activeConversationDraft(state: ConversationWorkspaceState) {
   const activeProject = state.projects.find((project) => project.id === state.activeProjectId) ?? state.projects[0];
-  const activeThread = activeProject?.threads.find((thread) => thread.id === state.activeThreadId) ?? activeProject?.threads[0];
+  if (!activeProject) return "";
+  const activeThread = activeProject.threads.find((thread) => thread.id === state.activeThreadId && !thread.archivedAt) ?? visibleConversationThreads(activeProject)[0];
   return activeThread?.draft ?? "";
+}
+
+function buildPromptWithConversationAttachments(rawPrompt: string, attachments: ConversationAttachment[], language: Language) {
+  if (!attachments.length) return rawPrompt;
+  const header = language === "zh" ? "[Honeycomb \u5bf9\u8bdd\u9644\u4ef6]" : "[Honeycomb conversation attachments]";
+  const lines = attachments.map((attachment) => `- ${attachment.name}: ${attachment.path}`);
+  return [rawPrompt, "", header, ...lines].join("\n");
 }
 
 function saveSupervisorWorkbenchConfig(config: SupervisorWorkbenchConfig) {
@@ -1746,10 +1838,10 @@ function App() {
     () => window.localStorage.getItem("honeycomb.sideCollapsed") === "true"
   );
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
-  const [projectOverflowOpen, setProjectOverflowOpen] = useState(false);
+  const [openProjectMenuId, setOpenProjectMenuId] = useState("");
+  const [conversationContextMenu, setConversationContextMenu] = useState<ConversationContextMenuState>(null);
+  const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
   const [projectListCollapsed, setProjectListCollapsed] = useState(false);
-  const [projectCreateMode, setProjectCreateMode] = useState<"none" | "folder">("none");
-  const [projectPathDraft, setProjectPathDraft] = useState("");
   const [securityRecord, setSecurityRecord] = useState<SecurityRecord | null>(loadSecurityRecord);
   const [locked, setLocked] = useState(() => Boolean(loadSecurityRecord()) && window.sessionStorage.getItem("agentOpenClaw.unlocked") !== "true");
   const [unlockPassword, setUnlockPassword] = useState("");
@@ -1782,6 +1874,7 @@ function App() {
   const [agentConfigError, setAgentConfigError] = useState("");
   const [agentConfigSaving, setAgentConfigSaving] = useState(false);
   const [showAgentApiKey, setShowAgentApiKey] = useState(false);
+  const attachmentInputRef = useRef<HTMLInputElement>(null);
   const [workbenchConfig, setWorkbenchConfig] = useState<SupervisorWorkbenchConfig>(loadSupervisorWorkbenchConfig);
   const [workbenchMessage, setWorkbenchMessage] = useState("");
   const [runtimeDiagnostics, setRuntimeDiagnostics] = useState<RuntimeDiagnosticsResponse | null>(null);
@@ -2168,13 +2261,14 @@ function App() {
     setError(null);
     try {
       const activeProject = conversationState.projects.find((project) => project.id === conversationState.activeProjectId);
+      const activeThread = activeProject?.threads.find((thread) => thread.id === conversationState.activeThreadId && !thread.archivedAt);
       const activeWorkspacePath = activeProject?.path || workbenchConfig.workspacePath;
       const effectiveWorkbenchConfig = {
         ...workbenchConfig,
         workspacePath: activeWorkspacePath
       };
       const promptWithWorkbenchContext = buildSupervisorPromptWithWorkbenchContext(
-        trimmedPrompt,
+        buildPromptWithConversationAttachments(trimmedPrompt, activeThread?.attachments ?? [], language),
         effectiveWorkbenchConfig,
         panelSupervisorDisplayName,
         language
@@ -2422,20 +2516,46 @@ function App() {
   function projectNameFromPath(path: string) {
     const trimmed = path.trim();
     if (!trimmed) return language === "zh" ? "\u672a\u547d\u540d\u9879\u76ee" : "Untitled project";
-    return trimmed.split(/[\\/]/).filter(Boolean).at(-1) ?? trimmed;
+    return nameFromLocalPath(trimmed);
   }
 
   function syncActiveWorkspace(path: string) {
     updateWorkbenchConfig((current) => ({ ...current, workspacePath: path }));
   }
 
+  function syncPromptFromConversationState(state: ConversationWorkspaceState) {
+    setPrompt(activeConversationDraft(state));
+  }
+
+  function currentThreadFromState(state = conversationState) {
+    const project = state.projects.find((candidate) => candidate.id === state.activeProjectId);
+    const thread = project?.threads.find((candidate) => candidate.id === state.activeThreadId && !candidate.archivedAt);
+    return { project, thread };
+  }
+
+  async function pickDirectoryPath() {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const selected = await invoke<string | null>("pick_directory");
+      if (typeof selected === "string" && selected.trim()) return selected.trim();
+    } catch {
+      const fallback = window.prompt(
+        language === "zh" ? "\u8f93\u5165\u9879\u76ee\u6587\u4ef6\u5939\u8def\u5f84" : "Enter a project folder path",
+        workbenchConfig.workspacePath
+      );
+      return fallback?.trim() || null;
+    }
+    return null;
+  }
+
   function selectConversationProject(projectId: string) {
     const project = conversationState.projects.find((candidate) => candidate.id === projectId);
     if (!project) return;
-    const thread = project.threads[0] ?? createConversationThread(language === "zh" ? "\u65b0\u5bf9\u8bdd" : "New conversation");
-    persistConversationState({
+    const visibleThreads = visibleConversationThreads(project);
+    const thread = visibleThreads[0] ?? createConversationThread(language === "zh" ? "\u65b0\u5bf9\u8bdd" : "New conversation");
+    const nextState = persistConversationState({
       ...conversationState,
-      projects: project.threads.length
+      projects: visibleThreads.length
         ? conversationState.projects
         : conversationState.projects.map((candidate) =>
             candidate.id === project.id ? { ...candidate, threads: [thread] } : candidate
@@ -2443,73 +2563,68 @@ function App() {
       activeProjectId: project.id,
       activeThreadId: thread.id
     });
-    setPrompt(thread.draft);
+    syncPromptFromConversationState(nextState);
     setError(null);
     setProjectMenuOpen(false);
-    setProjectOverflowOpen(false);
+    setOpenProjectMenuId("");
+    setConversationContextMenu(null);
     syncActiveWorkspace(project.path);
   }
 
   function selectConversationThread(projectId: string, threadId: string) {
     const project = conversationState.projects.find((candidate) => candidate.id === projectId);
     const thread = project?.threads.find((candidate) => candidate.id === threadId);
-    if (!project || !thread) return;
-    persistConversationState({
+    if (!project || !thread || thread.archivedAt) return;
+    const nextState = persistConversationState({
       ...conversationState,
+      projects: conversationState.projects.map((candidate) =>
+        candidate.id === project.id
+          ? {
+              ...candidate,
+              threads: candidate.threads.map((item) =>
+                item.id === thread.id ? { ...item, unread: false } : item
+              )
+            }
+          : candidate
+      ),
       activeProjectId: project.id,
       activeThreadId: thread.id
     });
-    setPrompt(thread.draft);
+    syncPromptFromConversationState(nextState);
     setError(null);
     setProjectMenuOpen(false);
-    setProjectOverflowOpen(false);
+    setOpenProjectMenuId("");
+    setConversationContextMenu(null);
     syncActiveWorkspace(project.path);
   }
 
-  function createBlankConversationProject() {
-    const index = conversationState.projects.length + 1;
-    const project = createConversationProject(language === "zh" ? `\u9879\u76ee ${index}` : `Project ${index}`);
-    persistConversationState({
-      projects: [...conversationState.projects, project],
-      activeProjectId: project.id,
-      activeThreadId: project.threads[0]?.id ?? ""
-    });
-    setPrompt("");
-    setProjectMenuOpen(false);
-    setProjectOverflowOpen(false);
-    setProjectCreateMode("none");
-    syncActiveWorkspace("");
-  }
-
-  function startFolderProjectFlow() {
-    setProjectPathDraft(workbenchConfig.workspacePath || "");
-    setProjectCreateMode("folder");
-    setProjectMenuOpen(false);
-    setProjectOverflowOpen(false);
-  }
-
-  function createFolderConversationProject() {
-    const path = projectPathDraft.trim();
+  async function createBlankConversationProject() {
+    const path = await pickDirectoryPath();
     if (!path) return;
-    const project = createConversationProject(projectNameFromPath(path), path);
-    persistConversationState({
+    const index = conversationState.projects.length + 1;
+    const project = createConversationProject(projectNameFromPath(path) || (language === "zh" ? `\u9879\u76ee ${index}` : `Project ${index}`), path);
+    const nextState = persistConversationState({
       projects: [...conversationState.projects, project],
       activeProjectId: project.id,
       activeThreadId: project.threads[0]?.id ?? ""
     });
-    setPrompt("");
-    setProjectPathDraft("");
-    setProjectCreateMode("none");
+    syncPromptFromConversationState(nextState);
     setProjectMenuOpen(false);
-    setProjectOverflowOpen(false);
+    setOpenProjectMenuId("");
     syncActiveWorkspace(path);
   }
 
   function createConversationThreadForActiveProject() {
     const activeProject = conversationState.projects.find((project) => project.id === conversationState.activeProjectId);
     if (!activeProject) return;
+    createConversationThreadForProject(activeProject.id);
+  }
+
+  function createConversationThreadForProject(projectId: string) {
+    const activeProject = conversationState.projects.find((project) => project.id === projectId);
+    if (!activeProject || activeProject.archivedAt) return;
     const thread = createConversationThread(language === "zh" ? "\u65b0\u5bf9\u8bdd" : "New conversation");
-    persistConversationState({
+    const nextState = persistConversationState({
       ...conversationState,
       projects: conversationState.projects.map((project) =>
         project.id === activeProject.id
@@ -2519,36 +2634,269 @@ function App() {
       activeProjectId: activeProject.id,
       activeThreadId: thread.id
     });
-    setPrompt("");
+    syncPromptFromConversationState(nextState);
     setError(null);
     setProjectMenuOpen(false);
-    setProjectOverflowOpen(false);
+    setOpenProjectMenuId("");
+    setConversationContextMenu(null);
     syncActiveWorkspace(activeProject.path);
   }
 
   function toggleActiveConversationPinned() {
-    setConversationState((current) => {
-      const updatedAt = new Date().toISOString();
-      const normalized = normalizeConversationWorkspaceState({
-        ...current,
-        projects: current.projects.map((project) =>
-          project.id === current.activeProjectId
-            ? {
-                ...project,
-                updatedAt,
-                threads: project.threads.map((thread) =>
-                  thread.id === current.activeThreadId
-                    ? { ...thread, pinned: !thread.pinned, updatedAt }
-                    : thread
-                )
-              }
-            : project
-        )
-      });
-      saveConversationWorkspaceState(normalized);
-      return normalized;
+    const { project, thread } = currentThreadFromState();
+    if (!project || !thread) return;
+    toggleConversationPinned(project.id, thread.id);
+  }
+
+  function toggleConversationPinned(projectId: string, threadId: string) {
+    const updatedAt = new Date().toISOString();
+    persistConversationState({
+      ...conversationState,
+      projects: conversationState.projects.map((project) =>
+        project.id === projectId
+          ? {
+              ...project,
+              updatedAt,
+              threads: project.threads.map((thread) =>
+                thread.id === threadId
+                  ? { ...thread, pinned: !thread.pinned, updatedAt }
+                  : thread
+              )
+            }
+          : project
+      )
     });
-    setProjectOverflowOpen(false);
+    setConversationContextMenu(null);
+  }
+
+  function renameConversation(projectId: string, threadId: string) {
+    const project = conversationState.projects.find((candidate) => candidate.id === projectId);
+    const thread = project?.threads.find((candidate) => candidate.id === threadId);
+    if (!thread) return;
+    const nextTitle = window.prompt(language === "zh" ? "\u91cd\u547d\u540d\u5bf9\u8bdd" : "Rename conversation", thread.title)?.trim();
+    if (!nextTitle) return;
+    const updatedAt = new Date().toISOString();
+    persistConversationState({
+      ...conversationState,
+      projects: conversationState.projects.map((candidate) =>
+        candidate.id === projectId
+          ? {
+              ...candidate,
+              updatedAt,
+              threads: candidate.threads.map((item) =>
+                item.id === threadId ? { ...item, title: nextTitle, updatedAt } : item
+              )
+            }
+          : candidate
+      )
+    });
+    setConversationContextMenu(null);
+  }
+
+  function markConversationUnread(projectId: string, threadId: string) {
+    persistConversationState({
+      ...conversationState,
+      projects: conversationState.projects.map((project) =>
+        project.id === projectId
+          ? {
+              ...project,
+              threads: project.threads.map((thread) =>
+                thread.id === threadId ? { ...thread, unread: true } : thread
+              )
+            }
+          : project
+      )
+    });
+    setConversationContextMenu(null);
+  }
+
+  function archiveConversation(projectId: string, threadId: string) {
+    const archivedAt = new Date().toISOString();
+    const nextState = persistConversationState({
+      ...conversationState,
+      projects: conversationState.projects.map((project) =>
+        project.id === projectId
+          ? {
+              ...project,
+              updatedAt: archivedAt,
+              threads: project.threads.map((thread) =>
+                thread.id === threadId ? { ...thread, pinned: false, unread: false, archivedAt, updatedAt: archivedAt } : thread
+              )
+            }
+          : project
+      )
+    });
+    syncPromptFromConversationState(nextState);
+    setConversationContextMenu(null);
+  }
+
+  function restoreConversation(projectId: string, threadId: string) {
+    const updatedAt = new Date().toISOString();
+    const nextState = persistConversationState({
+      ...conversationState,
+      projects: conversationState.projects.map((project) =>
+        project.id === projectId
+          ? {
+              ...project,
+              archivedAt: undefined,
+              updatedAt,
+              threads: project.threads.map((thread) =>
+                thread.id === threadId ? { ...thread, archivedAt: undefined, updatedAt } : thread
+              )
+            }
+          : project
+      ),
+      activeProjectId: projectId,
+      activeThreadId: threadId
+    });
+    syncPromptFromConversationState(nextState);
+  }
+
+  function deleteConversation(projectId: string, threadId: string) {
+    const ok = window.confirm(language === "zh" ? "\u6c38\u4e45\u5220\u9664\u8fd9\u4e2a\u5bf9\u8bdd\uff1f" : "Permanently delete this conversation?");
+    if (!ok) return;
+    const nextState = persistConversationState({
+      ...conversationState,
+      projects: conversationState.projects.map((project) =>
+        project.id === projectId
+          ? { ...project, threads: project.threads.filter((thread) => thread.id !== threadId) }
+          : project
+      )
+    });
+    syncPromptFromConversationState(nextState);
+  }
+
+  function toggleProjectPinned(projectId: string) {
+    persistConversationState({
+      ...conversationState,
+      projects: conversationState.projects.map((project) =>
+        project.id === projectId ? { ...project, pinned: !project.pinned, updatedAt: new Date().toISOString() } : project
+      )
+    });
+    setOpenProjectMenuId("");
+  }
+
+  function renameProject(projectId: string) {
+    const project = conversationState.projects.find((candidate) => candidate.id === projectId);
+    if (!project) return;
+    const nextName = window.prompt(language === "zh" ? "\u91cd\u547d\u540d\u9879\u76ee" : "Rename project", project.name)?.trim();
+    if (!nextName) return;
+    persistConversationState({
+      ...conversationState,
+      projects: conversationState.projects.map((candidate) =>
+        candidate.id === projectId ? { ...candidate, name: nextName, updatedAt: new Date().toISOString() } : candidate
+      )
+    });
+    setOpenProjectMenuId("");
+  }
+
+  function archiveProject(projectId: string) {
+    const archivedAt = new Date().toISOString();
+    const nextState = persistConversationState({
+      ...conversationState,
+      projects: conversationState.projects.map((project) =>
+        project.id === projectId ? { ...project, pinned: false, archivedAt, updatedAt: archivedAt } : project
+      )
+    });
+    syncPromptFromConversationState(nextState);
+    setOpenProjectMenuId("");
+  }
+
+  function restoreProject(projectId: string) {
+    const nextState = persistConversationState({
+      ...conversationState,
+      projects: conversationState.projects.map((project) =>
+        project.id === projectId ? { ...project, archivedAt: undefined, updatedAt: new Date().toISOString() } : project
+      ),
+      activeProjectId: projectId
+    });
+    syncPromptFromConversationState(nextState);
+  }
+
+  function deleteProject(projectId: string) {
+    const ok = window.confirm(language === "zh" ? "\u5220\u9664\u8fd9\u4e2a\u9879\u76ee\u548c\u5176\u5bf9\u8bdd\uff1f" : "Delete this project and its conversations?");
+    if (!ok) return;
+    const nextState = persistConversationState({
+      ...conversationState,
+      projects: conversationState.projects.filter((project) => project.id !== projectId)
+    });
+    syncPromptFromConversationState(nextState);
+    setOpenProjectMenuId("");
+  }
+
+  async function openProjectInExplorer(projectId: string) {
+    const project = conversationState.projects.find((candidate) => candidate.id === projectId);
+    const path = project?.path.trim();
+    if (!path) {
+      setError(language === "zh" ? "\u8fd9\u4e2a\u9879\u76ee\u8fd8\u6ca1\u6709\u6587\u4ef6\u5939\u8def\u5f84\u3002" : "This project does not have a folder path yet.");
+      return;
+    }
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("open_in_file_explorer", { path });
+    } catch {
+      await navigator.clipboard?.writeText(path);
+      setError(language === "zh" ? "\u5df2\u590d\u5236\u6587\u4ef6\u5939\u8def\u5f84\uff0c\u5f53\u524d\u73af\u5883\u65e0\u6cd5\u76f4\u63a5\u6253\u5f00\u8d44\u6e90\u7ba1\u7406\u5668\u3002" : "Folder path copied. This environment could not open the file explorer directly.");
+    } finally {
+      setOpenProjectMenuId("");
+      setConversationContextMenu(null);
+    }
+  }
+
+  async function copyProjectPath(projectId: string) {
+    const project = conversationState.projects.find((candidate) => candidate.id === projectId);
+    const path = project?.path.trim();
+    if (!path) return;
+    await navigator.clipboard?.writeText(path);
+    setConversationContextMenu(null);
+    setOpenProjectMenuId("");
+  }
+
+  function attachPathsToActiveConversation(paths: string[]) {
+    const cleaned = paths.map((path) => path.trim()).filter(Boolean);
+    if (!cleaned.length) return;
+    const { project, thread } = currentThreadFromState();
+    if (!project || !thread) return;
+    const updatedAt = new Date().toISOString();
+    persistConversationState({
+      ...conversationState,
+      projects: conversationState.projects.map((candidate) =>
+        candidate.id === project.id
+          ? {
+              ...candidate,
+              updatedAt,
+              threads: candidate.threads.map((item) =>
+                item.id === thread.id
+                  ? {
+                      ...item,
+                      updatedAt,
+                      attachments: [...(item.attachments ?? []), ...cleaned.map(createConversationAttachment)]
+                    }
+                  : item
+              )
+            }
+          : candidate
+      )
+    });
+  }
+
+  async function openAttachmentPicker() {
+    setAttachmentMenuOpen(false);
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const paths = await invoke<string[]>("pick_files");
+      if (paths.length) {
+        attachPathsToActiveConversation(paths.map(String));
+        return;
+      }
+    } catch {
+      attachmentInputRef.current?.click();
+    }
+  }
+
+  function handleAttachmentInput(files: FileList | null) {
+    if (!files?.length) return;
+    attachPathsToActiveConversation(Array.from(files).map((file) => file.name));
   }
 
   function updateActiveConversationDraft(nextPrompt: string) {
@@ -3220,28 +3568,28 @@ function App() {
           more: "\u66f4\u591a",
           addProject: "\u6dfb\u52a0\u9879\u76ee",
           newBlankProject: "\u65b0\u5efa\u7a7a\u767d\u9879\u76ee",
-          useExistingFolder: "\u4f7f\u7528\u73b0\u6709\u6587\u4ef6\u5939",
           newConversation: "\u65b0\u5efa\u5bf9\u8bdd",
-          pinConversation: "\u7f6e\u9876\u5f53\u524d\u5bf9\u8bdd",
-          unpinConversation: "\u53d6\u6d88\u7f6e\u9876",
-          folderPath: "\u6587\u4ef6\u5939\u8def\u5f84",
-          folderPathPlaceholder: "C:\\Users\\Administrator\\Desktop\\project",
-          saveProject: "\u4fdd\u5b58\u9879\u76ee",
-          cancelProject: "\u53d6\u6d88",
-          emptyPinned: "\u6682\u65e0\u7f6e\u9876\u5bf9\u8bdd",
+          pinConversation: "\u7f6e\u9876\u5bf9\u8bdd",
+          unpinConversation: "\u53d6\u6d88\u7f6e\u9876\u5bf9\u8bdd",
+          renameConversation: "\u91cd\u547d\u540d\u5bf9\u8bdd",
+          archiveConversation: "\u5f52\u6863\u5bf9\u8bdd",
+          markUnread: "\u6807\u8bb0\u4e3a\u672a\u8bfb",
+          openInExplorer: "\u5728\u8d44\u6e90\u7ba1\u7406\u5668\u4e2d\u6253\u5f00",
+          copyWorkdir: "\u590d\u5236\u5de5\u4f5c\u76ee\u5f55",
+          pinProject: "\u7f6e\u9876\u9879\u76ee",
+          unpinProject: "\u53d6\u6d88\u7f6e\u9876\u9879\u76ee",
+          renameProject: "\u91cd\u547d\u540d\u9879\u76ee",
+          archiveProject: "\u5f52\u6863\u9879\u76ee",
+          removeProject: "\u79fb\u9664",
+          addPhotosAndFiles: "\u6dfb\u52a0\u7167\u7247\u548c\u6587\u4ef6",
+          attachedFiles: "\u5df2\u6dfb\u52a0\u6587\u4ef6",
           projectUnset: "\u9009\u62e9\u9879\u76ee\u6587\u4ef6\u5939",
           activeConversation: "\u65b0\u5bf9\u8bdd",
           panelAgent: "\u9762\u677f Agent",
           assistantIntro: "\u9009\u597d\u9879\u76ee\u540e\uff0c\u76f4\u63a5\u5728\u4e0b\u65b9\u8f93\u5165\u4efb\u52a1\u3002\u6211\u4f1a\u628a\u9879\u76ee\u8def\u5f84\u3001\u6280\u80fd\u548c MCP \u4e0a\u4e0b\u6587\u4e00\u8d77\u4ea4\u7ed9 Agent \u56e2\u961f\u3002",
           inputPlaceholder: "\u8f93\u5165\u4efb\u52a1\u6216\u6d88\u606f...",
           fullAccess: "\u5b8c\u5168\u8bbf\u95ee",
-          modelLabel: "5.5 \u8d85\u9ad8",
-          ready: "\u53ef\u53d1\u9001",
-          waitingPrompt: "\u7b49\u5f85\u8f93\u5165",
-          waitingBackend: "\u7b49\u5f85\u540e\u7aef\u5728\u7ebf",
-          launching: "\u6b63\u5728\u53d1\u9001...",
           send: "\u53d1\u9001",
-          budget: "\u8c03\u7528\u4e0a\u9650",
           latestJob: "\u6700\u65b0\u4efb\u52a1"
         }
       : {
@@ -3252,68 +3600,129 @@ function App() {
           more: "More",
           addProject: "Add project",
           newBlankProject: "New blank project",
-          useExistingFolder: "Use existing folder",
           newConversation: "New conversation",
-          pinConversation: "Pin current conversation",
-          unpinConversation: "Unpin current conversation",
-          folderPath: "Folder path",
-          folderPathPlaceholder: "C:\\Users\\Administrator\\Desktop\\project",
-          saveProject: "Save project",
-          cancelProject: "Cancel",
-          emptyPinned: "No pinned conversations",
+          pinConversation: "Pin conversation",
+          unpinConversation: "Unpin conversation",
+          renameConversation: "Rename conversation",
+          archiveConversation: "Archive conversation",
+          markUnread: "Mark unread",
+          openInExplorer: "Open in File Explorer",
+          copyWorkdir: "Copy work directory",
+          pinProject: "Pin project",
+          unpinProject: "Unpin project",
+          renameProject: "Rename project",
+          archiveProject: "Archive project",
+          removeProject: "Remove",
+          addPhotosAndFiles: "Add photos and files",
+          attachedFiles: "Attached files",
           projectUnset: "Choose project folder",
           activeConversation: "New conversation",
           panelAgent: "Panel agent",
           assistantIntro: "Pick a project, then type the task below. I will attach the project path, skills, and MCP context before handing it to the agent team.",
           inputPlaceholder: "Type a task or message...",
           fullAccess: "Full access",
-          modelLabel: "5.5 high",
-          ready: "Ready to send",
-          waitingPrompt: "Waiting for message",
-          waitingBackend: "Waiting for backend",
-          launching: "Sending...",
           send: "Send",
-          budget: "Call limit",
           latestJob: "Latest job"
         };
     const canStartJob = apiState === "online" && !busy && Boolean(prompt.trim());
-    const launchState = busy
-      ? conversationCopy.launching
-      : apiState !== "online"
-        ? conversationCopy.waitingBackend
-        : prompt.trim()
-          ? conversationCopy.ready
-          : conversationCopy.waitingPrompt;
     const activeProject = conversationState.projects.find((project) => project.id === conversationState.activeProjectId) ?? conversationState.projects[0];
     const activeThread = activeProject?.threads.find((thread) => thread.id === conversationState.activeThreadId) ?? activeProject?.threads[0];
     const activeProjectPath = activeProject?.path || workbenchConfig.workspacePath.trim();
     const conversationTitle = activeProjectPath || activeProject?.name || activeThread?.title || conversationCopy.activeConversation;
-    const activeThreadPinned = Boolean(activeThread?.pinned);
-    const pinnedThreads = conversationState.projects.flatMap((project) =>
-      project.threads.filter((thread) => thread.pinned).map((thread) => ({ project, thread }))
+    const activeAttachments = activeThread?.attachments ?? [];
+    const visibleProjects = visibleConversationProjects(conversationState.projects);
+    const pinnedThreads = visibleProjects.flatMap((project) =>
+      visibleConversationThreads(project).filter((thread) => thread.pinned).map((thread) => ({ project, thread }))
+    );
+    const contextProject = conversationContextMenu
+      ? conversationState.projects.find((project) => project.id === conversationContextMenu.projectId)
+      : null;
+    const contextThread = conversationContextMenu?.kind === "thread"
+      ? contextProject?.threads.find((thread) => thread.id === conversationContextMenu.threadId)
+      : null;
+    const renderThreadRow = (project: ConversationProject, thread: ConversationThread) => (
+      <div
+        className={[
+          "codexThreadItem",
+          thread.id === conversationState.activeThreadId ? "active" : "",
+          thread.unread ? "unread" : ""
+        ].filter(Boolean).join(" ")}
+        key={thread.id}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          setConversationContextMenu({
+            kind: "thread",
+            projectId: project.id,
+            threadId: thread.id,
+            x: event.clientX,
+            y: event.clientY
+          });
+        }}
+      >
+        <button className="codexThreadMain" type="button" onClick={() => selectConversationThread(project.id, thread.id)}>
+          <span>{thread.title}</span>
+          <small>{formatTime(thread.updatedAt, language)}</small>
+        </button>
+        <div className="codexThreadActions">
+          <button
+            type="button"
+            title={thread.pinned ? conversationCopy.unpinConversation : conversationCopy.pinConversation}
+            aria-label={thread.pinned ? conversationCopy.unpinConversation : conversationCopy.pinConversation}
+            onClick={(event) => {
+              event.stopPropagation();
+              toggleConversationPinned(project.id, thread.id);
+            }}
+          >
+            <Pin size={13} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            title={conversationCopy.archiveConversation}
+            aria-label={conversationCopy.archiveConversation}
+            onClick={(event) => {
+              event.stopPropagation();
+              archiveConversation(project.id, thread.id);
+            }}
+          >
+            <Archive size={13} aria-hidden="true" />
+          </button>
+        </div>
+      </div>
+    );
+    const renderProjectMenu = (project: ConversationProject) => (
+      <div className="codexProjectMenu projectRowMenu">
+        <button type="button" onClick={() => toggleProjectPinned(project.id)}>
+          <Pin size={15} aria-hidden="true" />
+          {project.pinned ? conversationCopy.unpinProject : conversationCopy.pinProject}
+        </button>
+        <button type="button" onClick={() => void openProjectInExplorer(project.id)}>
+          <FolderOpen size={15} aria-hidden="true" />
+          {conversationCopy.openInExplorer}
+        </button>
+        <button type="button" onClick={() => renameProject(project.id)}>
+          <Pencil size={15} aria-hidden="true" />
+          {conversationCopy.renameProject}
+        </button>
+        <button type="button" onClick={() => archiveProject(project.id)}>
+          <Archive size={15} aria-hidden="true" />
+          {conversationCopy.archiveProject}
+        </button>
+        <button type="button" onClick={() => deleteProject(project.id)}>
+          <Trash2 size={15} aria-hidden="true" />
+          {conversationCopy.removeProject}
+        </button>
+      </div>
     );
 
     return (
-      <section className="deskPage conversationsPage codexConversationsPage" data-tour-anchor="conversations">
-        <aside className="codexProjectSidebar">
-          <section className="codexPinnedBlock">
-            <p>{conversationCopy.pinned}</p>
-            {pinnedThreads.length ? (
-              pinnedThreads.map(({ project, thread }) => (
-                <button
-                  className={thread.id === conversationState.activeThreadId ? "codexThreadItem active" : "codexThreadItem"}
-                  type="button"
-                  key={thread.id}
-                  onClick={() => selectConversationThread(project.id, thread.id)}
-                >
-                  <span>{thread.title}</span>
-                  <small>{formatTime(thread.updatedAt, language)}</small>
-                </button>
-              ))
-            ) : (
-              <span className="codexEmptyHint">{conversationCopy.emptyPinned}</span>
-            )}
-          </section>
+      <section className="deskPage conversationsPage codexConversationsPage" data-tour-anchor="conversations" onClick={() => setConversationContextMenu(null)}>
+        <aside className={pinnedThreads.length ? "codexProjectSidebar" : "codexProjectSidebar noPinned"}>
+          {pinnedThreads.length ? (
+            <section className="codexPinnedBlock">
+              <p>{conversationCopy.pinned}</p>
+              {pinnedThreads.map(({ project, thread }) => renderThreadRow(project, thread))}
+            </section>
+          ) : null}
 
           <section className="codexProjectBlock">
             <div className="codexProjectToolbar">
@@ -3332,29 +3741,17 @@ function App() {
                 </button>
                 <div className="codexProjectOverflow">
                   <button
-                    className={projectOverflowOpen ? "active" : ""}
+                    className={activeProject && openProjectMenuId === activeProject.id ? "active" : ""}
                     type="button"
                     title={conversationCopy.more}
                     aria-label={conversationCopy.more}
                     onClick={() => {
-                      setProjectOverflowOpen((open) => !open);
+                      if (activeProject) setOpenProjectMenuId((current) => current === activeProject.id ? "" : activeProject.id);
                       setProjectMenuOpen(false);
                     }}
                   >
                     <MoreHorizontal size={14} aria-hidden="true" />
                   </button>
-                  {projectOverflowOpen ? (
-                    <div className="codexProjectMenu">
-                      <button type="button" onClick={createConversationThreadForActiveProject}>
-                        <MessageSquare size={15} aria-hidden="true" />
-                        {conversationCopy.newConversation}
-                      </button>
-                      <button type="button" onClick={toggleActiveConversationPinned}>
-                        <Pin size={15} aria-hidden="true" />
-                        {activeThreadPinned ? conversationCopy.unpinConversation : conversationCopy.pinConversation}
-                      </button>
-                    </div>
-                  ) : null}
                 </div>
                 <div className="codexAddProject">
                   <button
@@ -3364,20 +3761,16 @@ function App() {
                     aria-label={conversationCopy.addProject}
                     onClick={() => {
                       setProjectMenuOpen((open) => !open);
-                      setProjectOverflowOpen(false);
+                      setOpenProjectMenuId("");
                     }}
                   >
                     <FolderPlus size={14} aria-hidden="true" />
                   </button>
                   {projectMenuOpen ? (
                     <div className="codexProjectMenu">
-                      <button type="button" onClick={createBlankConversationProject}>
+                      <button type="button" onClick={() => void createBlankConversationProject()}>
                         <FolderPlus size={15} aria-hidden="true" />
                         {conversationCopy.newBlankProject}
-                      </button>
-                      <button type="button" onClick={startFolderProjectFlow}>
-                        <FolderOpen size={15} aria-hidden="true" />
-                        {conversationCopy.useExistingFolder}
                       </button>
                     </div>
                   ) : null}
@@ -3385,69 +3778,38 @@ function App() {
               </div>
             </div>
 
-            {projectCreateMode === "folder" ? (
-              <div className="codexProjectForm">
-                <label>
-                  {conversationCopy.folderPath}
-                  <input
-                    value={projectPathDraft}
-                    placeholder={conversationCopy.folderPathPlaceholder}
-                    onChange={(event) => setProjectPathDraft(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        event.preventDefault();
-                        createFolderConversationProject();
-                      }
-                      if (event.key === "Escape") {
-                        setProjectPathDraft("");
-                        setProjectCreateMode("none");
-                      }
-                    }}
-                  />
-                </label>
-                <div>
-                  <button
-                    className="secondaryButton compactButton"
-                    type="button"
-                    onClick={() => {
-                      setProjectPathDraft("");
-                      setProjectCreateMode("none");
-                    }}
-                  >
-                    {conversationCopy.cancelProject}
-                  </button>
-                  <button className="primaryButton compactButton" type="button" onClick={createFolderConversationProject} disabled={!projectPathDraft.trim()}>
-                    {conversationCopy.saveProject}
-                  </button>
-                </div>
-              </div>
-            ) : null}
-
-            <button className="codexNewThreadButton" type="button" onClick={createConversationThreadForActiveProject}>
-              <Plus size={14} aria-hidden="true" />
-              {conversationCopy.newConversation}
-            </button>
-
             {!projectListCollapsed ? (
               <div className="codexProjectList">
-                {conversationState.projects.map((project) => (
+                {visibleProjects.map((project) => (
                   <article className={project.id === conversationState.activeProjectId ? "codexProjectGroup active" : "codexProjectGroup"} key={project.id}>
-                    <button className="codexProjectRow" type="button" onClick={() => selectConversationProject(project.id)}>
-                      <FolderOpen size={15} aria-hidden="true" />
-                      <strong>{project.path || project.name}</strong>
-                    </button>
-                    <div className="codexThreadList">
-                      {project.threads.map((thread) => (
+                    <div className="codexProjectRowShell">
+                      <button className="codexProjectRow" type="button" onClick={() => selectConversationProject(project.id)}>
+                        <FolderOpen size={15} aria-hidden="true" />
+                        <strong>{project.path || project.name}</strong>
+                        {project.pinned ? <Pin size={12} aria-hidden="true" /> : null}
+                      </button>
+                      <div className="codexProjectRowActions">
                         <button
-                          className={thread.id === conversationState.activeThreadId ? "codexThreadItem active" : "codexThreadItem"}
                           type="button"
-                          key={thread.id}
-                          onClick={() => selectConversationThread(project.id, thread.id)}
+                          title={conversationCopy.more}
+                          aria-label={conversationCopy.more}
+                          onClick={() => setOpenProjectMenuId((current) => current === project.id ? "" : project.id)}
                         >
-                          <span>{thread.title}</span>
-                          <small>{formatTime(thread.updatedAt, language)}</small>
+                          <MoreHorizontal size={14} aria-hidden="true" />
                         </button>
-                      ))}
+                        <button
+                          type="button"
+                          title={conversationCopy.newConversation}
+                          aria-label={conversationCopy.newConversation}
+                          onClick={() => createConversationThreadForProject(project.id)}
+                        >
+                          <MessageSquare size={14} aria-hidden="true" />
+                        </button>
+                      </div>
+                      {openProjectMenuId === project.id ? renderProjectMenu(project) : null}
+                    </div>
+                    <div className="codexThreadList">
+                      {visibleConversationThreads(project).map((thread) => renderThreadRow(project, thread))}
                     </div>
                   </article>
                 ))}
@@ -3505,31 +3867,49 @@ function App() {
               placeholder={conversationCopy.inputPlaceholder}
               onChange={(event) => updateActiveConversationDraft(event.target.value)}
             />
+            {activeAttachments.length ? (
+              <div className="codexAttachmentTray" aria-label={conversationCopy.attachedFiles}>
+                {activeAttachments.map((attachment) => (
+                  <span key={attachment.id}>
+                    <Paperclip size={12} aria-hidden="true" />
+                    {attachment.name}
+                  </span>
+                ))}
+              </div>
+            ) : null}
             <div className="codexComposerFooter">
               <div className="codexComposerLeft">
-                <button className="codexIconButton" type="button" aria-label={conversationCopy.newConversation} onClick={createConversationThreadForActiveProject}>
-                  <Plus size={18} aria-hidden="true" />
-                </button>
+                <div className="codexAttachmentPicker">
+                  <button
+                    className="codexIconButton"
+                    type="button"
+                    aria-label={conversationCopy.addPhotosAndFiles}
+                    onClick={() => setAttachmentMenuOpen((open) => !open)}
+                  >
+                    <Plus size={18} aria-hidden="true" />
+                  </button>
+                  {attachmentMenuOpen ? (
+                    <div className="codexAttachmentMenu">
+                      <button type="button" onClick={() => void openAttachmentPicker()}>
+                        <Paperclip size={15} aria-hidden="true" />
+                        {conversationCopy.addPhotosAndFiles}
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+                <input
+                  ref={attachmentInputRef}
+                  className="visuallyHidden"
+                  type="file"
+                  multiple
+                  onChange={(event) => {
+                    handleAttachmentInput(event.currentTarget.files);
+                    event.currentTarget.value = "";
+                  }}
+                />
                 <span className="accessPill">{conversationCopy.fullAccess}</span>
               </div>
               <div className="codexComposerRight">
-                <div className="smartRoutingBadge codexRoutingBadge" data-testid="smart-routing-badge">
-                  <strong>{copy.smartRouting}</strong>
-                  <em>{routingLabel(inferredRoutingMode)}</em>
-                </div>
-                <label className="callLimitControl" htmlFor="maxModelCalls">
-                  <span>{conversationCopy.modelLabel}</span>
-                  <input
-                    id="maxModelCalls"
-                    type="number"
-                    min="1"
-                    max="100"
-                    value={maxModelCalls}
-                    aria-label={conversationCopy.budget}
-                    onChange={(event) => setMaxModelCalls(Number(event.target.value))}
-                  />
-                </label>
-                <small className={`codexLaunchState ${canStartJob ? "ready" : ""}`}>{launchState}</small>
                 <button data-testid="start-job-button" className="codexSendButton" type="submit" disabled={!canStartJob} aria-label={conversationCopy.send}>
                   <Send size={18} aria-hidden="true" />
                 </button>
@@ -3537,6 +3917,39 @@ function App() {
             </div>
             {error ? <p className="error">{error}</p> : null}
           </form>
+          {conversationContextMenu && contextThread && contextProject ? (
+            <div
+              className="codexContextMenu"
+              style={{ left: conversationContextMenu.x, top: conversationContextMenu.y }}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <button type="button" onClick={() => toggleConversationPinned(contextProject.id, contextThread.id)}>
+                <Pin size={15} aria-hidden="true" />
+                {contextThread.pinned ? conversationCopy.unpinConversation : conversationCopy.pinConversation}
+              </button>
+              <button type="button" onClick={() => renameConversation(contextProject.id, contextThread.id)}>
+                <Pencil size={15} aria-hidden="true" />
+                {conversationCopy.renameConversation}
+              </button>
+              <button type="button" onClick={() => archiveConversation(contextProject.id, contextThread.id)}>
+                <Archive size={15} aria-hidden="true" />
+                {conversationCopy.archiveConversation}
+              </button>
+              <button type="button" onClick={() => markConversationUnread(contextProject.id, contextThread.id)}>
+                <Mail size={15} aria-hidden="true" />
+                {conversationCopy.markUnread}
+              </button>
+              <span />
+              <button type="button" onClick={() => void openProjectInExplorer(contextProject.id)}>
+                <ExternalLink size={15} aria-hidden="true" />
+                {conversationCopy.openInExplorer}
+              </button>
+              <button type="button" onClick={() => void copyProjectPath(contextProject.id)}>
+                <Copy size={15} aria-hidden="true" />
+                {conversationCopy.copyWorkdir}
+              </button>
+            </div>
+          ) : null}
         </section>
       </section>
     );
@@ -4285,6 +4698,32 @@ function App() {
   }
 
   function renderSettings() {
+    const archiveCopy = language === "zh"
+      ? {
+          title: "\u5f52\u6863",
+          intro: "\u7ba1\u7406\u5df2\u5f52\u6863\u7684\u9879\u76ee\u548c\u5bf9\u8bdd\uff0c\u53ef\u4ee5\u6062\u590d\u6216\u76f4\u63a5\u5220\u9664\u5bf9\u8bdd\u3002",
+          conversations: "\u5f52\u6863\u5bf9\u8bdd",
+          projects: "\u5f52\u6863\u9879\u76ee",
+          empty: "\u6682\u65e0\u5f52\u6863\u5185\u5bb9",
+          restore: "\u6062\u590d",
+          delete: "\u5220\u9664"
+        }
+      : {
+          title: "Archive",
+          intro: "Manage archived projects and conversations. Conversations can be restored or deleted permanently.",
+          conversations: "Archived conversations",
+          projects: "Archived projects",
+          empty: "Nothing archived",
+          restore: "Restore",
+          delete: "Delete"
+        };
+    const archivedConversations = conversationState.projects.flatMap((project) =>
+      project.threads
+        .filter((thread) => thread.archivedAt)
+        .map((thread) => ({ project, thread }))
+    );
+    const archivedProjects = conversationState.projects.filter((project) => project.archivedAt);
+
     return (
       <section className="deskPage utilityPage" data-tour-anchor="settings">
         <div className="pageHero compactHero">
@@ -4428,6 +4867,61 @@ function App() {
                 </button>
               ))}
             </div>
+          </section>
+
+          <section className="deskPanel archivePanel">
+            <div className="panelHeader">
+              <div>
+                <h2>{archiveCopy.title}</h2>
+                <p className="mutedText">{archiveCopy.intro}</p>
+              </div>
+              <Archive size={18} aria-hidden="true" />
+            </div>
+            {!archivedConversations.length && !archivedProjects.length ? (
+              <p className="emptyState compactEmpty">{archiveCopy.empty}</p>
+            ) : null}
+            {archivedConversations.length ? (
+              <div className="archiveList">
+                <strong>{archiveCopy.conversations}</strong>
+                {archivedConversations.map(({ project, thread }) => (
+                  <article key={thread.id}>
+                    <span>
+                      <b>{thread.title}</b>
+                      <small>{project.path || project.name} / {formatTime(thread.archivedAt, language)}</small>
+                    </span>
+                    <button className="secondaryButton compactButton" type="button" onClick={() => restoreConversation(project.id, thread.id)}>
+                      <RefreshCw size={13} aria-hidden="true" />
+                      {archiveCopy.restore}
+                    </button>
+                    <button className="dangerButton compactButton" type="button" onClick={() => deleteConversation(project.id, thread.id)}>
+                      <Trash2 size={13} aria-hidden="true" />
+                      {archiveCopy.delete}
+                    </button>
+                  </article>
+                ))}
+              </div>
+            ) : null}
+            {archivedProjects.length ? (
+              <div className="archiveList">
+                <strong>{archiveCopy.projects}</strong>
+                {archivedProjects.map((project) => (
+                  <article key={project.id}>
+                    <span>
+                      <b>{project.path || project.name}</b>
+                      <small>{formatTime(project.archivedAt, language)}</small>
+                    </span>
+                    <button className="secondaryButton compactButton" type="button" onClick={() => restoreProject(project.id)}>
+                      <RefreshCw size={13} aria-hidden="true" />
+                      {archiveCopy.restore}
+                    </button>
+                    <button className="dangerButton compactButton" type="button" onClick={() => deleteProject(project.id)}>
+                      <Trash2 size={13} aria-hidden="true" />
+                      {archiveCopy.delete}
+                    </button>
+                  </article>
+                ))}
+              </div>
+            ) : null}
           </section>
 
           <section className="deskPanel resetPanel">

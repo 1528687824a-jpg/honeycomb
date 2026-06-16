@@ -4,13 +4,17 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
+use std::net::{TcpListener, TcpStream};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
+use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
+
+const SINGLE_INSTANCE_ADDR: &str = "127.0.0.1:48617";
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -733,8 +737,139 @@ fn load_api_auth_token(app: AppHandle) -> Result<Option<String>, String> {
         .map_err(|error| error.to_string())
 }
 
+fn run_hidden_powershell(script: &str) -> Result<String, String> {
+    let mut command = Command::new("powershell");
+    command
+        .args([
+            "-NoProfile",
+            "-Sta",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    command.creation_flags(0x0800_0000);
+
+    let output = command.output().map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+#[tauri::command]
+fn pick_directory() -> Result<Option<String>, String> {
+    #[cfg(windows)]
+    {
+        let script = "$ErrorActionPreference='Stop';Add-Type -AssemblyName System.Windows.Forms;$dialog=New-Object System.Windows.Forms.FolderBrowserDialog;$dialog.Description='Choose or create a Honeycomb project folder';$dialog.ShowNewFolderButton=$true;if($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK){[Console]::Out.Write($dialog.SelectedPath)}";
+        let selected = run_hidden_powershell(script)?;
+        Ok(if selected.is_empty() { None } else { Some(selected) })
+    }
+
+    #[cfg(not(windows))]
+    {
+        Ok(None)
+    }
+}
+
+#[tauri::command]
+fn pick_files() -> Result<Vec<String>, String> {
+    #[cfg(windows)]
+    {
+        let script = "$ErrorActionPreference='Stop';Add-Type -AssemblyName System.Windows.Forms;$dialog=New-Object System.Windows.Forms.OpenFileDialog;$dialog.Title='Add photos and files';$dialog.Multiselect=$true;if($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK){[Console]::Out.Write(($dialog.FileNames -join \"`n\"))}";
+        let selected = run_hidden_powershell(script)?;
+        Ok(selected
+            .lines()
+            .map(|line| line.trim().to_string())
+            .filter(|line| !line.is_empty())
+            .collect())
+    }
+
+    #[cfg(not(windows))]
+    {
+        Ok(Vec::new())
+    }
+}
+
+#[tauri::command]
+fn open_in_file_explorer(path: String) -> Result<(), String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("path_empty".to_string());
+    }
+
+    #[cfg(windows)]
+    {
+        let target = PathBuf::from(trimmed);
+        let argument = if target.is_file() {
+            format!("/select,{}", target.display())
+        } else {
+            target.display().to_string()
+        };
+        Command::new("explorer.exe")
+            .arg(argument)
+            .spawn()
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(trimmed)
+            .spawn()
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        Command::new("xdg-open")
+            .arg(trimmed)
+            .spawn()
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+}
+
+fn focus_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+fn notify_existing_instance() {
+    if let Ok(mut stream) = TcpStream::connect(SINGLE_INSTANCE_ADDR) {
+        let _ = stream.write_all(b"focus");
+    }
+}
+
 fn main() {
+    let single_instance_listener = match TcpListener::bind(SINGLE_INSTANCE_ADDR) {
+        Ok(listener) => listener,
+        Err(_) => {
+            notify_existing_instance();
+            return;
+        }
+    };
+
     tauri::Builder::default()
+        .setup(move |app| {
+            let app_handle = app.handle().clone();
+            thread::spawn(move || {
+                for stream in single_instance_listener.incoming() {
+                    if stream.is_ok() {
+                        focus_main_window(&app_handle);
+                    }
+                }
+            });
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             verify_provider_connection,
             generate_first_run_suggestions,
@@ -745,7 +880,10 @@ fn main() {
             apply_openclaw_agent_setup,
             save_provider_api_key,
             load_provider_api_key,
-            load_api_auth_token
+            load_api_auth_token,
+            open_in_file_explorer,
+            pick_directory,
+            pick_files
         ])
         .run(tauri::generate_context!())
         .expect("error while running Honeycomb desktop shell");

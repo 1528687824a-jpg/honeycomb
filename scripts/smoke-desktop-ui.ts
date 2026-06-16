@@ -512,8 +512,7 @@ async function runUiFlow(page: CdpClient) {
       conversationTab.click();
       await sleep(100);
       await waitFor(() => document.querySelector("#prompt"), "prompt field missing");
-      const smartRoutingVisible = Boolean(document.querySelector('[data-testid="smart-routing-badge"]')) &&
-        document.body.textContent.includes("Smart routing");
+      const smartRoutingVisible = document.body.textContent.includes("Smart routing");
       const manualRoutingHidden = !document.querySelector("#routingMode");
 
       const beforeJobIds = new Set(
@@ -523,9 +522,7 @@ async function runUiFlow(page: CdpClient) {
       );
 
       const prompt = document.querySelector("#prompt");
-      const maxModelCalls = document.querySelector("#maxModelCalls");
       setNativeValue(prompt, "Desktop UI smoke: create a cancellable mock job and show the timeline.");
-      setNativeValue(maxModelCalls, "20");
       if (!smartRoutingVisible || !manualRoutingHidden) {
         throw new Error("smart routing UI did not replace manual routing select");
       }

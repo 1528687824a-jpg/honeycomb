@@ -31,7 +31,8 @@ Use two adjacent screens inside the frame:
 The point of the Figma design is to make the product split obvious:
 
 - Conversations = user intake, pinned items, projects, project actions,
-  per-project conversation summaries, dark chat pane, message composer.
+  per-project conversation summaries, archive management, dark chat pane,
+  attachment-aware message composer.
 - Tasks = progress, sub-agent state, task list, selected timeline.
 
 ## Conversations Screen
@@ -46,22 +47,24 @@ App shell
   - Project header dropdown
   - Collapse / more / add project actions
   - Add-project menu
-    - New blank project
-    - Use existing folder
-  - Overflow menu
-    - New conversation
-    - Pin / unpin current conversation
+    - New blank project -> system folder picker
   - Project rows
+    - Hover actions: project menu and new conversation
+    - Project menu: pin/unpin, open in File Explorer, rename, archive, remove
   - Conversation summary rows under each project
+    - Hover actions: pin/unpin and archive
+    - Right-click menu: pin/unpin, rename, archive, mark unread, open in File
+      Explorer, copy work directory
 - Conversation canvas
   - Top bar: current project path / more / task monitor shortcut
   - Assistant message
   - Bottom rounded composer
-    - Plus button
+    - Plus button -> Add photos and files
     - Access status
-    - Smart routing badge
-    - Model/call-limit control
     - Send button
+  - Settings archive panel
+    - Archived conversations: restore or delete
+    - Archived projects: restore or delete
 ```
 
 Recommended labels:
@@ -69,7 +72,7 @@ Recommended labels:
 - Pinned
 - Projects
 - New blank project
-- Use existing folder
+- Add photos and files
 - Panel agent
 - Type a task or message
 - Full access

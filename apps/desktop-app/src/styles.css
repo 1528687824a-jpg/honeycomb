@@ -690,6 +690,10 @@ select {
   overflow: hidden;
 }
 
+.codexProjectSidebar.noPinned {
+  grid-template-rows: minmax(0, 1fr);
+}
+
 .codexPinnedBlock,
 .codexProjectBlock {
   min-width: 0;
@@ -765,7 +769,9 @@ select {
   position: relative;
 }
 
-.codexProjectMenu {
+.codexProjectMenu,
+.codexAttachmentMenu,
+.codexContextMenu {
   position: absolute;
   top: 28px;
   right: 0;
@@ -778,7 +784,9 @@ select {
   box-shadow: 0 16px 36px rgba(0, 0, 0, 0.35);
 }
 
-.codexProjectMenu button {
+.codexProjectMenu button,
+.codexAttachmentMenu button,
+.codexContextMenu button {
   width: 100%;
   height: 32px;
   display: grid;
@@ -792,8 +800,15 @@ select {
   text-align: left;
 }
 
-.codexProjectMenu button:hover {
+.codexProjectMenu button:hover,
+.codexAttachmentMenu button:hover,
+.codexContextMenu button:hover {
   background: #202631;
+}
+
+.projectRowMenu {
+  top: 28px;
+  right: 4px;
 }
 
 .codexProjectList,
@@ -812,14 +827,20 @@ select {
   margin-top: 12px;
 }
 
+.codexProjectRowShell {
+  position: relative;
+  min-width: 0;
+}
+
 .codexProjectRow {
   min-width: 0;
+  width: 100%;
   height: 28px;
   display: grid;
-  grid-template-columns: 17px minmax(0, 1fr);
+  grid-template-columns: 17px minmax(0, 1fr) max-content;
   gap: 8px;
   align-items: center;
-  padding: 0 4px;
+  padding: 0 56px 0 4px;
   border: 0;
   background: transparent;
   color: #dce4ef;
@@ -834,18 +855,69 @@ select {
   font-weight: 600;
 }
 
+.codexProjectRowActions {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  display: inline-flex;
+  gap: 2px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.codexProjectRowShell:hover .codexProjectRowActions,
+.codexProjectRowActions:focus-within {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.codexProjectRowActions button,
+.codexThreadActions button {
+  width: 24px;
+  height: 24px;
+  min-height: 24px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 5px;
+  background: #202631;
+  color: #8c97a7;
+}
+
+.codexProjectRowActions button:hover,
+.codexThreadActions button:hover {
+  color: #ffffff;
+}
+
 .codexThreadItem {
+  position: relative;
   min-width: 0;
   height: 32px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) max-content;
-  gap: 8px;
+  gap: 4px;
   align-items: center;
-  padding: 0 8px;
+  padding: 0 4px 0 8px;
   border: 0;
   border-radius: 8px;
   background: transparent;
   color: #aeb8c7;
+  text-align: left;
+}
+
+.codexThreadMain {
+  min-width: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  gap: 8px;
+  align-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
   text-align: left;
 }
 
@@ -854,68 +926,48 @@ select {
   color: #ffffff;
 }
 
-.codexThreadItem span,
-.codexThreadItem small {
+.codexThreadItem.unread .codexThreadMain span {
+  font-weight: 800;
+}
+
+.codexThreadItem.unread .codexThreadMain span::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  display: inline-block;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: #76d0ff;
+  vertical-align: middle;
+}
+
+.codexThreadMain span,
+.codexThreadMain small {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.codexThreadItem span {
+.codexThreadMain span {
   font-size: 13px;
 }
 
-.codexThreadItem small {
+.codexThreadMain small {
   color: #8c97a7;
   font-size: 12px;
 }
 
-.codexProjectForm {
-  display: grid;
-  gap: 8px;
-  padding: 9px;
-  border: 1px solid #303641;
-  border-radius: 6px;
-  background: #151922;
-}
-
-.codexProjectForm label {
-  display: grid;
-  gap: 6px;
-  color: #8c97a7;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.codexProjectForm input {
-  min-width: 0;
-  min-height: 34px;
-}
-
-.codexProjectForm > div {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.codexNewThreadButton {
-  width: 100%;
-  height: 32px;
-  align-self: start;
+.codexThreadActions {
   display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  border: 1px solid #303641;
-  border-radius: 6px;
-  background: #151922;
-  color: #dce4ef;
-  font-size: 13px;
-  font-weight: 700;
+  gap: 2px;
+  opacity: 0;
+  pointer-events: none;
 }
 
-.codexNewThreadButton:hover {
-  border-color: #76d0ff;
+.codexThreadItem:hover .codexThreadActions,
+.codexThreadActions:focus-within {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .codexChatPane {
@@ -1068,56 +1120,45 @@ select {
   background: #202631;
 }
 
-.accessPill {
-  color: #f26d42;
-  font-size: 12px;
-  font-weight: 700;
+.codexAttachmentPicker {
+  position: relative;
 }
 
-.codexRoutingBadge {
-  min-height: 28px;
-  display: inline-flex;
+.codexAttachmentMenu {
+  top: auto;
+  bottom: 36px;
+  left: 0;
+  right: auto;
+  width: 190px;
+}
+
+.codexAttachmentTray {
+  display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
-  padding: 0 8px;
-  border: 0;
-  background: #202631;
 }
 
-.codexRoutingBadge span {
-  display: none;
-}
-
-.callLimitControl {
+.codexAttachmentTray span {
+  max-width: 220px;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  color: #8c97a7;
-  font-size: 12px;
-}
-
-.callLimitControl input {
-  width: 46px;
-  min-height: 28px;
-  padding: 0 4px;
+  gap: 5px;
+  padding: 4px 7px;
+  overflow: hidden;
   border: 1px solid #303641;
   border-radius: 6px;
   background: #11151c;
-  color: #ffffff;
-  text-align: center;
-}
-
-.codexLaunchState {
-  max-width: 132px;
-  overflow: hidden;
-  color: #9a6b14;
+  color: #aeb8c7;
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.codexLaunchState.ready {
-  color: #267345;
+.accessPill {
+  color: #f26d42;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .codexSendButton {
@@ -1129,6 +1170,69 @@ select {
 .codexSendButton:disabled {
   opacity: 0.42;
   cursor: not-allowed;
+}
+
+.codexContextMenu {
+  position: fixed;
+  top: auto;
+  right: auto;
+  width: 210px;
+}
+
+.codexContextMenu span {
+  display: block;
+  height: 1px;
+  margin: 5px -6px;
+  background: #303641;
+}
+
+.archivePanel {
+  align-content: start;
+}
+
+.archiveList {
+  display: grid;
+  gap: 8px;
+}
+
+.archiveList > strong {
+  color: #ffffff;
+  font-size: 13px;
+}
+
+.archiveList article {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content max-content;
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid #303641;
+  border-radius: 6px;
+  background: #11151c;
+}
+
+.archiveList article span {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.archiveList article b,
+.archiveList article small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.archiveList article b {
+  color: #ffffff;
+  font-size: 13px;
+}
+
+.archiveList article small {
+  color: #8c97a7;
+  font-size: 12px;
 }
 
 .visuallyHidden {

@@ -40,18 +40,27 @@ Current behavior:
 - Dashboard primary action opens `Conversations`.
 - The conversation page has:
   - a dark project sidebar modeled on Codex's structure;
-  - usable pinned conversations;
-  - project dropdown, collapse, overflow, and add-project actions;
-  - add-project menu with working "new blank project" and "use existing folder"
-    flows;
+  - pinned conversations only when at least one thread is pinned;
+  - hover actions on each conversation row for pin/unpin and archive;
+  - right-click conversation menu for pin/unpin, rename, archive, mark unread,
+    open in File Explorer, and copy work directory;
+  - project row hover actions for project menu and new conversation;
+  - add-project menu with a single "new blank project" action backed by a
+    Tauri system folder picker;
   - project rows with persisted conversation summaries;
   - a dark chat pane with a compact top bar;
-  - a bottom rounded composer with access status, routing badge, call limit,
-    and send button.
+  - a bottom rounded composer with an attachment menu, access status, and a
+    real send button.
 - Project/conversation state is persisted in localStorage under
   `honeycomb.conversationWorkspace`.
 - Selecting a folder-backed project syncs the supervisor workbench workspace;
   sending from Conversations uses that path as the backend job `workdir`.
+- Attached photos/files are stored on the active conversation and their paths
+  are included in the supervisor prompt when a task is sent.
+- Archived conversations/projects are hidden from Conversations and managed
+  from Settings, where they can be restored or deleted.
+- The desktop shell enforces a single operation panel instance with a local
+  focus signal, so launching Honeycomb again focuses the existing window.
 - Sending from Conversations still creates a normal backend job, then the app
   opens the Tasks page so the user can monitor it.
 - The Tasks page no longer owns the new-task composer. It now shows:
@@ -69,11 +78,11 @@ Honeycomb
 ├─ Dashboard
 │  └─ runtime health, latest job, next action
 ├─ Conversations
-│  ├─ pinned conversation
+│  ├─ pinned conversations when present
 │  ├─ project list and project actions
 │  ├─ per-project conversation summaries
 │  ├─ dark chat pane
-│  └─ bottom composer -> create/continue task
+│  └─ bottom composer -> attach files / send task
 ├─ Tasks
 │  ├─ active task process
 │  ├─ sub-agent states
@@ -112,7 +121,6 @@ Future UX options:
 
 ## Next Implementation Steps
 
-- Add a folder picker command in the Tauri layer for choosing project paths.
 - Link conversation messages to created jobs.
 - Stream task progress back into the conversation panel while keeping Tasks as
   the full operations view.
