@@ -59,6 +59,7 @@ import {
   runRuntimeRepairAction,
   saveAgentModelConfig as saveBackendAgentModelConfig,
   sendPanelChat,
+  type PanelOutputStyle,
   type ExperienceListResponse,
   type ExperienceRecord,
   type ExperienceStatus,
@@ -121,6 +122,7 @@ type FirstRunPreview = {
   };
   profile?: {
     supervisorName?: string;
+    outputStyle?: PanelOutputStyle;
   };
 };
 
@@ -262,6 +264,8 @@ const routingModes: RoutingMode[] = [
   "classic_master_slave",
   "master_slave_discussion"
 ];
+
+const panelOutputStyles: PanelOutputStyle[] = ["concise", "detailed", "warm", "formal"];
 
 const routingModeLabels: Record<Language, Record<RoutingMode, string>> = {
   en: {
@@ -621,6 +625,15 @@ const translations = {
     agentHint: "Agent framework",
     memoryHint: "Prompts and experience memory",
     settingsHint: "Security, language, and local preferences",
+    outputStyleTitle: "Panel output style",
+    outputStyleIntro: "Controls how the panel agent answers in conversations.",
+    outputStyleSaved: "Panel output style saved.",
+    outputStyles: {
+      concise: "Concise and direct",
+      detailed: "Detailed explanation",
+      warm: "Warm and natural",
+      formal: "Formal and professional"
+    },
     securityTitle: "Security",
     securityIntro: "Set a local panel password and a recovery question.",
     securityConfiguredIntro: "Verify the current password before changing the password or recovery question.",
@@ -871,6 +884,15 @@ const translations = {
     agentHint: "Agent 框架",
     memoryHint: "提示词和经验记忆",
     settingsHint: "安全、语言和本地偏好",
+    outputStyleTitle: "面板输出风格",
+    outputStyleIntro: "控制面板 Agent 在对话里的回答方式。",
+    outputStyleSaved: "面板输出风格已保存。",
+    outputStyles: {
+      concise: "简洁直接",
+      detailed: "详细解释",
+      warm: "温柔自然",
+      formal: "正式专业"
+    },
     securityTitle: "安全设置",
     securityIntro: "设置本地面板密码和密保问题。",
     securityConfiguredIntro: "修改密码或密保问题前，请先验证原密码。",
@@ -1251,6 +1273,17 @@ async function loadFirstRunPreviewFromDesktop(): Promise<FirstRunPreview | null>
     return null;
   }
   return null;
+}
+
+function normalizePanelOutputStyle(value: unknown): PanelOutputStyle {
+  return typeof value === "string" && panelOutputStyles.includes(value as PanelOutputStyle)
+    ? value as PanelOutputStyle
+    : "concise";
+}
+
+function loadPanelOutputStyle(preview: FirstRunPreview | null): PanelOutputStyle {
+  const stored = window.localStorage.getItem("honeycomb.panelOutputStyle");
+  return normalizePanelOutputStyle(stored || preview?.profile?.outputStyle);
 }
 
 function configuredProviderLabel(preview: FirstRunPreview | null, language: Language) {
@@ -1995,6 +2028,8 @@ function App() {
   const [securityRecoveryOpen, setSecurityRecoveryOpen] = useState(false);
   const [settingsMessage, setSettingsMessage] = useState("");
   const [settingsError, setSettingsError] = useState("");
+  const [outputStyleMessage, setOutputStyleMessage] = useState("");
+  const [panelOutputStyle, setPanelOutputStyle] = useState<PanelOutputStyle>(() => loadPanelOutputStyle(loadFirstRunPreview()));
   const [providerApiKey, setProviderApiKey] = useState("");
   const [agentModelConfigs, setAgentModelConfigs] = useState<Record<string, AgentModelConfig>>(loadAgentModelConfigs);
   const [expandedAgentId, setExpandedAgentId] = useState("");
@@ -2106,6 +2141,10 @@ function App() {
   useEffect(() => {
     window.localStorage.setItem("honeycomb.sideCollapsed", String(sideCollapsed));
   }, [sideCollapsed]);
+
+  useEffect(() => {
+    setPanelOutputStyle(loadPanelOutputStyle(firstRunPreview));
+  }, [firstRunPreview]);
 
   useEffect(() => {
     if (!archiveDeleteTarget && !textInputDialog) return;
@@ -2558,6 +2597,7 @@ function App() {
           projectPath: activeWorkspacePath,
           projectName: activeProject.name,
           latestJobId: latestJob?.id,
+          outputStyle: panelOutputStyle,
           language
         });
         const assistantMessage = createConversationMessage("assistant", panelResponse.message, { status: "sent" });
@@ -2861,6 +2901,13 @@ function App() {
       updatedAt: new Date().toISOString()
     });
     setWorkbenchMessage(copy.workbenchSaved);
+  }
+
+  function changePanelOutputStyle(style: PanelOutputStyle) {
+    setPanelOutputStyle(style);
+    window.localStorage.setItem("honeycomb.panelOutputStyle", style);
+    setOutputStyleMessage(copy.outputStyleSaved);
+    window.setTimeout(() => setOutputStyleMessage(""), 2400);
   }
 
   function persistConversationState(nextState: ConversationWorkspaceState) {
@@ -5429,6 +5476,30 @@ function App() {
             </div>
           </section>
 
+          <section className="deskPanel">
+            <div className="panelHeader">
+              <div>
+                <h2>{copy.outputStyleTitle}</h2>
+                <p className="mutedText">{copy.outputStyleIntro}</p>
+              </div>
+              <MessageSquare size={18} aria-hidden="true" />
+            </div>
+            <div className="languageToggle" role="group" aria-label={copy.outputStyleTitle}>
+              {panelOutputStyles.map((style) => (
+                <button
+                  key={style}
+                  className={style === panelOutputStyle ? "languageButton active" : "languageButton"}
+                  type="button"
+                  onClick={() => changePanelOutputStyle(style)}
+                  aria-pressed={style === panelOutputStyle}
+                >
+                  {copy.outputStyles[style]}
+                </button>
+              ))}
+            </div>
+            {outputStyleMessage ? <p className="successMessage">{outputStyleMessage}</p> : null}
+          </section>
+
           <section className="deskPanel archivePanel">
             <div className="panelHeader">
               <div>
@@ -5648,6 +5719,9 @@ function App() {
           }}
           onComplete={() => {
             setResetFlow(null);
+            const refreshedPreview = loadFirstRunPreview();
+            setFirstRunPreview(refreshedPreview);
+            setPanelOutputStyle(loadPanelOutputStyle(refreshedPreview));
             setSetupComplete(true);
             setShowTour(false);
             setActiveView("settings");
@@ -5660,6 +5734,9 @@ function App() {
         <FirstRunPanel
           language={language}
           onComplete={(nextView) => {
+            const refreshedPreview = loadFirstRunPreview();
+            setFirstRunPreview(refreshedPreview);
+            setPanelOutputStyle(loadPanelOutputStyle(refreshedPreview));
             setSetupComplete(true);
             setActiveView(nextView ?? "dashboard");
             setShowTour(window.localStorage.getItem("honeycomb.tourCompleted") !== "true");
@@ -5673,6 +5750,9 @@ function App() {
         <FirstRunPanel
           language={language}
           onComplete={(nextView) => {
+            const refreshedPreview = loadFirstRunPreview();
+            setFirstRunPreview(refreshedPreview);
+            setPanelOutputStyle(loadPanelOutputStyle(refreshedPreview));
             setSetupComplete(true);
             setActiveView(nextView ?? "dashboard");
             setShowTour(window.localStorage.getItem("honeycomb.tourCompleted") !== "true");

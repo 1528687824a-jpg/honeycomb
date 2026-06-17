@@ -5,13 +5,17 @@ export type PanelAgentWorkInterview = {
   role: string;
   dailyWork: string;
   outputs?: string;
+  audience?: string;
   qualityBar: string;
+  workPressure?: string;
+  outputStyle?: "concise" | "detailed" | "warm" | "formal";
 };
 
 export type PanelAgentWorkProfile = {
   summary: string;
   stageAgents: string[];
   recommendedRoutingMode: RoutingMode;
+  outputStyle?: "concise" | "detailed" | "warm" | "formal";
 };
 
 export type PanelAgentProviderReference = {
@@ -290,7 +294,10 @@ export function buildPersonalizedChildAgentPrompt(
     interview.role ? `role=${interview.role}` : "role=unknown",
     interview.industry ? `domain=${interview.industry}` : "domain=unknown",
     interview.dailyWork ? `daily_work=${interview.dailyWork}` : "daily_work=not specified",
-    interview.outputs ? `common_outputs=${interview.outputs}` : "common_outputs=not specified"
+    interview.outputs ? `common_outputs=${interview.outputs}` : "common_outputs=not specified",
+    interview.audience ? `audience=${interview.audience}` : "audience=not specified",
+    interview.workPressure ? `pressure=${interview.workPressure}` : "pressure=not specified",
+    interview.outputStyle ? `output_style=${interview.outputStyle}` : "output_style=not specified"
   ].join("; ");
   const likelyUsed = profile.stageAgents.includes(agentId)
     ? "This agent is currently selected for the user's likely workflow."
@@ -310,7 +317,10 @@ export function buildPersonalizedChildAgentPrompt(
     "Personalization rules:",
     `- Interpret vague requests through the user's role and domain: ${interview.role || "unknown role"} / ${interview.industry || "unknown domain"}.`,
     `- Prefer deliverable formats, terminology, and risk checks that fit this daily work: ${interview.dailyWork || "not specified"}.`,
+    `- Tune examples and assumptions for the people the user mainly serves: ${interview.audience || "not specified"}.`,
+    `- Reduce the pressure points the user named: ${interview.workPressure || "not specified"}.`,
     `- Optimize for this quality bar: ${interview.qualityBar || "clear, useful, and ready for review"}.`,
+    `- Match the user's preferred output style: ${interview.outputStyle || profile.outputStyle || "concise"}.`,
     "- Keep long-term lessons abstract enough to transfer across future tasks.",
     "- Use the user's task language unless a tool or artifact format requires otherwise.",
     "",
@@ -369,6 +379,7 @@ export function buildPersonalizedPanelSupervisorPrompt(input: {
     "",
     "Prompt-personalization responsibility:",
     "- During first run and whenever the user redoes the work interview, you configure the child-agent prompts from the user's profession, daily work, and quality bar.",
+    "- The first-run work interview includes field, role, daily work, served audience, desired pressure relief, and recommended output style. Use all of them when personalizing prompts.",
     "- Preserve the original specialist responsibilities, experience-library rules, and state JSON contracts while tuning examples, terminology, risk checks, and deliverable expectations to the user's profession.",
     "- Generated prompts must not contain API keys or task-local scratch context.",
     "- After prompt personalization, each child agent's AGENTS.md must contain the work profile, quality bar, original role contract, experience-memory rule, post-work self-evolution review, and state JSON handoff contract.",
@@ -411,7 +422,11 @@ export function buildPersonalizedPanelSupervisorPrompt(input: {
     "",
     "Response style:",
     "- Use the user's UI language when clear; otherwise answer in the language they used.",
-    "- Be concise, specific, and operational.",
+    `- Preferred output style: ${input.interview.outputStyle || profile.outputStyle || "concise"}. Enforce it in panel chat unless the user explicitly asks for a different style.`,
+    "- For concise style: answer directly, use short paragraphs, and avoid extra explanation.",
+    "- For detailed style: explain reasoning, tradeoffs, and next steps clearly without becoming vague.",
+    "- For warm style: sound natural and reassuring while staying useful and specific.",
+    "- For formal style: use polished, professional wording with clear structure and fewer casual phrases.",
     "- Ask one short clarifying question only when the next safe panel action depends on it."
   ].join("\n");
 }

@@ -32,6 +32,8 @@ type ProviderDraft = {
   apiKey: string;
 };
 
+type PanelOutputStyle = "concise" | "detailed" | "warm" | "formal";
+
 let runtimeProviderApiKey = "";
 
 type ProviderConnectionResult = {
@@ -43,6 +45,8 @@ type InterviewSuggestions = {
   roleExamples: string[];
   workOptions: string[];
   qualityExamples: string[];
+  audienceOptions?: string[];
+  pressureOptions?: string[];
 };
 
 type InterviewDraft = {
@@ -52,6 +56,8 @@ type InterviewDraft = {
   outputs: string;
   audience: string;
   qualityBar: string;
+  workPressure: string;
+  outputStyle: PanelOutputStyle;
   constraints: string;
 };
 
@@ -67,6 +73,7 @@ type Profile = {
   workPattern: string;
   recommendedRoutingMode: RoutingMode;
   stageAgents: string[];
+  outputStyle: PanelOutputStyle;
   summary: string;
 };
 
@@ -92,7 +99,24 @@ const emptyInterview: InterviewDraft = {
   outputs: "",
   audience: "",
   qualityBar: "",
+  workPressure: "",
+  outputStyle: "concise",
   constraints: ""
+};
+
+const outputStyleDisplayLabels: Record<Language, Record<PanelOutputStyle, string>> = {
+  en: {
+    concise: "Concise and direct",
+    detailed: "Detailed explanation",
+    warm: "Warm and natural",
+    formal: "Formal and professional"
+  },
+  zh: {
+    concise: "简洁直接",
+    detailed: "详细解释",
+    warm: "温柔自然",
+    formal: "正式专业"
+  }
 };
 
 const routingModeDisplayLabels: Record<Language, Record<RoutingMode, string>> = {
@@ -146,7 +170,7 @@ const copyByLanguage = {
       "Review the initial profile Honeycomb inferred. This tailored routing mode is only the starting default; each future task should still be analyzed before choosing the concrete orchestration mode.",
     profile: "Detected profile",
     routing: "Tailored routing mode",
-    stages: "Agent sequence",
+    stages: "Recommended output style",
     write: "Create my agent team",
     saving: "Writing local setup",
     openclawInvite: "Then shall we start configuring multiple agents in OpenClaw to work for you?",
@@ -158,8 +182,8 @@ const copyByLanguage = {
     q1Placeholder: "For example: technology, illustration, photography...",
     q2: "What is your profession or role in this field?",
     q3: "What do you usually work on?",
-    q4: "What should excellent output feel like?",
-    q4Placeholder: "For example: accurate, concise, publishable, visually consistent...",
+    q4: "Who do you mainly serve or face?",
+    q5: "Which kind of work pressure do you most want Honeycomb to reduce?",
     other: "Other",
     selected: "Selected",
     providerReady: "Provider connected",
@@ -209,7 +233,7 @@ const copyByLanguage = {
       "确认 Honeycomb 理解的初始工作画像。这里的编排模式只是为你定制的起步默认值，之后真正执行任务时仍然要根据具体任务再判断适合哪种编排模式。",
     profile: "识别出的工作画像",
     routing: "为你定制的编排模式",
-    stages: "Agent 顺序",
+    stages: "输出风格推荐",
     write: "创建我的 Agent 团队",
     saving: "正在写入本地配置",
     openclawInvite: "那我们开始在openclaw上配置多个agent来为你打工吧？",
@@ -221,8 +245,8 @@ const copyByLanguage = {
     q1Placeholder: "例如：科技领域、绘画领域、摄影领域……",
     q2: "那您是这个领域的什么职业/角色？",
     q3: "请问您平常工作的内容是？",
-    q4: "你希望优秀的产出是什么样的？",
-    q4Placeholder: "例如：准确、简洁、可以直接发布、视觉统一……",
+    q4: "你主要服务或面对的是谁/群体？",
+    q5: "你最希望 Honeycomb 帮你减轻哪类工作压力？",
     other: "其他",
     selected: "已选择",
     providerReady: "Provider 已连接",
@@ -252,6 +276,19 @@ function splitList(input: string) {
     .split(/[,，、\n]/)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function mergeSelectedWithOther(selectedText: string, otherText: string) {
+  const seen = new Set<string>();
+  return [...splitList(selectedText), otherText.trim()]
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .filter((item) => {
+      if (seen.has(item)) return false;
+      seen.add(item);
+      return true;
+    })
+    .join("，");
 }
 
 function loadSavedSetupPreview(): SavedSetupPreview | null {
@@ -301,7 +338,8 @@ async function saveProviderApiKey(apiKey: string) {
 function mergeInterview(saved: SavedSetupPreview | null): InterviewDraft {
   return {
     ...emptyInterview,
-    ...(saved?.interview ?? {})
+    ...(saved?.interview ?? {}),
+    outputStyle: saved?.interview?.outputStyle ?? saved?.profile?.outputStyle ?? emptyInterview.outputStyle
   };
 }
 
@@ -324,40 +362,6 @@ function rolePlaceholderFromExamples(examples: string[], industry: string, langu
   return language === "zh" ? `例如：${items.join("、")}……` : `For example: ${items.join(", ")}...`;
 }
 
-function qualityPlaceholderFromExamples(examples: string[], interview: InterviewDraft, language: Language) {
-  const fallback = buildQualityExamples(interview, language);
-  const items = cleanSuggestionItems(examples, fallback, 4);
-  return language === "zh" ? `例如：${items.join("、")}……` : `For example: ${items.join(", ")}...`;
-}
-
-function inferProfile(interview: InterviewDraft): Profile {
-  const combined = `${interview.role} ${interview.industry} ${interview.dailyWork} ${interview.outputs}`.toLowerCase();
-  const outputs = splitList(interview.outputs || interview.dailyWork);
-  const stageAgents = ["research-agent", "writer-agent"];
-  if (/image|visual|poster|cover|photo|图片|视觉|绘画|摄影|海报|封面/.test(combined)) stageAgents.push("image-agent");
-  if (/video|short|reel|clip|视频|短视频|分镜/.test(combined)) stageAgents.push("video-agent");
-
-  const recommendedRoutingMode: RoutingMode =
-    /review|quality|test|approval|合规|审核|测试|质量/.test(combined)
-      ? "supervisor_pipeline"
-      : outputs.length >= 3
-        ? "master_slave_discussion"
-        : "classic_master_slave";
-
-  return {
-    title: `${interview.role || "Owner"} / ${interview.industry || "General work"}`,
-    workPattern: interview.dailyWork || "General multi-agent work",
-    recommendedRoutingMode,
-    stageAgents,
-    summary: [
-      `Role: ${interview.role || "unknown"}`,
-      `Domain: ${interview.industry || "unknown"}`,
-      `Work: ${interview.dailyWork || "not specified"}`,
-      `Quality: ${interview.qualityBar || "not specified"}`
-    ].join("\n")
-  };
-}
-
 function buildRolePlaceholder(industry: string, language: Language) {
   const value = industry.toLowerCase();
   if (/tech|software|ai|科技|软件|人工智能/.test(value)) {
@@ -375,58 +379,143 @@ function buildRolePlaceholder(industry: string, language: Language) {
   return rolePlaceholderFromExamples([], industry, language);
 }
 
-function buildWorkOptions(industry: string, role: string, language: Language) {
-  const combined = `${industry} ${role}`.toLowerCase();
-  if (/photo|摄影/.test(combined)) {
+function buildWorkOptions(role: string, language: Language) {
+  const value = role.toLowerCase();
+  if (/photo|photographer|retouch|摄影|修图|拍摄/.test(value)) {
     return language === "zh"
       ? ["拍摄策划与脚本", "现场拍摄与灯光", "选片、修图与交付", "客户沟通与报价"]
       : ["Shoot planning and scripts", "On-set shooting and lighting", "Selection, retouching, and delivery", "Client communication and quoting"];
   }
-  if (/art|paint|illustr|design|绘画|插画|设计|艺术/.test(combined)) {
+  if (/art|paint|illustr|design|artist|designer|绘画|插画|设计|艺术|美术/.test(value)) {
     return language === "zh"
       ? ["概念探索与参考研究", "草图与视觉方案", "成稿与版本迭代", "作品发布与客户沟通"]
       : ["Concept exploration and research", "Sketches and visual directions", "Final art and iterations", "Publishing and client communication"];
   }
-  if (/tech|software|ai|product|科技|软件|人工智能|产品/.test(combined)) {
+  if (/tech|software|ai|product|engineer|developer|pm|科技|软件|人工智能|产品|工程师|开发|程序员/.test(value)) {
     return language === "zh"
       ? ["需求研究与产品规划", "开发与代码评审", "测试、排错与上线", "文档、发布与用户反馈"]
       : ["Research and product planning", "Development and code review", "Testing, debugging, and release", "Docs, launch, and user feedback"];
   }
-  if (/agri|farm|crop|农业|农场|种植|养殖|农产品/.test(combined)) {
+  if (/agri|farm|crop|grower|farmer|农业|农场|种植|养殖|农产品|农艺|植保/.test(value)) {
     return language === "zh"
       ? ["种植计划与农事记录", "病虫害巡查与处理", "产量、成本与销售分析", "农资采购与设备维护"]
       : ["Crop planning and field records", "Pest and disease checks", "Yield, cost, and sales analysis", "Input purchasing and equipment upkeep"];
   }
   return language === "zh"
-    ? [`${industry || "业务"}资料整理`, `${industry || "业务"}方案执行`, "现场问题记录与跟进", "沟通、交付与复盘"]
-    : [`${industry || "work"} research`, `${industry || "work"} execution`, "Issue tracking and follow-up", "Communication, delivery, and reflection"];
+    ? ["资料整理与判断", "方案执行与跟进", "问题记录与复盘", "沟通、交付与汇报"]
+    : ["Research and judgment", "Execution and follow-up", "Issue tracking and review", "Communication, delivery, and reporting"];
 }
 
-function buildQualityExamples(interview: InterviewDraft, language: Language) {
+function buildAudienceOptions(interview: InterviewDraft, language: Language) {
   const combined = `${interview.industry} ${interview.role} ${interview.dailyWork}`.toLowerCase();
-  if (/agri|farm|crop|农业|农场|种植|养殖|农产品/.test(combined)) {
+  if (/photo|photographer|摄影|修图|拍摄/.test(combined)) {
     return language === "zh"
-      ? ["数据准确可追溯", "方案能落地到农事操作", "风险和成本说清楚", "能直接用于复盘或汇报"]
-      : ["traceable data", "field-ready recommendations", "clear risk and cost notes", "ready for review or reporting"];
+      ? ["商业客户", "个人客户", "品牌/运营团队", "平台观众"]
+      : ["Commercial clients", "Personal clients", "Brand or operations teams", "Platform audiences"];
   }
-  if (/photo|摄影/.test(combined)) {
+  if (/art|paint|illustr|design|artist|designer|绘画|插画|设计|艺术|美术/.test(combined)) {
     return language === "zh"
-      ? ["风格统一", "客户能直接确认", "交付尺寸和用途清楚", "修图自然不过度"]
-      : ["consistent style", "client-ready selection", "clear delivery specs", "natural retouching"];
+      ? ["甲方/客户", "粉丝或观众", "产品/品牌团队", "出版或平台方"]
+      : ["Clients", "Fans or audiences", "Product or brand teams", "Publishers or platforms"];
   }
-  if (/art|paint|illustr|design|绘画|插画|设计|艺术/.test(combined)) {
+  if (/tech|software|ai|product|engineer|developer|pm|科技|软件|人工智能|产品|工程师|开发|程序员/.test(combined)) {
     return language === "zh"
-      ? ["视觉方向清晰", "符合项目调性", "版本差异明确", "可直接继续细化"]
-      : ["clear visual direction", "matches the brief", "distinct variants", "ready for refinement"];
+      ? ["终端用户", "团队成员", "客户或业务方", "投资人/管理层"]
+      : ["End users", "Team members", "Clients or business owners", "Leaders or investors"];
   }
-  if (/tech|software|ai|product|科技|软件|人工智能|产品/.test(combined)) {
+  if (/agri|farm|crop|grower|farmer|农业|农场|种植|养殖|农产品|农艺|植保/.test(combined)) {
     return language === "zh"
-      ? ["逻辑准确", "边界和风险清楚", "能进入开发或评审", "用户价值明确"]
-      : ["technically accurate", "clear risks and boundaries", "ready for build or review", "clear user value"];
+      ? ["农场/基地团队", "客户或采购方", "一线执行人员", "合作社/管理方"]
+      : ["Farm or base teams", "Clients or buyers", "Field operators", "Co-ops or managers"];
   }
   return language === "zh"
-    ? ["准确", "简洁", "能直接交付", "符合实际工作场景"]
-    : ["accurate", "concise", "ready to deliver", "fits the real workflow"];
+    ? ["客户", "团队成员", "一线执行人员", "管理者/决策者"]
+    : ["Clients", "Team members", "Frontline operators", "Managers or decision makers"];
+}
+
+function buildPressureOptions(interview: InterviewDraft, language: Language) {
+  const combined = `${interview.industry} ${interview.role} ${interview.dailyWork} ${interview.audience}`.toLowerCase();
+  const commonZh = ["重复整理资料", "沟通解释成本", "检查质量和遗漏", "把想法变成交付物"];
+  const commonEn = ["Repeating research and cleanup", "Communication overhead", "Quality checks and omissions", "Turning ideas into deliverables"];
+  if (/photo|photographer|摄影|修图|拍摄/.test(combined)) {
+    return language === "zh"
+      ? ["整理客户需求", "生成拍摄方案", "选片修图说明", "交付前质量检查"]
+      : ["Organizing client briefs", "Creating shoot plans", "Selection and retouch notes", "Pre-delivery quality checks"];
+  }
+  if (/art|paint|illustr|design|artist|designer|绘画|插画|设计|艺术|美术/.test(combined)) {
+    return language === "zh"
+      ? ["找参考和方向", "整理版本反馈", "写清楚创作说明", "检查风格一致性"]
+      : ["Finding references and direction", "Managing iteration feedback", "Writing creative rationale", "Checking style consistency"];
+  }
+  if (/tech|software|ai|product|engineer|developer|pm|科技|软件|人工智能|产品|工程师|开发|程序员/.test(combined)) {
+    return language === "zh"
+      ? ["梳理需求和边界", "排查问题", "写文档和说明", "评审质量风险"]
+      : ["Clarifying requirements and scope", "Debugging issues", "Writing docs and explanations", "Reviewing quality risks"];
+  }
+  if (/agri|farm|crop|grower|farmer|农业|农场|种植|养殖|农产品|农艺|植保/.test(combined)) {
+    return language === "zh"
+      ? ["整理农事记录", "判断病虫害风险", "生成执行方案", "复盘成本和产量"]
+      : ["Organizing field records", "Assessing pest and disease risk", "Creating action plans", "Reviewing cost and yield"];
+  }
+  return language === "zh" ? commonZh : commonEn;
+}
+
+function inferOutputStyle(interview: InterviewDraft): PanelOutputStyle {
+  const combined = `${interview.industry} ${interview.role} ${interview.dailyWork} ${interview.audience} ${interview.workPressure}`.toLowerCase();
+  if (/政府|政务|企业|管理层|投资人|法务|金融|医疗|合规|正式|汇报|leader|investor|legal|finance|medical|compliance|executive|government/.test(combined)) {
+    return "formal";
+  }
+  if (/教学|培训|研究|分析|方案|技术|开发|排查|复杂|解释|文档|research|analysis|technical|debug|docs|training|explain/.test(combined)) {
+    return "detailed";
+  }
+  if (/客户沟通|粉丝|社群|学生|儿童|患者|个人客户|用户陪伴|community|student|fans|patient|personal client|customer care/.test(combined)) {
+    return "warm";
+  }
+  return "concise";
+}
+
+function buildQualityBar(interview: InterviewDraft, language: Language) {
+  const outputStyle = outputStyleDisplayLabels[language][interview.outputStyle || inferOutputStyle(interview)];
+  const parts = [
+    language === "zh" ? `面向对象：${interview.audience || "未指定"}` : `Audience: ${interview.audience || "not specified"}`,
+    language === "zh" ? `减压重点：${interview.workPressure || "未指定"}` : `Pressure relief: ${interview.workPressure || "not specified"}`,
+    language === "zh" ? `输出风格：${outputStyle}` : `Output style: ${outputStyle}`
+  ];
+  return parts.join("；");
+}
+
+function inferProfile(interview: InterviewDraft, language: Language): Profile {
+  const outputStyle = interview.outputStyle || inferOutputStyle(interview);
+  const qualityBar = interview.qualityBar || buildQualityBar({ ...interview, outputStyle }, language);
+  const combined = `${interview.role} ${interview.industry} ${interview.dailyWork} ${interview.audience} ${interview.workPressure} ${interview.outputs}`.toLowerCase();
+  const outputs = splitList(interview.outputs || interview.dailyWork || interview.workPressure);
+  const stageAgents = ["research-agent", "writer-agent"];
+  if (/image|visual|poster|cover|photo|图片|视觉|绘画|摄影|海报|封面|修图|插画|设计/.test(combined)) stageAgents.push("image-agent");
+  if (/video|short|reel|clip|视频|短视频|分镜/.test(combined)) stageAgents.push("video-agent");
+
+  const recommendedRoutingMode: RoutingMode =
+    /review|quality|test|approval|risk|compliance|审核|审查|检查|测试|质量|风险|合规|遗漏/.test(combined)
+      ? "supervisor_pipeline"
+      : outputs.length >= 3 || splitList(interview.workPressure).length >= 2
+        ? "master_slave_discussion"
+        : "classic_master_slave";
+
+  return {
+    title: `${interview.role || "Owner"} / ${interview.industry || "General work"}`,
+    workPattern: interview.dailyWork || "General multi-agent work",
+    recommendedRoutingMode,
+    stageAgents,
+    outputStyle,
+    summary: [
+      `Role: ${interview.role || "unknown"}`,
+      `Domain: ${interview.industry || "unknown"}`,
+      `Work: ${interview.dailyWork || "not specified"}`,
+      `Audience: ${interview.audience || "not specified"}`,
+      `Pressure: ${interview.workPressure || "not specified"}`,
+      `Output style: ${outputStyle}`,
+      `Quality: ${qualityBar || "not specified"}`
+    ].join("\n")
+  };
 }
 
 function buildAgentPrompt(agentId: string, interview: InterviewDraft, profile: Profile) {
@@ -530,8 +619,10 @@ function localInterviewSuggestions(industry: string, role: string, language: Lan
     .filter(Boolean);
   return {
     roleExamples: cleanSuggestionItems(fallbackRoles, [], 4),
-    workOptions: cleanSuggestionItems(buildWorkOptions(industry, role, language), [], 4),
-    qualityExamples: cleanSuggestionItems(buildQualityExamples({ ...emptyInterview, industry, role }, language), [], 4)
+    workOptions: cleanSuggestionItems(buildWorkOptions(role, language), [], 4),
+    qualityExamples: [],
+    audienceOptions: cleanSuggestionItems(buildAudienceOptions({ ...emptyInterview, industry, role }, language), [], 4),
+    pressureOptions: cleanSuggestionItems(buildPressureOptions({ ...emptyInterview, industry, role }, language), [], 4)
   };
 }
 
@@ -541,7 +632,9 @@ function sanitizeSuggestions(value: Partial<InterviewSuggestions> | null | undef
   return {
     roleExamples: cleanSuggestionItems(value?.roleExamples, fallback.roleExamples, 4),
     workOptions: cleanSuggestionItems(value?.workOptions, fallback.workOptions, 4),
-    qualityExamples: cleanSuggestionItems(value?.qualityExamples, buildQualityExamples(interview, language), 4)
+    qualityExamples: [],
+    audienceOptions: cleanSuggestionItems(value?.audienceOptions, buildAudienceOptions(interview, language), 4),
+    pressureOptions: cleanSuggestionItems(value?.pressureOptions, buildPressureOptions(interview, language), 4)
   };
 }
 
@@ -594,6 +687,8 @@ export function FirstRunPanel({ language, onComplete, onCancel, flow = "full" }:
   });
   const [interview, setInterview] = useState<InterviewDraft>(() => (flow === "workProfile" ? mergeInterview(savedSetup) : { ...emptyInterview }));
   const [otherWork, setOtherWork] = useState("");
+  const [otherAudience, setOtherAudience] = useState("");
+  const [otherPressure, setOtherPressure] = useState("");
   const [interviewSuggestions, setInterviewSuggestions] = useState<InterviewSuggestions | null>(null);
   const [error, setError] = useState("");
   const [inviteMood, setInviteMood] = useState<"asking" | "sad" | "happy">("asking");
@@ -606,13 +701,16 @@ export function FirstRunPanel({ language, onComplete, onCancel, flow = "full" }:
     return buildRolePlaceholder(interview.industry, language);
   }, [interview.industry, interviewSuggestions, language]);
   const workOptions = useMemo(() => {
-    const fallback = buildWorkOptions(interview.industry, interview.role, language);
+    const fallback = buildWorkOptions(interview.role, language);
     return cleanSuggestionItems(interviewSuggestions?.workOptions, fallback, 4);
-  }, [interview.industry, interview.role, interviewSuggestions, language]);
-  const qualityPlaceholder = useMemo(() => {
-    return qualityPlaceholderFromExamples(interviewSuggestions?.qualityExamples ?? [], interview, language);
+  }, [interview.role, interviewSuggestions, language]);
+  const audienceOptions = useMemo(() => {
+    return cleanSuggestionItems(interviewSuggestions?.audienceOptions, buildAudienceOptions(interview, language), 4);
   }, [interview, interviewSuggestions, language]);
-  const profile = useMemo(() => inferProfile(interview), [interview]);
+  const pressureOptions = useMemo(() => {
+    return cleanSuggestionItems(interviewSuggestions?.pressureOptions, buildPressureOptions(interview, language), 4);
+  }, [interview, interviewSuggestions, language]);
+  const profile = useMemo(() => inferProfile(interview, language), [interview, language]);
   const agents = useMemo(() => buildAgents(interview, profile), [interview, profile]);
   const panelSupervisorAgent = useMemo<GeneratedAgent>(() => ({
     id: "panel-supervisor-agent",
@@ -797,14 +895,31 @@ export function FirstRunPanel({ language, onComplete, onCancel, flow = "full" }:
       return;
     }
     if (questionIndex === 2) {
-      const work = [interview.dailyWork, otherWork].filter(Boolean).join("；");
+      const work = mergeSelectedWithOther(interview.dailyWork, otherWork);
       if (!work.trim()) return;
       const nextInterview = { ...interview, dailyWork: work };
       setInterview(nextInterview);
-      await thinkThen(3, true, nextInterview);
+      await thinkThen(3, false, nextInterview);
       return;
     }
-    if (!interview.qualityBar.trim()) return;
+    if (questionIndex === 3) {
+      const audience = mergeSelectedWithOther(interview.audience, otherAudience);
+      if (!audience.trim()) return;
+      const nextInterview = { ...interview, audience };
+      setInterview(nextInterview);
+      await thinkThen(4, false, nextInterview);
+      return;
+    }
+    const workPressure = mergeSelectedWithOther(interview.workPressure, otherPressure);
+    if (!workPressure.trim()) return;
+    const outputStyle = inferOutputStyle({ ...interview, workPressure });
+    const nextInterview = {
+      ...interview,
+      workPressure,
+      outputStyle,
+      qualityBar: buildQualityBar({ ...interview, workPressure, outputStyle }, language)
+    };
+    setInterview(nextInterview);
     setStage("review");
   }
 
@@ -826,6 +941,18 @@ export function FirstRunPanel({ language, onComplete, onCancel, flow = "full" }:
     const selected = splitList(interview.dailyWork);
     const next = selected.includes(option) ? selected.filter((item) => item !== option) : [...selected, option];
     updateInterview("dailyWork", next.join("，"));
+  }
+
+  function toggleAudienceOption(option: string) {
+    const selected = splitList(interview.audience);
+    const next = selected.includes(option) ? selected.filter((item) => item !== option) : [...selected, option];
+    updateInterview("audience", next.join("，"));
+  }
+
+  function togglePressureOption(option: string) {
+    const selected = splitList(interview.workPressure);
+    const next = selected.includes(option) ? selected.filter((item) => item !== option) : [...selected, option];
+    updateInterview("workPressure", next.join("，"));
   }
 
   async function saveSetup() {
@@ -896,6 +1023,7 @@ export function FirstRunPanel({ language, onComplete, onCancel, flow = "full" }:
       clusterConfig,
       agents: personalizedPromptFiles.map((agent) => ({ path: agent.path, contents: agent.contents }))
     });
+    window.localStorage.setItem("honeycomb.panelOutputStyle", profile.outputStyle);
     window.localStorage.setItem("honeycomb.setupCompleted", "true");
     if (flow === "full") {
       window.setTimeout(() => setStage("openclawInvite"), 520);
@@ -1086,7 +1214,7 @@ export function FirstRunPanel({ language, onComplete, onCancel, flow = "full" }:
           </div>
           <div className="inviteLogoWrap">
             <HoneycombLogo size={172} mode={inviteMood === "sad" ? "thinking" : "talking"} className="inviteLogo" alt="honeycomb" />
-            <span className="inviteTears" aria-hidden="true"><i /><i /><i /></span>
+            <span className="inviteTears" aria-hidden="true"><i /><i /></span>
           </div>
           <p className="inviteDialogue" aria-label={inviteText}>
             {inviteText.slice(0, inviteTypedLength)}
@@ -1120,7 +1248,7 @@ export function FirstRunPanel({ language, onComplete, onCancel, flow = "full" }:
           <dl className="profileSummary">
             <div><dt>{copy.profile}</dt><dd>{profile.title}</dd></div>
             <div><dt>{copy.routing}</dt><dd>{routingModeDisplayLabels[language][profile.recommendedRoutingMode]}</dd></div>
-            <div><dt>{copy.stages}</dt><dd>{profile.stageAgents.join(" → ")}</dd></div>
+            <div><dt>{copy.stages}</dt><dd>{outputStyleDisplayLabels[language][profile.outputStyle]}</dd></div>
           </dl>
           <div className="agentReviewGrid">
             {[panelSupervisorAgent, ...agents].map((agent) => (
@@ -1131,10 +1259,19 @@ export function FirstRunPanel({ language, onComplete, onCancel, flow = "full" }:
               </article>
             ))}
           </div>
-          <button className="primaryButton setupPrimary" type="button" onClick={saveSetup} disabled={stage === "saving"}>
-            <Sparkles size={16} aria-hidden="true" />
-            {stage === "saving" ? copy.saving : copy.write}
-          </button>
+          <div className="reviewActions">
+            <button className="secondaryButton setupBack" type="button" onClick={() => {
+              setStage("interview");
+              setQuestionIndex(4);
+            }} disabled={stage === "saving"}>
+              <ArrowLeft size={16} aria-hidden="true" />
+              {copy.back}
+            </button>
+            <button className="primaryButton setupPrimary" type="button" onClick={saveSetup} disabled={stage === "saving"}>
+              <Sparkles size={16} aria-hidden="true" />
+              {stage === "saving" ? copy.saving : copy.write}
+            </button>
+          </div>
         </div>
       </section>
     );
@@ -1152,8 +1289,8 @@ export function FirstRunPanel({ language, onComplete, onCancel, flow = "full" }:
           </div>
         </div>
         <div className="questionProgress">
-          <span>{copy.fixedStep} {questionIndex + 1} {copy.of} 4</span>
-          <div><i style={{ width: `${((questionIndex + 1) / 4) * 100}%` }} /></div>
+          <span>{copy.fixedStep} {questionIndex + 1} {copy.of} 5</span>
+          <div><i style={{ width: `${((questionIndex + 1) / 5) * 100}%` }} /></div>
         </div>
         <div className="questionCard" key={questionIndex}>
           {questionIndex === 0 ? (
@@ -1189,10 +1326,44 @@ export function FirstRunPanel({ language, onComplete, onCancel, flow = "full" }:
             </div>
           ) : null}
           {questionIndex === 3 ? (
-            <label>
+            <div className="workQuestion">
               <strong>{copy.q4}</strong>
-              <textarea autoFocus value={interview.qualityBar} placeholder={qualityPlaceholder || copy.q4Placeholder} onChange={(event) => updateInterview("qualityBar", event.target.value)} />
-            </label>
+              <div className="workOptions">
+                {audienceOptions.map((option) => {
+                  const selected = splitList(interview.audience).includes(option);
+                  return (
+                    <button className={selected ? "workOption selected" : "workOption"} key={option} type="button" onClick={() => toggleAudienceOption(option)}>
+                      {selected ? <Check size={15} aria-hidden="true" /> : null}
+                      {option}
+                    </button>
+                  );
+                })}
+              </div>
+              <label>
+                {copy.other}
+                <input value={otherAudience} onChange={(event) => setOtherAudience(event.target.value)} />
+              </label>
+            </div>
+          ) : null}
+          {questionIndex === 4 ? (
+            <div className="workQuestion">
+              <strong>{copy.q5}</strong>
+              <div className="workOptions">
+                {pressureOptions.map((option) => {
+                  const selected = splitList(interview.workPressure).includes(option);
+                  return (
+                    <button className={selected ? "workOption selected" : "workOption"} key={option} type="button" onClick={() => togglePressureOption(option)}>
+                      {selected ? <Check size={15} aria-hidden="true" /> : null}
+                      {option}
+                    </button>
+                  );
+                })}
+              </div>
+              <label>
+                {copy.other}
+                <input value={otherPressure} onChange={(event) => setOtherPressure(event.target.value)} />
+              </label>
+            </div>
           ) : null}
           {error ? <p className="error">{error}</p> : null}
           <div className="questionActions">

@@ -77,6 +77,7 @@ export type RoutingMode =
   | "master_slave_discussion";
 
 export type ExperienceStatus = "candidate" | "adopted" | "rejected";
+export type PanelOutputStyle = "concise" | "detailed" | "warm" | "formal";
 export type ExperienceKind =
   | "routing_outcome"
   | "success_pattern"
@@ -1226,6 +1227,7 @@ export type PanelChatInput = {
   projectPath?: string;
   projectName?: string;
   latestJobId?: string;
+  outputStyle?: PanelOutputStyle;
   language?: "en" | "zh";
 };
 
@@ -1242,13 +1244,17 @@ export type PanelAgentWorkInterview = {
   role: string;
   dailyWork: string;
   outputs?: string;
+  audience?: string;
   qualityBar: string;
+  workPressure?: string;
+  outputStyle?: PanelOutputStyle;
 };
 
 export type PanelAgentWorkProfile = {
   summary: string;
   stageAgents: string[];
   recommendedRoutingMode: RoutingMode;
+  outputStyle?: PanelOutputStyle;
 };
 
 export type PanelAgentPromptFile = {

@@ -347,6 +347,7 @@ const panelChatSchema = z.object({
   projectPath: z.string().trim().max(2000).optional(),
   projectName: z.string().trim().max(300).optional(),
   latestJobId: z.string().trim().max(160).optional(),
+  outputStyle: z.enum(["concise", "detailed", "warm", "formal"]).optional(),
   language: z.enum(["en", "zh"]).optional()
 });
 
@@ -364,12 +365,16 @@ const panelPromptPersonalizationSchema = z.object({
     role: z.string().trim().min(1).max(500),
     dailyWork: z.string().trim().min(1).max(4000),
     outputs: z.string().trim().max(4000).optional(),
-    qualityBar: z.string().trim().min(1).max(4000)
+    audience: z.string().trim().max(4000).optional(),
+    qualityBar: z.string().trim().min(1).max(4000),
+    workPressure: z.string().trim().max(4000).optional(),
+    outputStyle: z.enum(["concise", "detailed", "warm", "formal"]).optional()
   }),
   profile: z.object({
     summary: z.string().trim().min(1).max(8000),
     stageAgents: z.array(z.string().trim().min(1).max(160)).min(1).max(20),
-    recommendedRoutingMode: z.enum(ROUTING_MODES)
+    recommendedRoutingMode: z.enum(ROUTING_MODES),
+    outputStyle: z.enum(["concise", "detailed", "warm", "formal"]).optional()
   }),
   panelAgentId: z.string().trim().min(1).max(160).optional(),
   childAgentIds: z.array(z.string().trim().min(1).max(160)).min(1).max(20).optional()
@@ -957,6 +962,20 @@ function extractPanelChatText(body: unknown) {
   return typeof text === "string" && text.trim() ? text.trim() : null;
 }
 
+function panelOutputStyleInstruction(style: PanelChatInput["outputStyle"]) {
+  switch (style) {
+    case "detailed":
+      return "Preferred output style: detailed explanation. Explain reasoning, tradeoffs, and next steps clearly; use enough detail for the user to understand the decision.";
+    case "warm":
+      return "Preferred output style: warm and natural. Be reassuring and conversational while staying specific, useful, and honest.";
+    case "formal":
+      return "Preferred output style: formal and professional. Use polished wording, clear structure, and fewer casual phrases.";
+    case "concise":
+    default:
+      return "Preferred output style: concise and direct. Answer the user's point first, keep paragraphs short, and avoid unnecessary explanation.";
+  }
+}
+
 function buildPanelChatSystemPrompt(input: {
   chat: PanelChatInput;
   agent: AgentConfigRecord;
@@ -989,6 +1008,7 @@ function buildPanelChatSystemPrompt(input: {
     `Configured model: ${input.model}`,
     `Current project: ${input.chat.projectPath || input.chat.projectName || "not selected"}`,
     `Latest job: ${input.chat.latestJobId || "none"}`,
+    panelOutputStyleInstruction(input.chat.outputStyle),
     "",
     "Long-term memory rule:",
     "The experience library is cross-task memory and must not be deleted by task cleanup.",

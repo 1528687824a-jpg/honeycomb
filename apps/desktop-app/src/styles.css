@@ -2034,6 +2034,14 @@ select {
   overflow-wrap: anywhere;
 }
 
+.reviewActions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 .timelineHeader {
   display: flex;
   justify-content: space-between;
@@ -3854,30 +3862,27 @@ select {
 .inviteTears i {
   position: absolute;
   left: 50%;
-  top: 40%;
-  width: 6px;
-  height: 48px;
-  border-radius: 999px;
-  background: linear-gradient(180deg, rgba(175, 231, 255, 0), rgba(159, 216, 255, 0.95) 20%, rgba(94, 178, 232, 0.86) 70%, rgba(94, 178, 232, 0));
-  box-shadow: 0 0 12px rgba(118, 208, 255, 0.72);
+  top: 39%;
+  width: 9px;
+  height: 58px;
+  border-radius: 58% 42% 64% 36% / 8% 12% 88% 92%;
+  background:
+    radial-gradient(ellipse at 50% 95%, rgba(151, 218, 255, 0.95) 0 18%, transparent 42%),
+    linear-gradient(180deg, rgba(175, 231, 255, 0), rgba(171, 226, 255, 0.96) 18%, rgba(94, 178, 232, 0.84) 68%, rgba(94, 178, 232, 0));
+  box-shadow: 0 0 10px rgba(118, 208, 255, 0.7);
+  filter: blur(0.2px);
   transform-origin: top;
-  animation: tearStream 1.25s ease-in-out infinite;
+  clip-path: path("M 4 0 C 7 12 1 22 5 34 C 9 45 3 52 4 58 L 1 58 C 1 45 5 36 2 27 C -1 17 3 9 4 0 Z");
+  animation: tearStream 1.35s cubic-bezier(0.35, 0.02, 0.22, 1) infinite;
 }
 
 .inviteTears i:first-child {
-  transform: translate(-38px, 6px) rotate(8deg) scaleY(0.85);
+  transform: translate(-40px, 6px) rotate(7deg) scaleY(0.88);
 }
 
 .inviteTears i:nth-child(2) {
-  transform: translate(31px, 8px) rotate(-8deg) scaleY(0.9);
+  transform: translate(32px, 8px) rotate(-7deg) scaleY(0.92);
   animation-delay: 180ms;
-}
-
-.inviteTears i:last-child {
-  width: 4px;
-  height: 34px;
-  transform: translate(-2px, 26px) scaleY(0.65);
-  animation-delay: 360ms;
 }
 
 .openclawInviteStage.sad .inviteTears {
@@ -4329,22 +4334,32 @@ select {
 @keyframes tearStream {
   0% {
     opacity: 0;
-    clip-path: inset(0 0 100% 0);
+    clip-path: inset(0 0 100% 0 round 999px);
+    filter: blur(0.9px);
   }
 
-  22% {
+  24% {
     opacity: 0.95;
-    clip-path: inset(0 0 25% 0);
+    clip-path: inset(0 0 24% 0 round 999px);
+    filter: blur(0.15px);
   }
 
-  72% {
+  62% {
     opacity: 0.88;
-    clip-path: inset(18% 0 0 0);
+    clip-path: inset(10% 0 6% 0 round 999px);
+    filter: blur(0.25px);
+  }
+
+  82% {
+    opacity: 0.65;
+    clip-path: inset(30% 0 0 0 round 999px);
+    filter: blur(0.55px);
   }
 
   100% {
     opacity: 0;
-    clip-path: inset(100% 0 0 0);
+    clip-path: inset(100% 0 0 0 round 999px);
+    filter: blur(1px);
   }
 }
 
