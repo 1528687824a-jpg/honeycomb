@@ -192,6 +192,12 @@ type ConversationContextMenuState =
       x: number;
       y: number;
     }
+  | {
+      kind: "project";
+      projectId: string;
+      x: number;
+      y: number;
+    }
   | null;
 
 type ArchiveDeleteTarget =
@@ -209,6 +215,15 @@ type ArchiveDeleteTarget =
       subtitle: string;
       archived: boolean;
     };
+
+type TextInputDialogState = {
+  title: string;
+  label: string;
+  value: string;
+  placeholder?: string;
+  confirmLabel: string;
+  cancelLabel: string;
+};
 
 type WorkbenchStepState = "done" | "active" | "pending" | "blocked";
 
@@ -1882,12 +1897,17 @@ function looksLikeTaskRequest(value: string) {
   return englishTaskPattern.test(trimmed) || chineseTaskPattern.test(trimmed);
 }
 
-function friendlyApiErrorMessage(error: unknown) {
+function friendlyApiErrorMessage(error: unknown, language: Language = "en") {
   const raw = error instanceof Error ? error.message : String(error);
   try {
     const parsed = JSON.parse(raw) as { message?: unknown; error?: unknown };
     if (typeof parsed.message === "string" && parsed.message.trim()) {
       return parsed.message.trim();
+    }
+    if (parsed.error === "provider_verification_failed") {
+      return language === "zh"
+        ? "\u9762\u677f Agent \u7684\u6a21\u578b\u8fde\u63a5\u9a8c\u8bc1\u5931\u8d25\uff0c\u8bf7\u68c0\u67e5\u6a21\u578b\u540d\u3001API Key \u548c\u670d\u52a1\u5546\u8d26\u53f7\u72b6\u6001\u3002"
+        : "The panel agent model verification failed. Check the model name, API Key, and provider account status.";
     }
     if (typeof parsed.error === "string" && parsed.error.trim()) {
       return parsed.error.trim();
@@ -1953,6 +1973,8 @@ function App() {
   const [openProjectMenuId, setOpenProjectMenuId] = useState("");
   const [conversationContextMenu, setConversationContextMenu] = useState<ConversationContextMenuState>(null);
   const [archiveDeleteTarget, setArchiveDeleteTarget] = useState<ArchiveDeleteTarget | null>(null);
+  const [textInputDialog, setTextInputDialog] = useState<TextInputDialogState | null>(null);
+  const textInputDialogResolver = useRef<((value: string | null) => void) | null>(null);
   const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
   const [projectListCollapsed, setProjectListCollapsed] = useState(false);
   const [securityRecord, setSecurityRecord] = useState<SecurityRecord | null>(loadSecurityRecord);
@@ -2086,15 +2108,16 @@ function App() {
   }, [sideCollapsed]);
 
   useEffect(() => {
-    if (!archiveDeleteTarget) return;
+    if (!archiveDeleteTarget && !textInputDialog) return;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setArchiveDeleteTarget(null);
+        resolveTextInputDialog(null);
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [archiveDeleteTarget]);
+  }, [archiveDeleteTarget, textInputDialog]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2534,7 +2557,7 @@ function App() {
           [assistantMessage]
         );
       } catch (chatError) {
-        const chatErrorMessage = friendlyApiErrorMessage(chatError);
+        const chatErrorMessage = friendlyApiErrorMessage(chatError, language);
         if (!taskIntent) {
           const failedChatMessage = createConversationMessage(
             "system",
@@ -2598,7 +2621,7 @@ function App() {
       appendMessagesToConversationState(nextConversationState, activeProject.id, activeThread.id, [assistantMessage]);
       await refreshAll(created.jobId);
     } catch (caught) {
-      const errorMessage = friendlyApiErrorMessage(caught);
+      const errorMessage = friendlyApiErrorMessage(caught, language);
       const failedMessage = createConversationMessage(
         "system",
         language === "zh" ? `\u53d1\u9001\u5230 Agent \u56e2\u961f\u5931\u8d25\uff1a${errorMessage}` : `Failed to send to the agent team: ${errorMessage}`,
@@ -2836,6 +2859,34 @@ function App() {
     return normalized;
   }
 
+  function requestTextInputDialog(input: {
+    title: string;
+    label?: string;
+    initialValue?: string;
+    placeholder?: string;
+    confirmLabel?: string;
+    cancelLabel?: string;
+  }) {
+    textInputDialogResolver.current?.(null);
+    return new Promise<string | null>((resolve) => {
+      textInputDialogResolver.current = resolve;
+      setTextInputDialog({
+        title: input.title,
+        label: input.label ?? input.title,
+        value: input.initialValue ?? "",
+        placeholder: input.placeholder,
+        confirmLabel: input.confirmLabel ?? (language === "zh" ? "\u786e\u5b9a" : "Confirm"),
+        cancelLabel: input.cancelLabel ?? (language === "zh" ? "\u53d6\u6d88" : "Cancel")
+      });
+    });
+  }
+
+  function resolveTextInputDialog(value: string | null) {
+    textInputDialogResolver.current?.(value);
+    textInputDialogResolver.current = null;
+    setTextInputDialog(null);
+  }
+
   function projectNameFromPath(path: string) {
     const trimmed = path.trim();
     if (!trimmed) return language === "zh" ? "\u672a\u547d\u540d\u9879\u76ee" : "Untitled project";
@@ -2888,10 +2939,12 @@ function App() {
       const selected = await invoke<string | null>("pick_directory");
       if (typeof selected === "string" && selected.trim()) return selected.trim();
     } catch {
-      const fallback = window.prompt(
-        language === "zh" ? "\u8f93\u5165\u9879\u76ee\u6587\u4ef6\u5939\u8def\u5f84" : "Enter a project folder path",
-        workbenchConfig.workspacePath
-      );
+      const fallback = await requestTextInputDialog({
+        title: language === "zh" ? "\u9009\u62e9\u9879\u76ee\u6587\u4ef6\u5939" : "Choose project folder",
+        label: language === "zh" ? "\u9879\u76ee\u6587\u4ef6\u5939\u8def\u5f84" : "Project folder path",
+        initialValue: workbenchConfig.workspacePath,
+        placeholder: "D:\\honeycomb"
+      });
       return fallback?.trim() || null;
     }
     return null;
@@ -3018,11 +3071,17 @@ function App() {
     setConversationContextMenu(null);
   }
 
-  function renameConversation(projectId: string, threadId: string) {
+  async function renameConversation(projectId: string, threadId: string) {
     const project = conversationState.projects.find((candidate) => candidate.id === projectId);
     const thread = project?.threads.find((candidate) => candidate.id === threadId);
     if (!thread) return;
-    const nextTitle = window.prompt(language === "zh" ? "\u91cd\u547d\u540d\u5bf9\u8bdd" : "Rename conversation", thread.title)?.trim();
+    setConversationContextMenu(null);
+    setOpenProjectMenuId("");
+    const nextTitle = (await requestTextInputDialog({
+      title: language === "zh" ? "\u91cd\u547d\u540d\u5bf9\u8bdd" : "Rename conversation",
+      label: language === "zh" ? "\u5bf9\u8bdd\u540d\u79f0" : "Conversation name",
+      initialValue: thread.title
+    }))?.trim();
     if (!nextTitle) return;
     const updatedAt = new Date().toISOString();
     persistConversationState({
@@ -3134,12 +3193,19 @@ function App() {
       )
     });
     setOpenProjectMenuId("");
+    setConversationContextMenu(null);
   }
 
-  function renameProject(projectId: string) {
+  async function renameProject(projectId: string) {
     const project = conversationState.projects.find((candidate) => candidate.id === projectId);
     if (!project) return;
-    const nextName = window.prompt(language === "zh" ? "\u91cd\u547d\u540d\u9879\u76ee" : "Rename project", project.name)?.trim();
+    setConversationContextMenu(null);
+    setOpenProjectMenuId("");
+    const nextName = (await requestTextInputDialog({
+      title: language === "zh" ? "\u91cd\u547d\u540d\u9879\u76ee" : "Rename project",
+      label: language === "zh" ? "\u9879\u76ee\u540d\u79f0" : "Project name",
+      initialValue: project.name
+    }))?.trim();
     if (!nextName) return;
     persistConversationState({
       ...conversationState,
@@ -3148,6 +3214,7 @@ function App() {
       )
     });
     setOpenProjectMenuId("");
+    setConversationContextMenu(null);
   }
 
   function archiveProject(projectId: string) {
@@ -3160,6 +3227,7 @@ function App() {
     });
     syncPromptFromConversationState(nextState);
     setOpenProjectMenuId("");
+    setConversationContextMenu(null);
   }
 
   function restoreProject(projectId: string) {
@@ -3179,13 +3247,14 @@ function App() {
     setArchiveDeleteTarget({
       kind: "project",
       projectId,
-      title: project.path || project.name,
+      title: project.name,
       subtitle: language === "zh"
-        ? `${project.threads.length} \u4e2a\u5bf9\u8bdd`
-        : `${project.threads.length} ${project.threads.length === 1 ? "conversation" : "conversations"}`,
+        ? [project.path, `${project.threads.length} \u4e2a\u5bf9\u8bdd`].filter(Boolean).join(" / ")
+        : [project.path, `${project.threads.length} ${project.threads.length === 1 ? "conversation" : "conversations"}`].filter(Boolean).join(" / "),
       archived: Boolean(project.archivedAt)
     });
     setOpenProjectMenuId("");
+    setConversationContextMenu(null);
   }
 
   function deleteProjectPermanently(projectId: string) {
@@ -4010,7 +4079,7 @@ function App() {
     const activeProject = conversationState.projects.find((project) => project.id === conversationState.activeProjectId) ?? conversationState.projects[0];
     const activeThread = activeProject?.threads.find((thread) => thread.id === conversationState.activeThreadId) ?? activeProject?.threads[0];
     const activeProjectPath = activeProject?.path || workbenchConfig.workspacePath.trim();
-    const conversationTitle = activeProjectPath || activeProject?.name || activeThread?.title || conversationCopy.activeConversation;
+    const conversationTitle = activeProject?.name || activeProjectPath || activeThread?.title || conversationCopy.activeConversation;
     const activeAttachments = activeThread?.attachments ?? [];
     const activeMessages = activeThread?.messages ?? [];
     const visibleProjects = visibleConversationProjects(conversationState.projects);
@@ -4082,7 +4151,7 @@ function App() {
           <FolderOpen size={15} aria-hidden="true" />
           {conversationCopy.openInExplorer}
         </button>
-        <button type="button" onClick={() => renameProject(project.id)}>
+        <button type="button" onClick={() => void renameProject(project.id)}>
           <Pencil size={15} aria-hidden="true" />
           {conversationCopy.renameProject}
         </button>
@@ -4165,10 +4234,23 @@ function App() {
               <div className="codexProjectList">
                 {visibleProjects.map((project) => (
                   <article className={project.id === conversationState.activeProjectId ? "codexProjectGroup active" : "codexProjectGroup"} key={project.id}>
-                    <div className="codexProjectRowShell">
-                      <button className="codexProjectRow" type="button" onClick={() => selectConversationProject(project.id)}>
+                    <div
+                      className="codexProjectRowShell"
+                      onContextMenu={(event) => {
+                        event.preventDefault();
+                        setConversationContextMenu({
+                          kind: "project",
+                          projectId: project.id,
+                          x: event.clientX,
+                          y: event.clientY
+                        });
+                        setOpenProjectMenuId("");
+                        setProjectMenuOpen(false);
+                      }}
+                    >
+                      <button className="codexProjectRow" type="button" onClick={() => selectConversationProject(project.id)} title={project.path || project.name}>
                         <FolderOpen size={15} aria-hidden="true" />
-                        <strong>{project.path || project.name}</strong>
+                        <strong>{project.name}</strong>
                         {project.pinned ? <Pin size={12} aria-hidden="true" /> : null}
                       </button>
                       <div className="codexProjectRowActions">
@@ -4326,7 +4408,7 @@ function App() {
             </div>
             {error ? <p className="error">{error}</p> : null}
           </form>
-          {conversationContextMenu && contextThread && contextProject ? (
+          {conversationContextMenu?.kind === "thread" && contextThread && contextProject ? (
             <div
               className="codexContextMenu"
               style={{ left: conversationContextMenu.x, top: conversationContextMenu.y }}
@@ -4336,7 +4418,7 @@ function App() {
                 <Pin size={15} aria-hidden="true" />
                 {contextThread.pinned ? conversationCopy.unpinConversation : conversationCopy.pinConversation}
               </button>
-              <button type="button" onClick={() => renameConversation(contextProject.id, contextThread.id)}>
+              <button type="button" onClick={() => void renameConversation(contextProject.id, contextThread.id)}>
                 <Pencil size={15} aria-hidden="true" />
                 {conversationCopy.renameConversation}
               </button>
@@ -4356,6 +4438,34 @@ function App() {
               <button type="button" onClick={() => void copyProjectPath(contextProject.id)}>
                 <Copy size={15} aria-hidden="true" />
                 {conversationCopy.copyWorkdir}
+              </button>
+            </div>
+          ) : null}
+          {conversationContextMenu?.kind === "project" && contextProject ? (
+            <div
+              className="codexContextMenu"
+              style={{ left: conversationContextMenu.x, top: conversationContextMenu.y }}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <button type="button" onClick={() => toggleProjectPinned(contextProject.id)}>
+                <Pin size={15} aria-hidden="true" />
+                {contextProject.pinned ? conversationCopy.unpinProject : conversationCopy.pinProject}
+              </button>
+              <button type="button" onClick={() => void openProjectInExplorer(contextProject.id)}>
+                <FolderOpen size={15} aria-hidden="true" />
+                {conversationCopy.openInExplorer}
+              </button>
+              <button type="button" onClick={() => void renameProject(contextProject.id)}>
+                <Pencil size={15} aria-hidden="true" />
+                {conversationCopy.renameProject}
+              </button>
+              <button type="button" onClick={() => archiveProject(contextProject.id)}>
+                <Archive size={15} aria-hidden="true" />
+                {conversationCopy.archiveProject}
+              </button>
+              <button type="button" onClick={() => requestDeleteProject(contextProject.id)}>
+                <Trash2 size={15} aria-hidden="true" />
+                {conversationCopy.removeProject}
               </button>
             </div>
           ) : null}
@@ -5296,7 +5406,7 @@ function App() {
                   <article key={thread.id}>
                     <span>
                       <b>{thread.title}</b>
-                      <small>{project.path || project.name} / {formatTime(thread.archivedAt, language)}</small>
+                      <small>{project.name} / {formatTime(thread.archivedAt, language)}</small>
                     </span>
                     <button className="secondaryButton compactButton" type="button" onClick={() => restoreConversation(project.id, thread.id)}>
                       <RefreshCw size={13} aria-hidden="true" />
@@ -5316,8 +5426,8 @@ function App() {
                 {archivedProjects.map((project) => (
                   <article key={project.id}>
                     <span>
-                      <b>{project.path || project.name}</b>
-                      <small>{formatTime(project.archivedAt, language)}</small>
+                      <b>{project.name}</b>
+                      <small>{[project.path, formatTime(project.archivedAt, language)].filter(Boolean).join(" / ")}</small>
                     </span>
                     <button className="secondaryButton compactButton" type="button" onClick={() => restoreProject(project.id)}>
                       <RefreshCw size={13} aria-hidden="true" />
@@ -5431,6 +5541,56 @@ function App() {
             </button>
           </div>
         </section>
+      </div>
+    );
+  }
+
+  function renderTextInputDialog() {
+    if (!textInputDialog) return null;
+    const titleId = "text-input-dialog-title";
+
+    return (
+      <div
+        className="archiveDeleteOverlay textInputOverlay"
+        data-testid="text-input-dialog"
+        onClick={(event) => {
+          if (event.currentTarget === event.target) {
+            resolveTextInputDialog(null);
+          }
+        }}
+      >
+        <form
+          className="textInputDialog"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={titleId}
+          onSubmit={(event) => {
+            event.preventDefault();
+            resolveTextInputDialog(textInputDialog.value);
+          }}
+        >
+          <button className="archiveDeleteClose" type="button" aria-label={textInputDialog.cancelLabel} onClick={() => resolveTextInputDialog(null)}>
+            <X size={16} aria-hidden="true" />
+          </button>
+          <h2 id={titleId}>{textInputDialog.title}</h2>
+          <label>
+            <span>{textInputDialog.label}</span>
+            <input
+              autoFocus
+              value={textInputDialog.value}
+              placeholder={textInputDialog.placeholder}
+              onChange={(event) => setTextInputDialog((current) => current ? { ...current, value: event.target.value } : current)}
+            />
+          </label>
+          <div className="archiveDeleteActions">
+            <button className="secondaryButton" type="button" onClick={() => resolveTextInputDialog(null)}>
+              {textInputDialog.cancelLabel}
+            </button>
+            <button className="primaryButton" type="submit" disabled={!textInputDialog.value.trim()}>
+              {textInputDialog.confirmLabel}
+            </button>
+          </div>
+        </form>
       </div>
     );
   }
@@ -5592,6 +5752,7 @@ function App() {
       <section className="workspace">{renderActiveView()}</section>
 
       {renderArchiveDeleteDialog()}
+      {renderTextInputDialog()}
 
       {showTour ? (
         <div className="tourOverlay" data-anchor={tourStep.anchor satisfies TourAnchor}>

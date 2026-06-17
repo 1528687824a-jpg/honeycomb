@@ -1415,6 +1415,53 @@ select {
   margin-top: 4px;
 }
 
+.textInputDialog {
+  position: relative;
+  width: min(430px, 100%);
+  display: grid;
+  gap: 14px;
+  box-sizing: border-box;
+  padding: 22px;
+  border: 1px solid #303641;
+  border-radius: 8px;
+  background: #171c24;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.52);
+}
+
+.textInputDialog h2 {
+  margin: 0 36px 0 0;
+  color: #ffffff;
+  font-size: 20px;
+  line-height: 1.2;
+}
+
+.textInputDialog label {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+  color: #aeb8c7;
+  font-size: 13px;
+}
+
+.textInputDialog input {
+  width: 100%;
+  min-width: 0;
+  height: 38px;
+  box-sizing: border-box;
+  padding: 0 11px;
+  border: 1px solid #303641;
+  border-radius: 6px;
+  outline: none;
+  background: #0f131a;
+  color: #ffffff;
+  font: inherit;
+}
+
+.textInputDialog input:focus {
+  border-color: #76d0ff;
+  box-shadow: 0 0 0 2px rgba(118, 208, 255, 0.16);
+}
+
 .visuallyHidden {
   position: absolute;
   width: 1px;
