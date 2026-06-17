@@ -2022,8 +2022,8 @@ function App() {
   const [backendPanelSupervisorName, setBackendPanelSupervisorName] = useState("");
   const configuredProvider = configuredProviderLabel(firstRunPreview, language);
   const panelSupervisorDisplayName =
-    backendPanelSupervisorName ||
     firstRunPreview?.profile?.supervisorName ||
+    backendPanelSupervisorName ||
     (language === "zh" ? "\u9762\u677f\u4e3b\u7ba1 Agent" : "Panel supervisor agent");
   const workbenchJob = selectedFromList ?? latestJob;
   const workbenchPlanSteps = useMemo(
