@@ -4349,7 +4349,7 @@ function App() {
             className="codexComposer"
             onSubmit={(event) => {
               event.preventDefault();
-              sendConversationMessage();
+              void sendConversationMessage();
             }}
           >
             <label className="visuallyHidden" htmlFor="prompt">{conversationCopy.inputPlaceholder}</label>
@@ -4358,6 +4358,15 @@ function App() {
               value={prompt}
               placeholder={conversationCopy.inputPlaceholder}
               onChange={(event) => updateActiveConversationDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter" || event.altKey || event.nativeEvent.isComposing) {
+                  return;
+                }
+                event.preventDefault();
+                if (canStartJob) {
+                  void sendConversationMessage();
+                }
+              }}
             />
             {activeAttachments.length ? (
               <div className="codexAttachmentTray" aria-label={conversationCopy.attachedFiles}>

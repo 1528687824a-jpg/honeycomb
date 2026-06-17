@@ -1220,6 +1220,45 @@ export type PanelChatResponse = {
   usedExperienceIds: string[];
 };
 
+export type PanelAgentWorkInterview = {
+  industry: string;
+  role: string;
+  dailyWork: string;
+  outputs?: string;
+  qualityBar: string;
+};
+
+export type PanelAgentWorkProfile = {
+  summary: string;
+  stageAgents: string[];
+  recommendedRoutingMode: RoutingMode;
+};
+
+export type PanelAgentPromptFile = {
+  id: string;
+  path: string;
+  contents: string;
+};
+
+export type PanelAgentPromptPersonalizationInput = {
+  supervisorName: string;
+  provider: {
+    providerName?: string;
+    baseUrl?: string;
+    model?: string;
+  };
+  interview: PanelAgentWorkInterview;
+  profile: PanelAgentWorkProfile;
+  panelAgentId?: string;
+  childAgentIds?: string[];
+};
+
+export type PanelAgentPromptPersonalizationResponse = {
+  generatedBy: "panel-agent";
+  generatedAt: string;
+  agents: PanelAgentPromptFile[];
+};
+
 export type ListJobsInput = {
   limit?: number;
   status?: JobStatus;
@@ -1360,6 +1399,13 @@ export async function createJob(input: CreateJobInput) {
 
 export async function sendPanelChat(input: PanelChatInput) {
   return request<PanelChatResponse>("/panel/chat", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export async function personalizePanelAgentPrompts(input: PanelAgentPromptPersonalizationInput) {
+  return request<PanelAgentPromptPersonalizationResponse>("/panel/agent-prompts/personalize", {
     method: "POST",
     body: JSON.stringify(input)
   });

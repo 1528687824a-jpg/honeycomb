@@ -138,6 +138,7 @@ import {
   type ModelProviderRecord,
   type ToolApprovalRecord
 } from "../../../packages/shared/src/types";
+import { buildPanelAgentPromptFiles } from "../../../packages/shared/src/panel-agent-prompt-designer";
 import { launchDbos, startJobWorkflow } from "../../dbos-worker/src/dbos-runtime";
 import { ingressAdapters } from "./adapters";
 import { getRuntimeCapabilities } from "./capabilities";
@@ -349,6 +350,31 @@ const panelChatSchema = z.object({
 });
 
 type PanelChatInput = z.infer<typeof panelChatSchema>;
+
+const panelPromptPersonalizationSchema = z.object({
+  supervisorName: z.string().trim().min(1).max(200),
+  provider: z.object({
+    providerName: z.string().trim().max(200).optional(),
+    baseUrl: z.string().trim().max(2000).optional(),
+    model: z.string().trim().max(300).optional()
+  }).default({}),
+  interview: z.object({
+    industry: z.string().trim().min(1).max(500),
+    role: z.string().trim().min(1).max(500),
+    dailyWork: z.string().trim().min(1).max(4000),
+    outputs: z.string().trim().max(4000).optional(),
+    qualityBar: z.string().trim().min(1).max(4000)
+  }),
+  profile: z.object({
+    summary: z.string().trim().min(1).max(8000),
+    stageAgents: z.array(z.string().trim().min(1).max(160)).min(1).max(20),
+    recommendedRoutingMode: z.enum(ROUTING_MODES)
+  }),
+  panelAgentId: z.string().trim().min(1).max(160).optional(),
+  childAgentIds: z.array(z.string().trim().min(1).max(160)).min(1).max(20).optional()
+});
+
+type PanelPromptPersonalizationInput = z.infer<typeof panelPromptPersonalizationSchema>;
 
 type PanelChatCompletionMessage = {
   role: "system" | "user" | "assistant";
@@ -955,6 +981,8 @@ function buildPanelChatSystemPrompt(input: {
     languageInstruction,
     "You answer panel conversations directly, help the user shape work, and coordinate tasks that Honeycomb may send to the agent team.",
     "If the user is chatting, answer normally. If the user is asking for task work, be concrete and mention any missing requirement only when it blocks execution.",
+    "You own first-run work-profile configuration: use the user's profession, daily work, and quality bar to personalize each child agent's AGENTS.md while preserving its original role, experience-library rules, and state JSON handoff contract.",
+    "When the user updates their work profile, explain that Honeycomb can regenerate the child-agent prompts from that profile and keep API keys out of prompt files.",
     `Configured provider: ${input.provider.displayName}`,
     `Configured model: ${input.model}`,
     `Current project: ${input.chat.projectPath || input.chat.projectName || "not selected"}`,
@@ -966,6 +994,14 @@ function buildPanelChatSystemPrompt(input: {
     "Adopted experience memory:",
     adoptedExperiences
   ].join("\n");
+}
+
+function personalizePanelAgentPrompts(input: PanelPromptPersonalizationInput) {
+  return {
+    generatedBy: "panel-agent" as const,
+    generatedAt: new Date().toISOString(),
+    agents: buildPanelAgentPromptFiles(input)
+  };
 }
 
 async function loadPanelAgentConfig() {
@@ -1359,6 +1395,15 @@ async function main() {
 
   app.get("/health", (_request, response) => {
     response.json({ ok: true });
+  });
+
+  app.post("/panel/agent-prompts/personalize", (request, response, next) => {
+    try {
+      const input = panelPromptPersonalizationSchema.parse(request.body ?? {});
+      response.json(personalizePanelAgentPrompts(input));
+    } catch (error) {
+      next(error);
+    }
   });
 
   app.post("/panel/chat", async (request, response, next) => {

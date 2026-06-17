@@ -1,7 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, Check, Eye, EyeOff, KeyRound, ShieldCheck, Sparkles } from "lucide-react";
-import type { RoutingMode } from "./api";
+import {
+  personalizePanelAgentPrompts,
+  type PanelAgentPromptFile,
+  type RoutingMode
+} from "./api";
 import { HoneycombLogo } from "./brand";
+import {
+  buildPanelAgentPromptFiles,
+  buildPersonalizedChildAgentPrompt,
+  buildPersonalizedPanelSupervisorPrompt
+} from "../../../packages/shared/src/panel-agent-prompt-designer";
 
 type Language = "en" | "zh";
 type SetupStage =
@@ -421,28 +430,7 @@ function buildQualityExamples(interview: InterviewDraft, language: Language) {
 }
 
 function buildAgentPrompt(agentId: string, interview: InterviewDraft, profile: Profile) {
-  const roleLines: Record<string, string> = {
-    "research-agent": "You collect context, facts, constraints, and risks before downstream creation starts.",
-    "writer-agent": "You turn researched context into polished written deliverables for the user's audience.",
-    "image-agent": "You convert upstream work into image briefs and visual prompts.",
-    "video-agent": "You convert upstream work into storyboard, shot, and video prompt plans.",
-    "test-agent": "You review outputs against the user's quality bar and return pass/fail guidance."
-  };
-  return [
-    `# ${agentId}`,
-    "",
-    roleLines[agentId],
-    "",
-    "User work profile:",
-    profile.summary,
-    "",
-    "Operating rules:",
-    "- Stay inside this user's domain and work style.",
-    "- Reuse upstream artifacts instead of restarting from scratch.",
-    "- Keep handoffs structured so the next agent can inspect them.",
-    "- Mark uncertainty clearly instead of inventing facts.",
-    `- Optimize for this quality bar: ${interview.qualityBar || "clear, useful, and ready for review"}.`
-  ].join("\n");
+  return buildPersonalizedChildAgentPrompt(agentId, interview, profile);
 }
 
 function buildPanelSupervisorPrompt(
@@ -451,46 +439,7 @@ function buildPanelSupervisorPrompt(
   interview: InterviewDraft,
   profile: Profile
 ) {
-  const displayName = supervisorName.trim() || "Honeycomb Supervisor";
-  return [
-    `# ${displayName}`,
-    "",
-    "You are Honeycomb's resident panel supervisor agent. You live inside the Honeycomb control panel and help the user understand, configure, and operate their local multi-agent workspace.",
-    "",
-    "Core mission:",
-    "- Answer questions about Honeycomb's pages, settings, routing modes, provider setup, generated agent team, memory candidates, jobs, timelines, and safety boundaries.",
-    "- Serve as the main control agent for the team: analyze user tasks, choose orchestration modes, delegate work, and synthesize the final result.",
-    "- Translate the user's work into practical panel actions, configuration plans, and review checklists.",
-    "- Act like a supervisor for the user's agent team: clarify goals, recommend when to add or remove specialist agents, and keep the workflow inspectable.",
-    "",
-    "Hard boundaries:",
-    "- Never ask the user to paste API keys into chat, prompt files, AGENTS.md, screenshots, logs, or public issues.",
-    "- Never write, print, summarize, infer, or expose API keys. Provider credentials belong only in the provider configuration flow or secure local settings.",
-    "- Do not claim a setting, key, file, or OpenClaw config has been changed unless Honeycomb's UI/backend has actually completed that operation.",
-    "- Do not invent unavailable pages or features. If a capability is not implemented yet, say so and give the closest safe current workflow.",
-    "- Keep answers scoped to Honeycomb, OpenClaw orchestration, the user's configured work profile, and the local panel. Refuse unrelated requests that would turn you into a general chatbot.",
-    "- When advising agent-team changes, stay inside the fixed role catalog unless the product explicitly adds a new role type. Prefer one clear specialist agent over many vague agents.",
-    "",
-    "Built-in product answers:",
-    "- If the user asks where to configure an AI key, direct them to First Run Provider setup first; after setup, direct them to the model/provider settings area when it exists. Remind them keys are never written into generated prompt files.",
-    "- If the user asks whether they can add several child agents, explain that Honeycomb can support additional specialist agents after review, but each one needs a clear role, tool boundary, quality gate, and budget impact. Recommend starting from the existing catalog: research, writer, image, video, test/supervisor, data, coder, reviewer, translator.",
-    "- If the user asks which routing mode to use, recommend supervisor_pipeline for quality-sensitive work, pipeline for clear step-by-step production, classic_master_slave for simple delegation, and master_slave_discussion for ambiguous work needing multiple viewpoints.",
-    "- If the user asks about memory, explain that successful jobs create reviewable experience candidates; the user must adopt them before reuse.",
-    "",
-    "User work profile:",
-    profile.summary,
-    "",
-    "Current local provider reference:",
-    `- Provider: ${provider.providerName || "not configured"}`,
-    `- Base URL: ${provider.baseUrl || "not configured"}`,
-    `- Model: ${provider.model || "not configured"}`,
-    "- API key: configured separately; never include it here.",
-    "",
-    "Response style:",
-    "- Use the user's UI language when clear; otherwise answer in the language they used.",
-    "- Be concise, specific, and operational.",
-    "- Ask one short clarifying question only when the next safe panel action depends on it."
-  ].join("\n");
+  return buildPersonalizedPanelSupervisorPrompt({ supervisorName, provider, interview, profile });
 }
 
 function buildAgents(interview: InterviewDraft, profile: Profile): GeneratedAgent[] {
@@ -501,6 +450,29 @@ function buildAgents(interview: InterviewDraft, profile: Profile): GeneratedAgen
     role: id.replace("-agent", ""),
     prompt: buildAgentPrompt(id, interview, profile)
   }));
+}
+
+async function buildPanelConfiguredPromptFiles(input: {
+  supervisorName: string;
+  provider: ProviderDraft;
+  interview: InterviewDraft;
+  profile: Profile;
+  panelAgentId: string;
+  childAgentIds: string[];
+}): Promise<PanelAgentPromptFile[]> {
+  const fallback = buildPanelAgentPromptFiles(input);
+  try {
+    const response = await personalizePanelAgentPrompts(input);
+    const requiredIds = new Set([input.panelAgentId, ...input.childAgentIds]);
+    const receivedIds = new Set(response.agents.map((agent) => agent.id));
+    if ([...requiredIds].every((id) => receivedIds.has(id))) {
+      return response.agents;
+    }
+  } catch {
+    // The first-run flow can run before the local API is online; use the same shared
+    // panel-agent prompt designer locally so onboarding still completes offline.
+  }
+  return fallback;
 }
 
 async function saveDesktopSetup(payload: unknown) {
@@ -861,6 +833,14 @@ export function FirstRunPanel({ language, onComplete, onCancel, flow = "full" }:
     setStage("saving");
     await saveProviderApiKey(provider.apiKey);
     const allAgents = [panelSupervisorAgent, ...agents];
+    const personalizedPromptFiles = await buildPanelConfiguredPromptFiles({
+      supervisorName: panelSupervisorAgent.displayName,
+      provider,
+      interview,
+      profile,
+      panelAgentId: panelSupervisorAgent.id,
+      childAgentIds: agents.map((agent) => agent.id)
+    });
     const clusterConfig = {
       schemaVersion: "agent-openclaw.cluster.v1",
       clusterId: slug(`${interview.role}-${interview.industry}`),
@@ -915,7 +895,7 @@ export function FirstRunPanel({ language, onComplete, onCancel, flow = "full" }:
         supervisorName: panelSupervisorAgent.displayName
       },
       clusterConfig,
-      agents: allAgents.map((agent) => ({ path: `agents/${agent.id}/AGENTS.md`, contents: agent.prompt }))
+      agents: personalizedPromptFiles.map((agent) => ({ path: agent.path, contents: agent.contents }))
     });
     window.localStorage.setItem("honeycomb.setupCompleted", "true");
     if (flow === "full") {
