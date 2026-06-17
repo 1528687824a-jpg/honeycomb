@@ -1197,6 +1197,29 @@ export type CreateJobInput = {
   maxModelCalls: number;
 };
 
+export type PanelChatMessage = {
+  role: "user" | "assistant" | "system";
+  body: string;
+};
+
+export type PanelChatInput = {
+  message: string;
+  messages?: PanelChatMessage[];
+  supervisorName?: string;
+  projectPath?: string;
+  projectName?: string;
+  latestJobId?: string;
+  language?: "en" | "zh";
+};
+
+export type PanelChatResponse = {
+  message: string;
+  agentName: string;
+  model: string;
+  providerId: string;
+  usedExperienceIds: string[];
+};
+
 export type ListJobsInput = {
   limit?: number;
   status?: JobStatus;
@@ -1332,6 +1355,13 @@ export async function createJob(input: CreateJobInput) {
       routingMode: input.routingMode,
       maxModelCalls: input.maxModelCalls
     })
+  });
+}
+
+export async function sendPanelChat(input: PanelChatInput) {
+  return request<PanelChatResponse>("/panel/chat", {
+    method: "POST",
+    body: JSON.stringify(input)
   });
 }
 

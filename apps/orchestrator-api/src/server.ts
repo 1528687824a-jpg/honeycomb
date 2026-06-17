@@ -132,7 +132,10 @@ import {
   TASK_PLAN_STATUSES,
   TOOL_APPROVAL_STATUSES,
   TOOL_RISK_LEVELS,
+  type AgentConfigRecord,
+  type ExperienceRecord,
   type ExperienceStatus,
+  type ModelProviderRecord,
   type ToolApprovalRecord
 } from "../../../packages/shared/src/types";
 import { launchDbos, startJobWorkflow } from "../../dbos-worker/src/dbos-runtime";
@@ -329,6 +332,28 @@ const agentModelConfigSchema = z.object({
   openClawRootPath: z.string().trim().min(1).max(2000).optional(),
   allowDiscoveredUserRuntime: z.boolean().optional()
 });
+
+const panelChatMessageSchema = z.object({
+  role: z.enum(["user", "assistant", "system"]),
+  body: z.string().trim().min(1).max(12000)
+});
+
+const panelChatSchema = z.object({
+  message: z.string().trim().min(1).max(12000),
+  messages: z.array(panelChatMessageSchema).max(30).optional(),
+  supervisorName: z.string().trim().min(1).max(200).optional(),
+  projectPath: z.string().trim().max(2000).optional(),
+  projectName: z.string().trim().max(300).optional(),
+  latestJobId: z.string().trim().max(160).optional(),
+  language: z.enum(["en", "zh"]).optional()
+});
+
+type PanelChatInput = z.infer<typeof panelChatSchema>;
+
+type PanelChatCompletionMessage = {
+  role: "system" | "user" | "assistant";
+  content: string;
+};
 
 const skillSchema = z.object({
   id: z.string().trim().min(1).max(160).optional(),
@@ -835,6 +860,227 @@ function agentRegistryId(agentId: string) {
   return agentId === "panel-supervisor-agent" ? "panel-agent" : agentId;
 }
 
+class PanelChatError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly code: string,
+    message: string
+  ) {
+    super(message);
+  }
+}
+
+function chatCompletionsUrl(baseUrl: string) {
+  const normalized = baseUrl.replace(/\/+$/, "");
+  return normalized.endsWith("/chat/completions")
+    ? normalized
+    : `${normalized}/chat/completions`;
+}
+
+async function safeProviderErrorMessage(response: Response) {
+  let message = `${response.status} ${response.statusText}`.trim();
+  try {
+    const body = await response.json() as {
+      error?: { message?: unknown };
+      message?: unknown;
+    };
+    const remoteMessage =
+      typeof body.error?.message === "string"
+        ? body.error.message
+        : typeof body.message === "string"
+          ? body.message
+          : null;
+    if (remoteMessage) {
+      message = `${message}: ${remoteMessage}`.slice(0, 500);
+    }
+  } catch {
+    // Keep the status-only message. Provider bodies may contain noisy or sensitive data.
+  }
+  return message;
+}
+
+function extractPanelChatText(body: unknown) {
+  const value = body && typeof body === "object" ? body as Record<string, unknown> : {};
+  const choices = Array.isArray(value.choices) ? value.choices : [];
+  const firstChoice = choices[0] && typeof choices[0] === "object"
+    ? choices[0] as Record<string, unknown>
+    : {};
+  const message = firstChoice.message && typeof firstChoice.message === "object"
+    ? firstChoice.message as Record<string, unknown>
+    : {};
+  const content = message.content;
+  if (typeof content === "string" && content.trim()) {
+    return content.trim();
+  }
+  if (Array.isArray(content)) {
+    const parts = content
+      .map((part) => {
+        if (!part || typeof part !== "object") return "";
+        const record = part as Record<string, unknown>;
+        if (typeof record.text === "string") return record.text;
+        if (typeof record.content === "string") return record.content;
+        return "";
+      })
+      .filter(Boolean);
+    if (parts.length) {
+      return parts.join("\n").trim();
+    }
+  }
+  const text = firstChoice.text;
+  return typeof text === "string" && text.trim() ? text.trim() : null;
+}
+
+function buildPanelChatSystemPrompt(input: {
+  chat: PanelChatInput;
+  agent: AgentConfigRecord;
+  provider: ModelProviderRecord;
+  model: string;
+  experiences: ExperienceRecord[];
+}) {
+  const agentName = input.chat.supervisorName?.trim() || input.agent.displayName || "Panel agent";
+  const languageInstruction = input.chat.language === "zh"
+    ? "Reply in Chinese unless the user explicitly asks for another language."
+    : "Reply in the user's language unless they explicitly ask for another language.";
+  const adoptedExperiences = input.experiences.length
+    ? input.experiences
+      .map((experience, index) => {
+        const key = [experience.kind, experience.scope, experience.scopeKey].filter(Boolean).join("/");
+        return `${index + 1}. ${key}: ${experience.summary}`;
+      })
+      .join("\n")
+    : "No adopted long-term experience has been approved yet.";
+
+  return [
+    `You are ${agentName}, the Honeycomb panel agent.`,
+    languageInstruction,
+    "You answer panel conversations directly, help the user shape work, and coordinate tasks that Honeycomb may send to the agent team.",
+    "If the user is chatting, answer normally. If the user is asking for task work, be concrete and mention any missing requirement only when it blocks execution.",
+    `Configured provider: ${input.provider.displayName}`,
+    `Configured model: ${input.model}`,
+    `Current project: ${input.chat.projectPath || input.chat.projectName || "not selected"}`,
+    `Latest job: ${input.chat.latestJobId || "none"}`,
+    "",
+    "Long-term memory rule:",
+    "The experience library is cross-task memory and must not be deleted by task cleanup. After each task, preserve transferable lessons, error memories, and reusable decisions; clear task-local scratch context when the task is done.",
+    "",
+    "Adopted experience memory:",
+    adoptedExperiences
+  ].join("\n");
+}
+
+async function loadPanelAgentConfig() {
+  const existing = await getAgentConfig("panel-agent");
+  if (existing) {
+    return existing;
+  }
+  const seeded = await seedDefaultAgentConfigs();
+  return seeded.find((agent) => agent.id === "panel-agent") ?? null;
+}
+
+async function sendPanelChatToModel(input: PanelChatInput) {
+  const panelAgent = await loadPanelAgentConfig();
+  if (!panelAgent) {
+    throw new PanelChatError(409, "panel_agent_missing", "Panel agent is not configured.");
+  }
+  if (!panelAgent.providerId) {
+    throw new PanelChatError(409, "panel_agent_provider_missing", "Panel agent model provider is not configured.");
+  }
+
+  const provider = await getModelProvider(panelAgent.providerId);
+  if (!provider) {
+    throw new PanelChatError(409, "panel_agent_provider_missing", "Panel agent model provider was not found.");
+  }
+
+  const model = panelAgent.model || provider.defaultModel;
+  if (!model) {
+    throw new PanelChatError(409, "panel_agent_model_missing", "Panel agent model is not configured.");
+  }
+
+  const apiKey = await readProviderApiKey(provider.id);
+  if (!apiKey) {
+    throw new PanelChatError(409, "panel_agent_api_key_missing", "Panel agent API key is not configured.");
+  }
+
+  const adoptedExperiences = await listExperiences({ status: "adopted", limit: 8 });
+  const history: PanelChatCompletionMessage[] = (input.messages ?? [])
+    .slice(-16)
+    .map((message) => ({
+      role: message.role,
+      content: message.body.trim()
+    }))
+    .filter((message) => Boolean(message.content));
+  const needsCurrentMessage =
+    history.at(-1)?.role !== "user" ||
+    history.at(-1)?.content.trim() !== input.message.trim();
+  const messages: PanelChatCompletionMessage[] = [
+    {
+      role: "system",
+      content: buildPanelChatSystemPrompt({
+        chat: input,
+        agent: panelAgent,
+        provider,
+        model,
+        experiences: adoptedExperiences.experiences
+      })
+    },
+    ...history,
+    ...(needsCurrentMessage ? [{ role: "user" as const, content: input.message.trim() }] : [])
+  ];
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 60_000);
+  try {
+    const providerResponse = await fetch(chatCompletionsUrl(provider.baseUrl), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model,
+        messages,
+        max_tokens: 900,
+        temperature: 0.35,
+        stream: false
+      }),
+      signal: controller.signal
+    });
+
+    if (!providerResponse.ok) {
+      throw new PanelChatError(
+        502,
+        "panel_agent_chat_failed",
+        await safeProviderErrorMessage(providerResponse)
+      );
+    }
+
+    const responseBody = await providerResponse.json();
+    const answer = extractPanelChatText(responseBody);
+    if (!answer) {
+      throw new PanelChatError(502, "panel_agent_empty_response", "Panel agent returned an empty response.");
+    }
+
+    return {
+      message: answer,
+      agentName: input.supervisorName?.trim() || panelAgent.displayName,
+      model,
+      providerId: provider.id,
+      usedExperienceIds: adoptedExperiences.experiences.map((experience) => experience.id)
+    };
+  } catch (error) {
+    if (error instanceof PanelChatError) {
+      throw error;
+    }
+    throw new PanelChatError(
+      502,
+      "panel_agent_chat_failed",
+      error instanceof Error ? error.message.slice(0, 500) : "Panel agent chat failed."
+    );
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function providerVerificationFailureCode(verification: ProviderVerificationResult, model: string) {
   if (verification.statusCode === 401 || verification.statusCode === 403) {
     return "provider_auth_failed";
@@ -1113,6 +1359,22 @@ async function main() {
 
   app.get("/health", (_request, response) => {
     response.json({ ok: true });
+  });
+
+  app.post("/panel/chat", async (request, response, next) => {
+    try {
+      const input = panelChatSchema.parse(request.body ?? {});
+      response.json(await sendPanelChatToModel(input));
+    } catch (error) {
+      if (error instanceof PanelChatError) {
+        response.status(error.status).json({
+          error: error.code,
+          message: error.message
+        });
+        return;
+      }
+      next(error);
+    }
   });
 
   for (const adapter of ingressAdapters) {

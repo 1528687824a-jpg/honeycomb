@@ -58,6 +58,7 @@ import {
   rejectToolApproval,
   runRuntimeRepairAction,
   saveAgentModelConfig as saveBackendAgentModelConfig,
+  sendPanelChat,
   type ExperienceListResponse,
   type ExperienceRecord,
   type ExperienceStatus,
@@ -1863,6 +1864,40 @@ function buildSupervisorPromptWithWorkbenchContext(
   ].join("\n");
 }
 
+function conversationMessagesForPanelChat(messages: ConversationMessage[]) {
+  return messages
+    .slice(-16)
+    .map((message) => ({
+      role: message.role,
+      body: message.body
+    }))
+    .filter((message) => message.body.trim());
+}
+
+function looksLikeTaskRequest(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  const englishTaskPattern = /\b(build|create|fix|repair|implement|generate|write|run|test|deploy|debug|analy[sz]e|summari[sz]e|refactor|update|delete|configure|connect|design|make)\b/i;
+  const chineseTaskPattern = /(\u5e2e\u6211|\u7ed9\u6211|\u4e3a\u6211|\u9700\u8981\u4f60|\u521b\u5efa|\u65b0\u5efa|\u751f\u6210|\u8bbe\u8ba1|\u5199(\u4e00\u4e2a|\u4e00\u4efd|\u4e00\u4e0b|\u4e2a|\u7bc7|\u6bb5|\u811a\u672c|\u4ee3\u7801|\u6587\u6848)|\u5b9e\u73b0|\u4fee\u6539|\u4fee\u590d|\u6392\u67e5|\u68c0\u67e5|\u8fd0\u884c|\u6d4b\u8bd5|\u90e8\u7f72|\u6574\u7406|\u5206\u6790|\u603b\u7ed3|\u63d0\u53d6|\u8f6c\u6362|\u4f18\u5316|\u63a5\u5165|\u914d\u7f6e|\u5220\u9664|\u66f4\u65b0|\u505a(\u4e00\u4e2a|\u4e00\u4e0b|\u4e2a)|\u4efb\u52a1)/;
+  return englishTaskPattern.test(trimmed) || chineseTaskPattern.test(trimmed);
+}
+
+function friendlyApiErrorMessage(error: unknown) {
+  const raw = error instanceof Error ? error.message : String(error);
+  try {
+    const parsed = JSON.parse(raw) as { message?: unknown; error?: unknown };
+    if (typeof parsed.message === "string" && parsed.message.trim()) {
+      return parsed.message.trim();
+    }
+    if (typeof parsed.error === "string" && parsed.error.trim()) {
+      return parsed.error.trim();
+    }
+  } catch {
+    // Keep the original error text.
+  }
+  return raw;
+}
+
 function App() {
   const [language, setLanguage] = useState<Language>(getInitialLanguage);
   const [activeView, setActiveView] = useState<AppView>(getInitialView);
@@ -1963,6 +1998,7 @@ function App() {
   const jobsRequestSeq = useRef(0);
   const notificationStartedAt = useRef(Date.now());
   const seenNotificationIds = useRef<Set<string>>(loadSeenNotificationIds());
+  const panelBackendConfigSyncKey = useRef("");
   const copy = translations[language];
 
   const statusText = useMemo(() => {
@@ -1983,9 +2019,12 @@ function App() {
   const tourStep = copy.tourSteps[tourIndex];
   const inferredRoutingMode = useMemo(() => inferRoutingModeForTask(prompt), [prompt]);
   const [firstRunPreview, setFirstRunPreview] = useState<FirstRunPreview | null>(loadFirstRunPreview);
+  const [backendPanelSupervisorName, setBackendPanelSupervisorName] = useState("");
   const configuredProvider = configuredProviderLabel(firstRunPreview, language);
   const panelSupervisorDisplayName =
-    firstRunPreview?.profile?.supervisorName || (language === "zh" ? "面板主管 Agent" : "Panel supervisor agent");
+    backendPanelSupervisorName ||
+    firstRunPreview?.profile?.supervisorName ||
+    (language === "zh" ? "\u9762\u677f\u4e3b\u7ba1 Agent" : "Panel supervisor agent");
   const workbenchJob = selectedFromList ?? latestJob;
   const workbenchPlanSteps = useMemo(
     () => buildWorkbenchPlanSteps(workbenchJob, timeline, language),
@@ -2084,6 +2123,15 @@ function App() {
         listModelProviders().then((response) => response.providers).catch(() => null)
       ]);
       if (cancelled) return;
+      if (backendAgents) {
+        const backendPanelAgent = backendAgents.find((agent) => uiAgentIdFromBackend(agent.id) === "panel-supervisor-agent");
+        const backendPanelName = backendPanelAgent?.displayName.trim() || "";
+        setBackendPanelSupervisorName(
+          backendPanelName && (backendPanelName !== "Panel Agent" || !firstRunPreview?.profile?.supervisorName)
+            ? backendPanelName
+            : ""
+        );
+      }
       setProviderApiKey(loadedProviderApiKey);
       setAgentModelConfigs((current) => {
         let merged = { ...current, ...desktopConfigs };
@@ -2364,11 +2412,36 @@ function App() {
     }
   }
 
-  async function submitJob() {
+  async function ensurePanelAgentBackendConfig() {
+    const localPanelConfig = agentModelConfigs["panel-supervisor-agent"];
+    const apiKey = localPanelConfig?.apiKey?.trim() || providerApiKey.trim();
+    const model = localPanelConfig?.model.trim() || firstRunPreview?.provider?.model?.trim() || "";
+    if (!apiKey || !model) {
+      return;
+    }
+
+    const syncKey = `${model}:${apiKey.length}:${apiKey.slice(0, 4)}:${apiKey.slice(-4)}`;
+    if (panelBackendConfigSyncKey.current === syncKey) {
+      return;
+    }
+
+    const backendResult = await saveBackendAgentModelConfig("panel-supervisor-agent", {
+      model,
+      apiKey,
+      allowDiscoveredUserRuntime: false
+    });
+    panelBackendConfigSyncKey.current = syncKey;
+    const backendName = backendResult.agent.displayName.trim();
+    if (backendName && (backendName !== "Panel Agent" || !firstRunPreview?.profile?.supervisorName)) {
+      setBackendPanelSupervisorName(backendName);
+    }
+  }
+
+  async function sendConversationMessage() {
     if (busy) return;
     const trimmedPrompt = prompt.trim();
     if (!trimmedPrompt) {
-      setError(language === "zh" ? "\u8bf7\u5148\u5199\u4e0b\u8981\u4ea4\u7ed9 Agent \u56e2\u961f\u7684\u4efb\u52a1\u3002" : "Describe the task before launching it.");
+      setError(language === "zh" ? "\u8bf7\u5148\u5199\u4e0b\u8981\u53d1\u9001\u7684\u5185\u5bb9\u3002" : "Type a message before sending.");
       return;
     }
     const activeProject = conversationState.projects.find((project) => project.id === conversationState.activeProjectId);
@@ -2438,13 +2511,73 @@ function App() {
       return;
     }
     setBusy(true);
+    let nextConversationState = stateWithUserMessage;
+    const taskIntent = looksLikeTaskRequest(trimmedPrompt);
+    const messageWithAttachments = buildPromptWithConversationAttachments(trimmedPrompt, outgoingAttachments, language);
     try {
+      try {
+        await ensurePanelAgentBackendConfig();
+        const panelResponse = await sendPanelChat({
+          message: messageWithAttachments,
+          messages: conversationMessagesForPanelChat([...(activeThread.messages ?? []), userMessage]),
+          supervisorName: panelSupervisorDisplayName,
+          projectPath: activeWorkspacePath,
+          projectName: activeProject.name,
+          latestJobId: latestJob?.id,
+          language
+        });
+        const assistantMessage = createConversationMessage("assistant", panelResponse.message, { status: "sent" });
+        nextConversationState = appendMessagesToConversationState(
+          nextConversationState,
+          activeProject.id,
+          activeThread.id,
+          [assistantMessage]
+        );
+      } catch (chatError) {
+        const chatErrorMessage = friendlyApiErrorMessage(chatError);
+        if (!taskIntent) {
+          const failedChatMessage = createConversationMessage(
+            "system",
+            language === "zh"
+              ? `\u9762\u677f Agent \u6682\u65f6\u65e0\u6cd5\u76f4\u63a5\u56de\u590d\uff1a${chatErrorMessage}`
+              : `The panel agent cannot reply yet: ${chatErrorMessage}`,
+            { status: "failed" }
+          );
+          appendMessagesToConversationState(
+            nextConversationState,
+            activeProject.id,
+            activeThread.id,
+            [failedChatMessage]
+          );
+          setError(chatErrorMessage);
+          return;
+        }
+        const fallbackMessage = createConversationMessage(
+          "system",
+          language === "zh"
+            ? `\u9762\u677f Agent \u6682\u65f6\u65e0\u6cd5\u76f4\u63a5\u56de\u590d\uff1a${chatErrorMessage}\u3002\u5c06\u7ee7\u7eed\u628a\u8fd9\u6761\u5185\u5bb9\u4f5c\u4e3a\u4efb\u52a1\u53d1\u9001\u7ed9 Agent \u56e2\u961f\u3002`
+            : `The panel agent cannot reply yet: ${chatErrorMessage}. I will still send this as a task to the agent team.`,
+          { status: "failed" }
+        );
+        nextConversationState = appendMessagesToConversationState(
+          nextConversationState,
+          activeProject.id,
+          activeThread.id,
+          [fallbackMessage]
+        );
+      }
+
+      if (!taskIntent) {
+        setError(null);
+        return;
+      }
+
       const effectiveWorkbenchConfig = {
         ...workbenchConfig,
         workspacePath: activeWorkspacePath
       };
       const promptWithWorkbenchContext = buildSupervisorPromptWithWorkbenchContext(
-        buildPromptWithConversationAttachments(trimmedPrompt, activeThread?.attachments ?? [], language),
+        messageWithAttachments,
         effectiveWorkbenchConfig,
         panelSupervisorDisplayName,
         language
@@ -2462,44 +2595,16 @@ function App() {
           : `Sent to the agent team: ${created.jobId}. You can inspect progress in Tasks.`,
         { jobId: created.jobId, status: "sent" }
       );
-      persistConversationState({
-        ...stateWithUserMessage,
-        projects: stateWithUserMessage.projects.map((project) =>
-          project.id === activeProject.id
-            ? {
-                ...project,
-                threads: project.threads.map((thread) =>
-                  thread.id === activeThread.id
-                    ? { ...thread, messages: [...(thread.messages ?? []), assistantMessage], updatedAt: assistantMessage.createdAt }
-                    : thread
-                )
-              }
-            : project
-        )
-      });
+      appendMessagesToConversationState(nextConversationState, activeProject.id, activeThread.id, [assistantMessage]);
       await refreshAll(created.jobId);
     } catch (caught) {
-      const errorMessage = caught instanceof Error ? caught.message : String(caught);
+      const errorMessage = friendlyApiErrorMessage(caught);
       const failedMessage = createConversationMessage(
         "system",
         language === "zh" ? `\u53d1\u9001\u5230 Agent \u56e2\u961f\u5931\u8d25\uff1a${errorMessage}` : `Failed to send to the agent team: ${errorMessage}`,
         { status: "failed" }
       );
-      persistConversationState({
-        ...stateWithUserMessage,
-        projects: stateWithUserMessage.projects.map((project) =>
-          project.id === activeProject.id
-            ? {
-                ...project,
-                threads: project.threads.map((thread) =>
-                  thread.id === activeThread.id
-                    ? { ...thread, messages: [...(thread.messages ?? []), failedMessage], updatedAt: failedMessage.createdAt }
-                    : thread
-                )
-              }
-            : project
-        )
-      });
+      appendMessagesToConversationState(nextConversationState, activeProject.id, activeThread.id, [failedMessage]);
       setError(errorMessage);
     } finally {
       setBusy(false);
@@ -2749,6 +2854,32 @@ function App() {
     const project = state.projects.find((candidate) => candidate.id === state.activeProjectId);
     const thread = project?.threads.find((candidate) => candidate.id === state.activeThreadId && !candidate.archivedAt);
     return { project, thread };
+  }
+
+  function appendMessagesToConversationState(
+    state: ConversationWorkspaceState,
+    projectId: string,
+    threadId: string,
+    messages: ConversationMessage[]
+  ) {
+    if (!messages.length) return state;
+    const updatedAt = messages.at(-1)?.createdAt ?? new Date().toISOString();
+    return persistConversationState({
+      ...state,
+      projects: state.projects.map((project) =>
+        project.id === projectId
+          ? {
+              ...project,
+              updatedAt,
+              threads: project.threads.map((thread) =>
+                thread.id === threadId
+                  ? { ...thread, messages: [...(thread.messages ?? []), ...messages], updatedAt }
+                  : thread
+              )
+            }
+          : project
+      )
+    });
   }
 
   async function pickDirectoryPath() {
@@ -4087,7 +4218,7 @@ function App() {
             <article className="codexAssistantMessage">
               <ul>
                 <li>
-                  <strong>{conversationCopy.panelAgent}</strong>
+                  <strong>{panelSupervisorDisplayName}</strong>
                   <p>{conversationCopy.assistantIntro}</p>
                   <p><code>{activeProjectPath || conversationCopy.projectUnset}</code></p>
                 </li>
@@ -4111,9 +4242,7 @@ function App() {
                       <strong>
                         {message.role === "user"
                           ? (language === "zh" ? "\u4f60" : "You")
-                          : message.role === "assistant"
-                            ? conversationCopy.panelAgent
-                            : "Honeycomb"}
+                          : panelSupervisorDisplayName}
                       </strong>
                       <small>{formatTime(message.createdAt, language)}</small>
                     </div>
@@ -4138,7 +4267,7 @@ function App() {
             className="codexComposer"
             onSubmit={(event) => {
               event.preventDefault();
-              submitJob();
+              sendConversationMessage();
             }}
           >
             <label className="visuallyHidden" htmlFor="prompt">{conversationCopy.inputPlaceholder}</label>
