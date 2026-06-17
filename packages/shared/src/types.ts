@@ -291,10 +291,22 @@ export type ScheduledTaskRecord = {
 export const EXPERIENCE_STATUSES = ["candidate", "adopted", "rejected"] as const;
 export type ExperienceStatus = (typeof EXPERIENCE_STATUSES)[number];
 
-export const EXPERIENCE_KINDS = ["routing_outcome"] as const;
+export const EXPERIENCE_KINDS = [
+  "routing_outcome",
+  "success_pattern",
+  "failure_pattern",
+  "agent_lesson",
+  "user_preference"
+] as const;
 export type ExperienceKind = (typeof EXPERIENCE_KINDS)[number];
 
-export const EXPERIENCE_SCOPES = ["routing_mode"] as const;
+export const EXPERIENCE_SCOPES = [
+  "routing_mode",
+  "agent",
+  "task_type",
+  "project",
+  "user_profile"
+] as const;
 export type ExperienceScope = (typeof EXPERIENCE_SCOPES)[number];
 
 export type ExperienceRecord = {
@@ -307,12 +319,17 @@ export type ExperienceRecord = {
   summary: string;
   evidence: Array<Record<string, unknown>>;
   confidence: number;
+  utilityScore: number;
+  decayScore: number;
   occurrenceCount: number;
   metadata: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
   adoptedAt: string | null;
   rejectedAt: string | null;
+  lastRecalledAt: string | null;
+  recallCount: number;
+  lastReinforcedAt: string | null;
 };
 
 export type CreateJobInput = {

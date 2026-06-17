@@ -165,14 +165,24 @@ const statements = [
     summary text not null,
     evidence jsonb not null default '[]',
     confidence numeric(4, 3) not null,
+    utility_score numeric(4, 3) not null default 0,
+    decay_score numeric(4, 3) not null default 0,
     occurrence_count int not null default 1,
     metadata jsonb not null default '{}',
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now(),
     adopted_at timestamptz,
     rejected_at timestamptz,
+    last_recalled_at timestamptz,
+    recall_count int not null default 0,
+    last_reinforced_at timestamptz,
     unique(source_job_id, kind, scope, scope_key)
   )`,
+  `alter table agent.experience_candidates add column if not exists utility_score numeric(4, 3) not null default 0`,
+  `alter table agent.experience_candidates add column if not exists decay_score numeric(4, 3) not null default 0`,
+  `alter table agent.experience_candidates add column if not exists last_recalled_at timestamptz`,
+  `alter table agent.experience_candidates add column if not exists recall_count int not null default 0`,
+  `alter table agent.experience_candidates add column if not exists last_reinforced_at timestamptz`,
   `create table if not exists agent.task_plans (
     id text primary key,
     job_id text not null references agent.jobs(id),
@@ -384,6 +394,10 @@ const statements = [
     on agent.experience_candidates(status, updated_at desc)`,
   `create index if not exists experience_candidates_scope_idx
     on agent.experience_candidates(scope, scope_key, status)`,
+  `create index if not exists experience_candidates_kind_scope_status_idx
+    on agent.experience_candidates(kind, scope, scope_key, status)`,
+  `create index if not exists experience_candidates_reuse_rank_idx
+    on agent.experience_candidates(status, utility_score desc, decay_score asc, updated_at desc)`,
   `create index if not exists task_plans_job_id_updated_at_idx
     on agent.task_plans(job_id, updated_at desc)`,
   `create index if not exists task_plans_status_updated_at_idx

@@ -77,6 +77,18 @@ export type RoutingMode =
   | "master_slave_discussion";
 
 export type ExperienceStatus = "candidate" | "adopted" | "rejected";
+export type ExperienceKind =
+  | "routing_outcome"
+  | "success_pattern"
+  | "failure_pattern"
+  | "agent_lesson"
+  | "user_preference";
+export type ExperienceScope =
+  | "routing_mode"
+  | "agent"
+  | "task_type"
+  | "project"
+  | "user_profile";
 
 export type TaskPlanStatus = "draft" | "active" | "completed" | "archived";
 export type TaskPlanItemStatus =
@@ -175,19 +187,24 @@ export type UpdatePlanItemInput = Partial<CreatePlanItemInput>;
 export type ExperienceRecord = {
   id: string;
   sourceJobId: string;
-  kind: "routing_outcome";
-  scope: "routing_mode";
+  kind: ExperienceKind;
+  scope: ExperienceScope;
   scopeKey: string;
   status: ExperienceStatus;
   summary: string;
   evidence: Array<Record<string, unknown>>;
   confidence: number;
+  utilityScore: number;
+  decayScore: number;
   occurrenceCount: number;
   metadata: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
   adoptedAt: string | null;
   rejectedAt: string | null;
+  lastRecalledAt: string | null;
+  recallCount: number;
+  lastReinforcedAt: string | null;
 };
 
 export type ExperienceListResponse = {

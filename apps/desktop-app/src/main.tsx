@@ -2124,11 +2124,22 @@ function App() {
     const localPreview = loadFirstRunPreview();
     if (localPreview) {
       setFirstRunPreview(localPreview);
-      return;
     }
     loadFirstRunPreviewFromDesktop().then((desktopPreview) => {
-      if (!cancelled && desktopPreview) {
+      if (cancelled) {
+        return;
+      }
+      if (desktopPreview) {
         setFirstRunPreview(desktopPreview);
+        return;
+      }
+      if (isTauriRuntime() && (localPreview || setupComplete)) {
+        window.localStorage.removeItem("honeycomb.firstRunPreview");
+        window.localStorage.removeItem("honeycomb.setupCompleted");
+        setFirstRunPreview(null);
+        setSetupComplete(false);
+        setShowTour(false);
+        setActiveView("setup");
       }
     });
     return () => {
@@ -5079,6 +5090,17 @@ function App() {
       }
       return experience.scopeKey;
     };
+    const kindLabel = (experience: ExperienceRecord) => {
+      const labels: Record<ExperienceRecord["kind"], string> = {
+        routing_outcome: language === "zh" ? "编排运行结果" : "Routing outcome",
+        success_pattern: language === "zh" ? "成功模式" : "Success pattern",
+        failure_pattern: language === "zh" ? "失败模式" : "Failure pattern",
+        agent_lesson: language === "zh" ? "Agent 经验" : "Agent lesson",
+        user_preference: language === "zh" ? "用户偏好" : "User preference"
+      };
+      return labels[experience.kind] ?? experience.kind;
+    };
+    const percentLabel = (value: number | undefined) => `${Math.round((value ?? 0) * 100)}%`;
 
     return (
       <section className="deskPage utilityPage">
@@ -5165,14 +5187,12 @@ function App() {
                   <div className="experienceHeader">
                     <div>
                       <span className={`experienceStatus ${experience.status}`}>{statusLabels[experience.status]}</span>
-                      <h3>{language === "zh" ? "编排运行结果" : "Routing outcome"}</h3>
+                      <h3>{kindLabel(experience)}</h3>
                     </div>
-                    <strong>{Math.round(experience.confidence * 100)}%</strong>
+                    <strong>{percentLabel(experience.confidence)}</strong>
                   </div>
                   <p>
-                    {language === "zh" && experience.kind === "routing_outcome"
-                      ? `编排模式「${scopeLabel(experience)}」已成功完成一次任务；请结合来源证据判断它是否值得复用。`
-                      : experience.summary}
+                    {experience.summary}
                   </p>
                   <dl className="experienceMeta">
                     <div>
@@ -5190,6 +5210,18 @@ function App() {
                     <div>
                       <dt>{language === "zh" ? "出现次数" : "Occurrences"}</dt>
                       <dd>{experience.occurrenceCount}</dd>
+                    </div>
+                    <div>
+                      <dt>{language === "zh" ? "效用" : "Utility"}</dt>
+                      <dd>{percentLabel(experience.utilityScore)}</dd>
+                    </div>
+                    <div>
+                      <dt>{language === "zh" ? "衰退" : "Decay"}</dt>
+                      <dd>{percentLabel(experience.decayScore)}</dd>
+                    </div>
+                    <div>
+                      <dt>{language === "zh" ? "召回" : "Recalls"}</dt>
+                      <dd>{experience.recallCount}</dd>
                     </div>
                   </dl>
                   {experience.status === "candidate" ? (

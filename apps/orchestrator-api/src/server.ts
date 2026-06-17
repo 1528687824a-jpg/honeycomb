@@ -26,6 +26,7 @@ import {
 import { markModelCallFailedUnknownOutcome } from "../../../packages/db/src/model-calls";
 import {
   listExperiences,
+  recordExperienceRecall,
   setExperienceStatus
 } from "../../../packages/db/src/experience";
 import {
@@ -971,7 +972,8 @@ function buildPanelChatSystemPrompt(input: {
     ? input.experiences
       .map((experience, index) => {
         const key = [experience.kind, experience.scope, experience.scopeKey].filter(Boolean).join("/");
-        return `${index + 1}. ${key}: ${experience.summary}`;
+        const reuseScore = Math.max(experience.utilityScore - experience.decayScore, 0).toFixed(2);
+        return `${index + 1}. ${key} | reuse=${reuseScore} | recalls=${experience.recallCount}: ${experience.summary}`;
       })
       .join("\n")
     : "No adopted long-term experience has been approved yet.";
@@ -989,7 +991,11 @@ function buildPanelChatSystemPrompt(input: {
     `Latest job: ${input.chat.latestJobId || "none"}`,
     "",
     "Long-term memory rule:",
-    "The experience library is cross-task memory and must not be deleted by task cleanup. After each task, preserve transferable lessons, error memories, and reusable decisions; clear task-local scratch context when the task is done.",
+    "The experience library is cross-task memory and must not be deleted by task cleanup.",
+    "Treat memory as a small curated surface, not a transcript dump. Preserve transferable lessons, recurring failure causes, proven success patterns, user preferences, and durable environment facts; clear task-local scratch context when the task is done.",
+    "Every finished task should produce reviewable experience candidates. They become reusable only after adoption. Never silently promote weak, secret-bearing, one-off, or task-local details.",
+    "When a memory is reused successfully, it should be reinforced. When it becomes stale, narrow, duplicated, or contradicted, it should decay, be merged, or be rejected.",
+    "Use adopted memories as hints, not as unquestionable truth; prefer fresh evidence when the task is time-sensitive or high-risk.",
     "",
     "Adopted experience memory:",
     adoptedExperiences
@@ -1096,12 +1102,19 @@ async function sendPanelChatToModel(input: PanelChatInput) {
       throw new PanelChatError(502, "panel_agent_empty_response", "Panel agent returned an empty response.");
     }
 
+    const usedExperienceIds = adoptedExperiences.experiences.map((experience) => experience.id);
+    try {
+      await recordExperienceRecall(usedExperienceIds);
+    } catch {
+      // Recall scoring is best-effort; a delayed migration must not block chat.
+    }
+
     return {
       message: answer,
       agentName: input.supervisorName?.trim() || panelAgent.displayName,
       model,
       providerId: provider.id,
-      usedExperienceIds: adoptedExperiences.experiences.map((experience) => experience.id)
+      usedExperienceIds
     };
   } catch (error) {
     if (error instanceof PanelChatError) {

@@ -672,13 +672,12 @@ export function FirstRunPanel({ language, onComplete, onCancel, flow = "full" }:
   }, [inviteText, language, stage]);
 
   useEffect(() => {
-    if (flow === "full") return;
     if (provider.apiKey.trim()) return;
     loadSavedProviderApiKeyFromDesktop().then((apiKey) => {
       if (!apiKey) return;
       setProvider((current) => current.apiKey.trim() ? current : { ...current, apiKey });
     });
-  }, [flow, provider.apiKey]);
+  }, [provider.apiKey]);
 
   function updateProvider(field: keyof ProviderDraft, value: string) {
     setProvider((current) => ({ ...current, [field]: value }));

@@ -38,9 +38,11 @@ import { createExperienceCandidate } from "../../../packages/db/src/experience";
 import type {
   AgentEventRecord,
   ArtifactRecord,
+  ExperienceRecord,
   FinalQualityGateResult,
   GroupMessageRecord,
   GroupMessageType,
+  JobRecord,
   RoutingMode,
   StageDefinition,
   StageRecord,
@@ -1763,6 +1765,156 @@ export async function stopAfterConsecutiveFailures(input: {
   await markJobWaitingForHuman(input.jobId, `Stage ${stage.id} failed ${input.attemptNo} consecutive tests`);
 }
 
+type ExperienceCandidateInput = Parameters<typeof createExperienceCandidate>[0];
+
+function stageStatusSucceeded(stage: StageRecord) {
+  return stage.status === "completed" || stage.status === "test_passed";
+}
+
+function stageExperienceKind(stage: StageRecord) {
+  return stageStatusSucceeded(stage) ? "success_pattern" : "failure_pattern";
+}
+
+function buildExperienceMetadata(input: {
+  extractionVersion: string;
+  memoryTier: "candidate" | "adopted";
+  capacityBucket: string;
+  decaySensitivity: "low" | "medium" | "high";
+  requiresHumanReview?: boolean;
+}) {
+  return {
+    extractionVersion: input.extractionVersion,
+    requiresHumanReview: input.requiresHumanReview ?? true,
+    memoryGovernance: {
+      memoryTier: input.memoryTier,
+      capacityBucket: input.capacityBucket,
+      decaySensitivity: input.decaySensitivity,
+      keepRawArtifactsOut: true,
+      reviewPolicy: "adopt_before_reuse",
+      consolidationHint: "Keep only transferable lessons; merge or reject narrow duplicates."
+    }
+  };
+}
+
+async function createJobExperienceCandidates(input: {
+  job: JobRecord;
+  stages: StageRecord[];
+  finalArtifactId: string;
+}) {
+  const routingMode = input.job.routingMode ?? DEFAULT_ROUTING_MODE;
+  const baseEvidence = [
+    {
+      type: "job_succeeded",
+      jobId: input.job.id,
+      routingMode,
+      finalArtifactId: input.finalArtifactId
+    },
+    {
+      type: "completed_stages",
+      stages: input.stages.map((stage) => ({
+        stageId: stage.id,
+        stageIndex: stage.stageIndex,
+        stageType: stage.stageType,
+        agentId: stage.agentId,
+        status: stage.status,
+        retryCount: stage.retryCount
+      }))
+    }
+  ];
+  const candidates: ExperienceCandidateInput[] = [
+    {
+      id: `${input.job.id}-EXP-ROUTING-OUTCOME`,
+      sourceJobId: input.job.id,
+      kind: "routing_outcome",
+      scope: "routing_mode",
+      scopeKey: routingMode,
+      summary: `Routing mode ${routingMode} completed a job successfully. Review whether this routing choice should be reused for similar tasks.`,
+      evidence: baseEvidence,
+      confidence: 0.55,
+      utilityScore: 0.4,
+      decayScore: 0.05,
+      metadata: buildExperienceMetadata({
+        extractionVersion: "routing-outcome.v2",
+        memoryTier: "candidate",
+        capacityBucket: "routing",
+        decaySensitivity: "medium"
+      })
+    }
+  ];
+
+  const stageCandidates = input.stages.slice(0, 12).map((stage) => {
+    const succeeded = stageStatusSucceeded(stage);
+    const kind = stageExperienceKind(stage);
+    const statusLabel = succeeded ? "completed" : `ended with status ${stage.status}`;
+    return {
+      id: `${input.job.id}-EXP-${stage.id}`,
+      sourceJobId: input.job.id,
+      kind,
+      scope: "agent",
+      scopeKey: stage.agentId,
+      summary: `${stage.agentId} ${statusLabel} ${stage.stageType} stage "${stage.name}". Review the work log and test result for a transferable ${succeeded ? "success pattern" : "failure pattern"}.`,
+      evidence: [
+        {
+          type: succeeded ? "agent_stage_succeeded" : "agent_stage_needs_review",
+          jobId: input.job.id,
+          stageId: stage.id,
+          stageIndex: stage.stageIndex,
+          stageType: stage.stageType,
+          agentId: stage.agentId,
+          status: stage.status,
+          retryCount: stage.retryCount,
+          outputArtifactId: stage.outputArtifactId
+        },
+        ...baseEvidence
+      ],
+      confidence: succeeded ? 0.62 : 0.5,
+      utilityScore: succeeded ? 0.45 : 0.55,
+      decayScore: succeeded ? 0.06 : 0.03,
+      metadata: buildExperienceMetadata({
+        extractionVersion: "agent-stage-reflection.v1",
+        memoryTier: "candidate",
+        capacityBucket: `agent:${stage.agentId}`,
+        decaySensitivity: succeeded ? "medium" : "low"
+      })
+    } satisfies ExperienceCandidateInput;
+  });
+
+  const taskTypeCandidates = input.stages.slice(0, 8).map((stage) => ({
+    id: `${input.job.id}-EXP-TASKTYPE-${stage.stageIndex}`,
+    sourceJobId: input.job.id,
+    kind: "agent_lesson",
+    scope: "task_type",
+    scopeKey: stage.stageType,
+    summary: `Task type "${stage.stageType}" was handled by ${stage.agentId} in routing mode ${routingMode}. Review for reusable planning, quality, or handoff lessons.`,
+    evidence: [
+      {
+        type: "task_type_stage_observed",
+        jobId: input.job.id,
+        stageId: stage.id,
+        stageType: stage.stageType,
+        agentId: stage.agentId,
+        status: stage.status,
+        retryCount: stage.retryCount
+      }
+    ],
+    confidence: 0.5,
+    utilityScore: 0.35,
+    decayScore: 0.08,
+    metadata: buildExperienceMetadata({
+      extractionVersion: "task-type-lesson.v1",
+      memoryTier: "candidate",
+      capacityBucket: `task_type:${stage.stageType}`,
+      decaySensitivity: "high"
+    })
+  } satisfies ExperienceCandidateInput));
+
+  const created: ExperienceRecord[] = [];
+  for (const candidate of [...candidates, ...stageCandidates, ...taskTypeCandidates]) {
+    created.push(await createExperienceCandidate(candidate));
+  }
+  return created;
+}
+
 export async function finalizeJob(jobId: string) {
   const job = await getJob(jobId);
   if (!job) {
@@ -1838,45 +1990,18 @@ export async function finalizeJob(jobId: string) {
     finalPath
   });
 
-  const experience = await createExperienceCandidate({
-    id: `${jobId}-EXP-ROUTING-OUTCOME`,
-    sourceJobId: jobId,
-    kind: "routing_outcome",
-    scope: "routing_mode",
-    scopeKey: job.routingMode ?? DEFAULT_ROUTING_MODE,
-    summary: `Routing mode ${job.routingMode ?? DEFAULT_ROUTING_MODE} completed a job successfully and is ready for user review before reuse.`,
-    evidence: [
-      {
-        type: "job_succeeded",
-        jobId,
-        routingMode: job.routingMode ?? DEFAULT_ROUTING_MODE,
-        finalArtifactId: artifact.id
-      },
-      {
-        type: "completed_stages",
-        stages: stages.map((stage) => ({
-          stageId: stage.id,
-          stageIndex: stage.stageIndex,
-          agentId: stage.agentId,
-          status: stage.status
-        }))
-      }
-    ],
-    confidence: 0.55,
-    metadata: {
-      extractionVersion: "routing-outcome.v1",
-      requiresHumanReview: true
-    }
+  const experiences = await createJobExperienceCandidates({
+    job,
+    stages,
+    finalArtifactId: artifact.id
   });
   await appendJobEvent(
     jobId,
-    "experience.candidate_created",
+    "experience.candidates_created",
     {
-      experienceId: experience.id,
-      kind: experience.kind,
-      scope: experience.scope,
-      scopeKey: experience.scopeKey,
-      confidence: experience.confidence
+      experienceIds: experiences.map((experience) => experience.id),
+      count: experiences.length,
+      kinds: [...new Set(experiences.map((experience) => experience.kind))]
     },
     {
       actor: "memory-agent",

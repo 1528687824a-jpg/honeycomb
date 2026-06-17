@@ -151,15 +151,16 @@ const capabilities: RuntimeCapability[] = [
     id: "experience_memory",
     title: "Experience memory",
     status: "ready",
-    summary: "Routing outcome memories can be collected and adopted or rejected.",
+    summary: "Task-end experience candidates can be collected, ranked, recalled, adopted, or rejected.",
     routes: [
       "GET /memory/experiences",
       "POST /memory/experiences/:experienceId/adopt",
       "POST /memory/experiences/:experienceId/reject"
     ],
     implemented: [
-      "Experience candidates",
+      "Routing, agent, task-type, success-pattern, and failure-pattern candidates",
       "Adopt/reject state",
+      "Recall reinforcement and decay metadata",
       "Runtime usage integration"
     ],
     missing: [

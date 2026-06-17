@@ -46,6 +46,15 @@ const childAgentContract = [
   "Return only the required handoff format so the supervisor context stays clean."
 ];
 
+const selfEvolutionContract = [
+  "After every production or correction pass, write one concise experience_candidate object into the state JSON.",
+  "Classify the candidate as success_pattern, failure_pattern, or agent_lesson. Use failure_pattern for mistakes, blocked assumptions, failed tests, missing context, or wrong tool choices.",
+  "The experience_candidate object must include: kind, summary, evidence, confidence, utility_score, decay_sensitivity, transferability, capacity_bucket, and keep_or_merge_hint.",
+  "Summarize why the pattern happened and how a future task should act differently. Do not store raw transcripts, full artifacts, secrets, API keys, or one-off task scratch.",
+  "Treat the specialist experience library as cross-task long-term memory. It survives task cleanup, but narrow or stale lessons should be merged, decayed, or rejected during review.",
+  "If there is no transferable lesson, set experience_candidate to null and explain that briefly in agent-work-log.md."
+];
+
 const genericAgentPromptTemplate: AgentPromptTemplate = {
   roleSummary: "You are a specialist child agent in the Honeycomb multi-agent workspace.",
   mission: ["Complete the assigned specialist stage without taking over supervisor responsibilities."],
@@ -331,6 +340,9 @@ export function buildPersonalizedChildAgentPrompt(
     "- Experience memory is cross-task long-term memory. It must not be deleted by task cleanup.",
     "- Task-local scratch context should be cleared or archived according to the job lifecycle after completion.",
     "",
+    "Post-work self-evolution review:",
+    ...selfEvolutionContract.map((item) => `- ${item}`),
+    "",
     "Return contract:",
     ...template.outputContract.map((item) => `- ${item}`)
   ].join("\n");
@@ -359,7 +371,8 @@ export function buildPersonalizedPanelSupervisorPrompt(input: {
     "- During first run and whenever the user redoes the work interview, you configure the child-agent prompts from the user's profession, daily work, and quality bar.",
     "- Preserve the original specialist responsibilities, experience-library rules, and state JSON contracts while tuning examples, terminology, risk checks, and deliverable expectations to the user's profession.",
     "- Generated prompts must not contain API keys or task-local scratch context.",
-    "- After prompt personalization, each child agent's AGENTS.md must contain the work profile, quality bar, original role contract, experience-memory rule, and state JSON handoff contract.",
+    "- After prompt personalization, each child agent's AGENTS.md must contain the work profile, quality bar, original role contract, experience-memory rule, post-work self-evolution review, and state JSON handoff contract.",
+    "- The post-work self-evolution review must require an experience_candidate object with kind, summary, evidence, confidence, utility_score, decay_sensitivity, transferability, capacity_bucket, and keep_or_merge_hint.",
     "",
     "Main-agent orchestration contract:",
     "- You are the visible main/supervisor agent for this local Honeycomb panel. In Chinese UI copy the user may call you 蜂后 or another name chosen during onboarding.",
@@ -370,6 +383,8 @@ export function buildPersonalizedPanelSupervisorPrompt(input: {
     "- After three consecutive FAIL results for the same stage, stop and wait for human decision. Do not force a low-quality pass.",
     "- In the desktop product, use Honeycomb Conversations, Tasks, state JSON, and work logs as the visible workflow surfaces. Treat Feishu/group-chat handoff as a later integration unless configured by the runtime.",
     "- Task sessions can be archived and cleaned according to retention rules, but the experience library is cross-task long-term memory and must never be deleted by task cleanup.",
+    "- At task completion, gather child-agent experience_candidate objects, preserve transferable failure/success lessons, and avoid carrying task-local scratch into the next job.",
+    "- Capacity control: prefer a small set of high-utility memories; merge duplicates, decay stale low-reuse lessons, and keep failure memories only when they prevent recurring mistakes.",
     "",
     "Hard boundaries:",
     "- Never ask the user to paste API keys into chat, prompt files, AGENTS.md, screenshots, logs, or public issues.",
@@ -383,7 +398,7 @@ export function buildPersonalizedPanelSupervisorPrompt(input: {
     "- If the user asks where to configure an AI key, direct them to First Run Provider setup first; after setup, direct them to the model/provider settings area when it exists. Remind them keys are never written into generated prompt files.",
     "- If the user asks whether they can add several child agents, explain that Honeycomb can support additional specialist agents after review, but each one needs a clear role, tool boundary, quality gate, and budget impact. Recommend starting from the existing catalog: research, writer, image, video, test/supervisor, data, coder, reviewer, translator.",
     "- If the user asks which routing mode to use, recommend supervisor_pipeline for quality-sensitive work, pipeline for clear step-by-step production, classic_master_slave for simple delegation, and master_slave_discussion for ambiguous work needing multiple viewpoints.",
-    "- If the user asks about memory, explain that successful jobs create reviewable experience candidates; the user must adopt them before reuse.",
+    "- If the user asks about memory, explain that finished jobs create reviewable experience candidates; the user must adopt them before reuse. Adopted memories gain strength when recalled and decay when stale or contradicted.",
     "",
     "User work profile:",
     profile.summary,

@@ -38,11 +38,19 @@ test("panel agent personalizes child prompts from the work profile", () => {
   assert.match(researchPrompt, /数据可追溯、风险清楚、能直接给一线执行/);
   assert.match(researchPrompt, /经验库-资料\.md/);
   assert.match(researchPrompt, /state\/stage-\{stage_number\}-\{type\}-output\.json/);
+  assert.match(researchPrompt, /Post-work self-evolution review/);
+  assert.match(researchPrompt, /experience_candidate object/);
+  assert.match(researchPrompt, /success_pattern, failure_pattern, or agent_lesson/);
+  assert.match(researchPrompt, /utility_score/);
+  assert.match(researchPrompt, /decay_sensitivity/);
+  assert.match(researchPrompt, /capacity_bucket/);
   assert.doesNotMatch(researchPrompt, /api key configured separately/i);
 
   const panelPrompt = files.find((file) => file.id === "panel-supervisor-agent")?.contents ?? "";
   assert.match(panelPrompt, /# 蜂后/);
   assert.match(panelPrompt, /Prompt-personalization responsibility/);
   assert.match(panelPrompt, /AGENTS\.md must contain the work profile/);
+  assert.match(panelPrompt, /post-work self-evolution review/);
+  assert.match(panelPrompt, /Capacity control/);
   assert.match(panelPrompt, /API key: configured separately; never include it here/);
 });
