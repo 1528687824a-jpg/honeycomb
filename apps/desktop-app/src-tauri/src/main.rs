@@ -472,6 +472,11 @@ async fn generate_first_run_suggestions(payload: SuggestionPayload) -> Result<In
     } else {
         format!("Daily work: {}", payload.daily_work.trim())
     };
+    let role_instruction = if payload.role.trim().is_empty() {
+        "Role is unknown. Generate roleExamples from the industry/domain, and keep workOptions broad placeholders until a role is supplied.".to_string()
+    } else {
+        "Role is known. Generate workOptions from Role only. Do not use the industry/domain or daily work to add domain-specific nouns unless those nouns appear in Role itself.".to_string()
+    };
     let content = call_chat_completion(
         &payload.provider,
         vec![
@@ -482,7 +487,7 @@ async fn generate_first_run_suggestions(payload: SuggestionPayload) -> Result<In
             serde_json::json!({
                 "role": "user",
                 "content": format!(
-                    "Language: {language_name}\nIndustry/domain: {}\n{role_line}\n{work_line}\nReturn JSON with exactly this shape: {{\"roleExamples\":[3 or 4 short role names],\"workOptions\":[4 concrete daily work options],\"qualityExamples\":[4 short examples of excellent output for this user's role and work]}}. Make every item specific to the domain. Keep each item short.",
+                    "Language: {language_name}\nIndustry/domain for roleExamples only: {}\n{role_line}\n{work_line}\nRule: {role_instruction}\nReturn JSON with exactly this shape: {{\"roleExamples\":[3 or 4 short role names],\"workOptions\":[4 concrete daily work options],\"qualityExamples\":[4 short examples of excellent output for this user's role and work]}}. Keep each item short. Never mix stale occupations from previous answers.",
                     payload.industry.trim()
                 )
             }),

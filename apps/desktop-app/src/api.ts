@@ -1,5 +1,6 @@
-const API_BASE = import.meta.env.VITE_ORCHESTRATOR_URL ?? "http://127.0.0.1:3000";
-const STATIC_API_AUTH_TOKEN = import.meta.env.VITE_HONEYCOMB_API_TOKEN ?? "";
+const viteEnv = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env ?? {};
+const API_BASE = viteEnv.VITE_ORCHESTRATOR_URL ?? "http://127.0.0.1:3000";
+const STATIC_API_AUTH_TOKEN = viteEnv.VITE_HONEYCOMB_API_TOKEN ?? "";
 
 let apiAuthTokenPromise: Promise<string | null> | null = null;
 
