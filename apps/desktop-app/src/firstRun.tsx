@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, Check, Eye, EyeOff, KeyRound, ShieldCheck, Sparkles } from "lucide-react";
 import {
   personalizePanelAgentPrompts,
@@ -34,6 +34,8 @@ import {
   buildPersonalizedChildAgentPrompt,
   buildPersonalizedPanelSupervisorPrompt
 } from "../../../packages/shared/src/panel-agent-prompt-designer";
+
+const LogoFormationScene = lazy(() => import("./LogoFormationScene"));
 
 type SetupStage =
   | "welcome"
@@ -1034,16 +1036,14 @@ export function FirstRunPanel({ language, onComplete, onCancel, flow = "full" }:
   if (stage === "openclawInvite") {
     return (
       <section className={`firstRun openclawInviteStage ${inviteMood}`}>
-        <div className="logoLineField" aria-hidden="true">
-          {Array.from({ length: 64 }, (_, index) => <span key={index} />)}
-        </div>
-        <div className="inviteLightOrb" aria-hidden="true" />
         <div className="openclawLogoScene">
           <div className="inviteConfetti" aria-hidden="true">
             {Array.from({ length: 30 }, (_, index) => <span key={index} />)}
           </div>
           <div className="inviteLogoWrap">
-            <HoneycombLogo size={172} mode={inviteMood === "sad" ? "thinking" : "talking"} className="inviteLogo" alt="honeycomb" />
+            <Suspense fallback={<HoneycombLogo size={172} mode="talking" className="inviteLogo" alt="honeycomb" />}>
+              <LogoFormationScene size={172} mood={inviteMood} className="inviteLogo" alt="honeycomb" />
+            </Suspense>
             <span className="inviteTears" aria-hidden="true"><i /><i /></span>
           </div>
           <p className="inviteDialogue" aria-label={inviteText}>
