@@ -12,9 +12,10 @@ use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
 const SINGLE_INSTANCE_ADDR: &str = "127.0.0.1:48617";
+const ANIMATION_PREVIEW_INSTANCE_ADDR: &str = "127.0.0.1:48618";
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -840,25 +841,68 @@ fn open_in_file_explorer(path: String) -> Result<(), String> {
     }
 }
 
-fn focus_main_window(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
+fn is_animation_preview_mode() -> bool {
+    std::env::var("HONEYCOMB_ANIMATION_PREVIEW")
+        .map(|value| matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
+}
+
+fn single_instance_addr(animation_preview_mode: bool) -> &'static str {
+    if animation_preview_mode {
+        ANIMATION_PREVIEW_INSTANCE_ADDR
+    } else {
+        SINGLE_INSTANCE_ADDR
+    }
+}
+
+fn focus_window(app: &AppHandle, label: &str) {
+    if let Some(window) = app.get_webview_window(label) {
         let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
     }
 }
 
-fn notify_existing_instance() {
-    if let Ok(mut stream) = TcpStream::connect(SINGLE_INSTANCE_ADDR) {
+fn open_animation_preview_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("animation-preview") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+        return;
+    }
+
+    match WebviewWindowBuilder::new(
+        app,
+        "animation-preview",
+        WebviewUrl::App("animation-preview.html".into()),
+    )
+    .title("Honeycomb 动画分镜预览")
+    .inner_size(980.0, 720.0)
+    .min_inner_size(760.0, 560.0)
+    .resizable(true)
+    .build()
+    {
+        Ok(window) => {
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+        Err(error) => eprintln!("failed to open animation preview window: {error}"),
+    }
+}
+
+fn notify_existing_instance(addr: &str) {
+    if let Ok(mut stream) = TcpStream::connect(addr) {
         let _ = stream.write_all(b"focus");
     }
 }
 
 fn main() {
-    let single_instance_listener = match TcpListener::bind(SINGLE_INSTANCE_ADDR) {
+    let animation_preview_mode = is_animation_preview_mode();
+    let instance_addr = single_instance_addr(animation_preview_mode);
+    let single_instance_listener = match TcpListener::bind(instance_addr) {
         Ok(listener) => listener,
         Err(_) => {
-            notify_existing_instance();
+            notify_existing_instance(instance_addr);
             return;
         }
     };
@@ -866,13 +910,24 @@ fn main() {
     tauri::Builder::default()
         .setup(move |app| {
             let app_handle = app.handle().clone();
+            let focus_label = if animation_preview_mode {
+                "animation-preview"
+            } else {
+                "main"
+            };
             thread::spawn(move || {
                 for stream in single_instance_listener.incoming() {
                     if stream.is_ok() {
-                        focus_main_window(&app_handle);
+                        focus_window(&app_handle, focus_label);
                     }
                 }
             });
+            if animation_preview_mode {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.hide();
+                }
+                open_animation_preview_window(app.handle());
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
