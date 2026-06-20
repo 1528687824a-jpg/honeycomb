@@ -40,7 +40,33 @@ function Send-PreviewFocus {
   }
 }
 
-function Stop-StalePreviewDevServer {
+function Stop-ProcessTreeById {
+  param([int]$RootProcessId)
+
+  if ($RootProcessId -le 0) {
+    return
+  }
+
+  $children = Get-CimInstance Win32_Process -Filter "ParentProcessId = $RootProcessId" -ErrorAction SilentlyContinue
+  foreach ($child in $children) {
+    Stop-ProcessTreeById -RootProcessId ([int]$child.ProcessId)
+  }
+
+  Stop-Process -Id $RootProcessId -Force -ErrorAction SilentlyContinue
+}
+
+function Stop-AnimationPreviewProcesses {
+  $previewListeners = Get-NetTCPConnection -LocalPort 48618 -State Listen -ErrorAction SilentlyContinue
+  foreach ($listener in $previewListeners) {
+    $processId = [int]$listener.OwningProcess
+    if ($processId -gt 0) {
+      Write-LaunchLog "Stopping existing animation preview instance: pid=$processId"
+      Stop-ProcessTreeById -RootProcessId $processId
+    }
+  }
+
+  Start-Sleep -Milliseconds 350
+
   $listeners = Get-NetTCPConnection -LocalPort 5173 -State Listen -ErrorAction SilentlyContinue
   foreach ($listener in $listeners) {
     $processId = [int]$listener.OwningProcess
@@ -61,7 +87,7 @@ function Stop-StalePreviewDevServer {
 
     if ($belongsToPreview) {
       Write-LaunchLog "Stopping stale preview dev server on 5173: pid=$processId command=$commandLine"
-      Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
+      Stop-ProcessTreeById -RootProcessId $processId
     }
   }
 }
@@ -92,18 +118,8 @@ function Show-LaunchFailure {
 try {
   Write-LaunchLog "Launcher started."
 
-  if (Send-PreviewFocus) {
-    Write-LaunchLog "Focused existing animation preview window."
-    exit 0
-  }
-
-  Stop-StalePreviewDevServer
+  Stop-AnimationPreviewProcesses
   Start-Sleep -Milliseconds 800
-
-  if (Send-PreviewFocus) {
-    Write-LaunchLog "Focused animation preview window after stale server cleanup."
-    exit 0
-  }
 
   $npm = (Get-Command npm.cmd -ErrorAction Stop).Source
   Write-LaunchLog "Starting animation preview via npm: $npm"

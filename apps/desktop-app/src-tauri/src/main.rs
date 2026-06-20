@@ -12,7 +12,7 @@ use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 const SINGLE_INSTANCE_ADDR: &str = "127.0.0.1:48617";
 const ANIMATION_PREVIEW_INSTANCE_ADDR: &str = "127.0.0.1:48618";
@@ -883,6 +883,12 @@ fn open_animation_preview_window(app: &AppHandle) {
     .build()
     {
         Ok(window) => {
+            let app_for_close = app.clone();
+            window.on_window_event(move |event| {
+                if matches!(event, WindowEvent::CloseRequested { .. }) {
+                    app_for_close.exit(0);
+                }
+            });
             let _ = window.show();
             let _ = window.set_focus();
         }
@@ -910,15 +916,14 @@ fn main() {
     tauri::Builder::default()
         .setup(move |app| {
             let app_handle = app.handle().clone();
-            let focus_label = if animation_preview_mode {
-                "animation-preview"
-            } else {
-                "main"
-            };
             thread::spawn(move || {
                 for stream in single_instance_listener.incoming() {
                     if stream.is_ok() {
-                        focus_window(&app_handle, focus_label);
+                        if animation_preview_mode {
+                            open_animation_preview_window(&app_handle);
+                        } else {
+                            focus_window(&app_handle, "main");
+                        }
                     }
                 }
             });
