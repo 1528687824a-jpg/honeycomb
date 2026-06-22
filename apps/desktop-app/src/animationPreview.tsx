@@ -9,23 +9,28 @@ type PreviewMood = "asking" | "sad" | "happy";
 const storyboardFrames = [
   {
     time: "0.0s",
-    title: "播放素材",
-    body: "询问态直接播放桌面 jimeng-2026-06-22-4479.mp4 接入后的效果。"
+    title: "光线入场",
+    body: "用 SVG/GSAP 仿照即梦视频：多条金色光带从外圈沿弧线向中心流动。"
   },
   {
-    time: "1.2s",
-    title: "光线汇入",
-    body: "使用你生成的视频里的弧线光流，不再使用手写 SVG 光线。"
+    time: "0.3s",
+    title: "漩涡汇入",
+    body: "光线统一向左弯，持续流向蜂巢边缘，形成向中心收束的旋涡感。"
   },
   {
-    time: "3.9s",
-    title: "最终定格",
-    body: "视频停在最终 logo 画面；开心和难过状态仍走原来的反馈动画。"
+    time: "0.9s",
+    title: "logo 浮现",
+    body: "最终 logo 和背后的暖色光团一起从暗到亮，避免出现视频黑色方块。"
   },
   {
-    time: "4.0s",
+    time: "1.8s",
+    title: "光线退场",
+    body: "流动光带逐步消失，只留下蜂巢 logo 和低亮度呼吸光。"
+  },
+  {
+    time: "2.3s",
     title: "保持一致",
-    body: "预览窗口和首次启动共用同一个组件，所以看到的就是操作面板里的询问态。"
+    body: "预览窗口和首次启动共用同一个组件，看到的就是操作面板的询问态。"
   }
 ];
 
@@ -45,7 +50,7 @@ function AnimationPreviewApp() {
         <div>
           <p className="animationPreviewEyebrow">Honeycomb 动画分镜预览</p>
           <h1>Logo 成形动画</h1>
-          <p>这里直接播放你提供的即梦动画素材，用来快速检查操作面板询问态里的真实效果。</p>
+          <p>这里复用首次启动的真实舞台和动画组件，用来快速调试操作面板里会出现的效果。</p>
         </div>
         <button className="animationReplayButton" type="button" onClick={() => setRunId((value) => value + 1)}>
           <RefreshCw size={16} aria-hidden="true" />

@@ -3755,6 +3755,11 @@ select {
   filter: drop-shadow(0 0 28px rgba(245, 185, 66, 0.52));
 }
 
+.logoFormationScene-asking.inviteLogo,
+.logoFormationScene-asking.animationPreviewLogo {
+  filter: none;
+}
+
 .logoFormationScene {
   position: relative;
   display: inline-grid;
@@ -3763,10 +3768,13 @@ select {
   isolation: isolate;
 }
 
+.logoFormationScene-asking {
+  isolation: auto;
+}
+
 .formationAmbient,
-.formationVideo,
+.formationCenterGlow,
 .formationSvg,
-.formationGhostLogo,
 .formationLogoImage {
   position: absolute;
   inset: 0;
@@ -3779,36 +3787,35 @@ select {
   z-index: 0;
   border-radius: 999px;
   background:
-    radial-gradient(circle at 50% 50%, rgba(245, 185, 66, 0.52), rgba(245, 185, 66, 0.24) 34%, rgba(245, 185, 66, 0.08) 58%, transparent 76%);
-  filter: blur(16px);
+    radial-gradient(circle at 50% 50%, rgba(245, 185, 66, 0.42), rgba(245, 185, 66, 0.18) 35%, rgba(245, 185, 66, 0.06) 58%, transparent 78%);
+  filter: blur(18px);
   transform-origin: 50% 50%;
+}
+
+.formationCenterGlow {
+  z-index: 1;
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(255, 235, 158, 0.32), rgba(245, 185, 66, 0.16) 34%, transparent 64%);
+  filter: blur(8px);
+  transform-origin: 50% 50%;
+  mix-blend-mode: screen;
 }
 
 .formationSvg {
-  z-index: 1;
-  pointer-events: none;
-}
-
-.formationVideo {
-  z-index: 3;
-  object-fit: contain;
-  transform-origin: 50% 50%;
-  pointer-events: none;
-}
-
-.formationGhostLogo,
-.formationLogoImage {
-  object-fit: contain;
-  transform-origin: 50% 50%;
-}
-
-.formationGhostLogo {
   z-index: 2;
+  pointer-events: none;
+  overflow: visible;
   mix-blend-mode: screen;
 }
 
 .formationLogoImage {
-  z-index: 3;
+  object-fit: contain;
+  transform-origin: 50% 50%;
+}
+
+.formationLogoImage {
+  z-index: 4;
 }
 
 .formationPath {
@@ -3820,20 +3827,81 @@ select {
   fill: none;
   stroke-linecap: round;
   stroke-linejoin: round;
-  filter: drop-shadow(0 0 10px rgba(245, 185, 66, 0.78));
   vector-effect: non-scaling-stroke;
 }
 
-.formationStream-main {
-  stroke-width: 8.6;
+.formationStream-aura {
+  stroke-width: 24;
   opacity: 0;
-  filter: drop-shadow(0 0 16px rgba(245, 185, 66, 0.82));
+  filter: blur(8px);
 }
 
-.formationStream-hot {
-  stroke-width: 2.2;
+.formationStream-ribbon {
+  stroke-width: 7.8;
   opacity: 0;
-  filter: drop-shadow(0 0 12px rgba(255, 231, 150, 0.82));
+  filter:
+    drop-shadow(0 0 7px rgba(255, 226, 146, 0.68))
+    drop-shadow(0 0 18px rgba(245, 185, 66, 0.5))
+    drop-shadow(0 0 34px rgba(245, 185, 66, 0.28));
+}
+
+.formationStream-core {
+  stroke-width: 2.4;
+  opacity: 0;
+  filter:
+    drop-shadow(0 0 6px rgba(255, 244, 194, 0.96))
+    drop-shadow(0 0 16px rgba(245, 185, 66, 0.74));
+}
+
+.formationBloom {
+  opacity: 0.42;
+  filter: blur(20px);
+  transform-origin: 50% 50%;
+}
+
+.formationSpark {
+  fill: rgba(255, 222, 128, 0.72);
+  filter:
+    drop-shadow(0 0 5px rgba(255, 238, 176, 0.72))
+    drop-shadow(0 0 12px rgba(245, 185, 66, 0.42));
+}
+
+.formationVectorLogo {
+  transform-origin: 50% 58%;
+}
+
+.formationLogoFill {
+  fill: rgba(67, 54, 27, 0.82);
+}
+
+.formationLogoStroke {
+  fill: none;
+  stroke: #ffd56e;
+  stroke-width: 14;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.formationLogoInnerStroke {
+  fill: none;
+  stroke: #f3a22a;
+  stroke-width: 7;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.formationLogoCoreShadow {
+  fill: rgba(255, 239, 199, 0.42);
+  filter: blur(3px);
+}
+
+.formationLogoCore {
+  fill: #f4efe3;
+  stroke: rgba(255, 255, 255, 0.7);
+  stroke-width: 2.4;
+  stroke-linejoin: round;
 }
 
 .formationParticle {
@@ -3867,8 +3935,8 @@ select {
 
 .openclawInviteStage.sad .formationAmbient,
 .openclawInviteStage.happy .formationAmbient,
-.openclawInviteStage.sad .formationGhostLogo,
-.openclawInviteStage.happy .formationGhostLogo {
+.openclawInviteStage.sad .formationCenterGlow,
+.openclawInviteStage.happy .formationCenterGlow {
   opacity: 0 !important;
 }
 
