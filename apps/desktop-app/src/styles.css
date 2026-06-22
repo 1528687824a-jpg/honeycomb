@@ -3764,6 +3764,7 @@ select {
 }
 
 .formationAmbient,
+.formationVideo,
 .formationSvg,
 .formationGhostLogo,
 .formationLogoImage {
@@ -3785,6 +3786,13 @@ select {
 
 .formationSvg {
   z-index: 1;
+  pointer-events: none;
+}
+
+.formationVideo {
+  z-index: 3;
+  object-fit: contain;
+  transform-origin: 50% 50%;
   pointer-events: none;
 }
 
