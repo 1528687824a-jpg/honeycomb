@@ -9,28 +9,28 @@ type PreviewMood = "asking" | "sad" | "happy";
 const storyboardFrames = [
   {
     time: "0.0s",
-    title: "光点苏醒",
-    body: "画面先保持安静，中心周围出现几束很细的暖光，给 logo 成形留出期待感。"
+    title: "光线入场",
+    body: "持续光带从外圈沿弧线向中心流动，统一右向左弯，形成漩涡感。"
   },
   {
     time: "0.3s",
-    title: "四周汇聚",
-    body: "光轨从七个方向沿弧线向中心流动，避免机械直线平移，强化“汇聚”的感觉。"
+    title: "同形虚影",
+    body: "虚影直接复用最终 logo 图形，大小和形状一致，不再出现另一套蜂巢轮廓。"
   },
   {
     time: "0.9s",
-    title: "描出蜂巢",
-    body: "三枚蜂巢轮廓被光线描出来，用户能看见图形正在被生成，而不是突然贴图。"
+    title: "logo 浮现",
+    body: "最终 logo 慢慢从虚影里浮现，背景光团同步从暗到亮。"
   },
   {
     time: "1.4s",
-    title: "核心亮起",
-    body: "白色中心块从聚集的光里浮现，形成视觉焦点，也让 Honeycomb 标识更稳定。"
+    title: "光线退场",
+    body: "流动光带逐步淡出，不抢最终标识的视觉重心。"
   },
   {
     time: "2.1s",
-    title: "最终落位",
-    body: "辅助光线退场，最终 PNG 标识清晰落位，留下轻微暖色光晕。"
+    title: "呼吸光团",
+    body: "最终保留低亮度暖色光团，像呼吸一样轻微明暗变化。"
   }
 ];
 
@@ -50,7 +50,7 @@ function AnimationPreviewApp() {
         <div>
           <p className="animationPreviewEyebrow">Honeycomb 动画分镜预览</p>
           <h1>Logo 成形动画</h1>
-          <p>独立窗口用于调试首次启动里的 logo 成形镜头，不进入正式操作面板。</p>
+          <p>这里复用首次启动的真实舞台和动画组件，用来快速调试操作面板里会出现的效果。</p>
         </div>
         <button className="animationReplayButton" type="button" onClick={() => setRunId((value) => value + 1)}>
           <RefreshCw size={16} aria-hidden="true" />
@@ -80,22 +80,26 @@ function AnimationPreviewApp() {
         <section className="animationLivePanel" aria-label="实时动画预览">
           <div className="animationLiveTitle">
             <span>实时窗口</span>
-            <small>真实 GSAP 动画</small>
+            <small>与首次启动共用同一组件</small>
           </div>
-          <div className="animationStageSurface">
-            <div className="animationStageGlow" aria-hidden="true" />
-            <div className="animationLogoFrame">
-              <LogoFormationScene
-                key={`${mood}-${runId}`}
-                size={260}
-                mood={mood}
-                className="animationPreviewLogo"
-                alt="Honeycomb logo"
-              />
-              <span className="animationPreviewTears" aria-hidden="true">
-                <i />
-                <i />
-              </span>
+          <div className={`animationStageSurface openclawInviteStage ${mood}`}>
+            <div className="openclawLogoScene animationPreviewInviteScene">
+              <div className="inviteConfetti" aria-hidden="true">
+                {Array.from({ length: 30 }, (_, index) => <span key={index} />)}
+              </div>
+              <div className="inviteLogoWrap animationPreviewLogoWrap">
+                <LogoFormationScene
+                  key={`${mood}-${runId}`}
+                  size={260}
+                  mood={mood}
+                  className="inviteLogo animationPreviewLogo"
+                  alt="Honeycomb logo"
+                />
+                <span className="inviteTears" aria-hidden="true">
+                  <i />
+                  <i />
+                </span>
+              </div>
             </div>
           </div>
           <div className="animationMoodBar">

@@ -3717,7 +3717,7 @@ select {
   place-items: center;
   overflow: hidden;
   background:
-    radial-gradient(circle at 50% 45%, rgba(245, 185, 66, 0.16), transparent 30%),
+    radial-gradient(circle at 50% 45%, rgba(245, 185, 66, 0.08), transparent 32%),
     #0f1115;
   color: #ffffff;
 }
@@ -3763,7 +3763,9 @@ select {
   isolation: isolate;
 }
 
+.formationAmbient,
 .formationSvg,
+.formationGhostLogo,
 .formationLogoImage {
   position: absolute;
   inset: 0;
@@ -3772,15 +3774,33 @@ select {
   overflow: visible;
 }
 
+.formationAmbient {
+  z-index: 0;
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(245, 185, 66, 0.52), rgba(245, 185, 66, 0.24) 34%, rgba(245, 185, 66, 0.08) 58%, transparent 76%);
+  filter: blur(16px);
+  transform-origin: 50% 50%;
+}
+
 .formationSvg {
   z-index: 1;
   pointer-events: none;
 }
 
+.formationGhostLogo,
 .formationLogoImage {
-  z-index: 2;
   object-fit: contain;
   transform-origin: 50% 50%;
+}
+
+.formationGhostLogo {
+  z-index: 2;
+  mix-blend-mode: screen;
+}
+
+.formationLogoImage {
+  z-index: 3;
 }
 
 .formationPath {
@@ -3790,9 +3810,22 @@ select {
 
 .formationStream {
   fill: none;
-  stroke-width: 2.4;
   stroke-linecap: round;
-  filter: drop-shadow(0 0 8px rgba(245, 185, 66, 0.72));
+  stroke-linejoin: round;
+  filter: drop-shadow(0 0 10px rgba(245, 185, 66, 0.78));
+  vector-effect: non-scaling-stroke;
+}
+
+.formationStream-main {
+  stroke-width: 8.6;
+  opacity: 0;
+  filter: drop-shadow(0 0 16px rgba(245, 185, 66, 0.82));
+}
+
+.formationStream-hot {
+  stroke-width: 2.2;
+  opacity: 0;
+  filter: drop-shadow(0 0 12px rgba(255, 231, 150, 0.82));
 }
 
 .formationParticle {
@@ -3822,6 +3855,20 @@ select {
 .openclawInviteStage.sad .formationSvg,
 .openclawInviteStage.happy .formationSvg {
   opacity: 0 !important;
+}
+
+.openclawInviteStage.sad .formationAmbient,
+.openclawInviteStage.happy .formationAmbient,
+.openclawInviteStage.sad .formationGhostLogo,
+.openclawInviteStage.happy .formationGhostLogo {
+  opacity: 0 !important;
+}
+
+.openclawInviteStage.sad .formationLogoImage,
+.openclawInviteStage.happy .formationLogoImage {
+  opacity: 1 !important;
+  transform: scale(1) !important;
+  filter: drop-shadow(0 0 28px rgba(245, 185, 66, 0.52)) brightness(1) !important;
 }
 
 .inviteDialogue {
@@ -4592,6 +4639,25 @@ select {
     #0f1115;
 }
 
+.animationStageSurface.openclawInviteStage {
+  min-height: 420px;
+  background:
+    radial-gradient(circle at 50% 45%, rgba(245, 185, 66, 0.08), transparent 32%),
+    #0f1115;
+}
+
+.animationStageSurface.openclawInviteStage.sad {
+  background:
+    radial-gradient(circle at 50% 44%, rgba(145, 151, 162, 0.14), transparent 31%),
+    linear-gradient(180deg, #15171b 0%, #0f1115 100%);
+}
+
+.animationStageSurface.openclawInviteStage.happy {
+  background:
+    radial-gradient(circle at 50% 44%, rgba(245, 185, 66, 0.24), transparent 32%),
+    #0f1115;
+}
+
 .animationStageGlow {
   position: absolute;
   width: min(54vw, 460px);
@@ -4608,6 +4674,17 @@ select {
   position: relative;
   display: grid;
   place-items: center;
+}
+
+.animationPreviewInviteScene {
+  width: 100%;
+  min-height: 100%;
+  align-content: center;
+  gap: 0;
+}
+
+.animationPreviewLogoWrap {
+  animation-delay: 2200ms;
 }
 
 .animationPreviewLogo {
