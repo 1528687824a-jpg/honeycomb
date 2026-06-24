@@ -2045,6 +2045,7 @@ function App() {
   const [agentConfigSaving, setAgentConfigSaving] = useState(false);
   const [showAgentApiKey, setShowAgentApiKey] = useState(false);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
+  const conversationBodyRef = useRef<HTMLDivElement>(null);
   const [workbenchConfig, setWorkbenchConfig] = useState<SupervisorWorkbenchConfig>(loadSupervisorWorkbenchConfig);
   const [workbenchMessage, setWorkbenchMessage] = useState("");
   const [runtimeDiagnostics, setRuntimeDiagnostics] = useState<RuntimeDiagnosticsResponse | null>(null);
@@ -2082,6 +2083,16 @@ function App() {
     firstRunPreview?.profile?.supervisorName ||
     backendPanelSupervisorName ||
     (language === "zh" ? "\u9762\u677f\u4e3b\u7ba1 Agent" : "Panel supervisor agent");
+  const activeConversationProject = conversationState.projects.find((project) => project.id === conversationState.activeProjectId);
+  const activeConversationThread = activeConversationProject?.threads.find((thread) => thread.id === conversationState.activeThreadId && !thread.archivedAt);
+  const activeConversationMessages = activeConversationThread?.messages ?? [];
+  const conversationBottomScrollKey = [
+    activeView,
+    conversationState.activeProjectId,
+    conversationState.activeThreadId,
+    activeConversationMessages.length,
+    activeConversationMessages.at(-1)?.id ?? ""
+  ].join(":");
   const workbenchJob = selectedFromList ?? latestJob;
   const workbenchPlanSteps = useMemo(
     () => buildWorkbenchPlanSteps(workbenchJob, timeline, language),
@@ -2157,6 +2168,16 @@ function App() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [archiveDeleteTarget, textInputDialog]);
+
+  useEffect(() => {
+    if (activeView !== "conversations") return;
+    const frameId = window.requestAnimationFrame(() => scrollConversationToBottom());
+    const timeoutId = window.setTimeout(() => scrollConversationToBottom(), 80);
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      window.clearTimeout(timeoutId);
+    };
+  }, [activeView, conversationBottomScrollKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2908,6 +2929,15 @@ function App() {
     window.localStorage.setItem("honeycomb.panelOutputStyle", style);
     setOutputStyleMessage(copy.outputStyleSaved);
     window.setTimeout(() => setOutputStyleMessage(""), 2400);
+  }
+
+  function scrollConversationToBottom(behavior: ScrollBehavior = "auto") {
+    const body = conversationBodyRef.current;
+    if (!body) return;
+    body.scrollTo({
+      top: body.scrollHeight,
+      behavior
+    });
   }
 
   function persistConversationState(nextState: ConversationWorkspaceState) {
@@ -4354,7 +4384,7 @@ function App() {
             </div>
           </header>
 
-          <div className="codexChatBody">
+          <div className="codexChatBody" ref={conversationBodyRef}>
             <article className="codexAssistantMessage">
               <ul>
                 <li>
