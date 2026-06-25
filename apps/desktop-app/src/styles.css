@@ -71,7 +71,41 @@ select {
   grid-template-columns: 46px 210px minmax(0, 1fr);
   background: #0f1115;
   color: #d7dde7;
+  scrollbar-color: rgba(140, 151, 167, 0.42) transparent;
+  scrollbar-width: thin;
   transition: grid-template-columns 180ms ease;
+}
+
+.darkShell * {
+  scrollbar-color: rgba(140, 151, 167, 0.42) transparent;
+  scrollbar-width: thin;
+}
+
+.darkShell::-webkit-scrollbar,
+.darkShell *::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.darkShell::-webkit-scrollbar-track,
+.darkShell::-webkit-scrollbar-corner,
+.darkShell *::-webkit-scrollbar-track,
+.darkShell *::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.darkShell::-webkit-scrollbar-thumb,
+.darkShell *::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: rgba(140, 151, 167, 0.42);
+  background-clip: padding-box;
+}
+
+.darkShell::-webkit-scrollbar-thumb:hover,
+.darkShell *::-webkit-scrollbar-thumb:hover {
+  background: rgba(174, 184, 199, 0.58);
+  background-clip: padding-box;
 }
 
 .darkShell.sideCollapsed {
