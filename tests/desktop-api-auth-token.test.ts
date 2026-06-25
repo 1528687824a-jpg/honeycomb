@@ -1,0 +1,111 @@
+import assert from "node:assert/strict";
+import { afterEach, test } from "node:test";
+import {
+  __apiAuthTokenTestInternals,
+  listJobs
+} from "../apps/desktop-app/src/api";
+
+class MemoryStorage {
+  private readonly values = new Map<string, string>();
+
+  getItem(key: string) {
+    return this.values.get(key) ?? null;
+  }
+
+  setItem(key: string, value: string) {
+    this.values.set(key, value);
+  }
+
+  removeItem(key: string) {
+    this.values.delete(key);
+  }
+}
+
+const originalWindow = (globalThis as { window?: unknown }).window;
+const originalFetch = globalThis.fetch;
+
+function installWindow(storage: MemoryStorage) {
+  (globalThis as { window?: unknown }).window = {
+    localStorage: storage
+  };
+}
+
+function listJobsResponse() {
+  return {
+    jobs: [],
+    page: {
+      limit: 1,
+      hasMore: false,
+      nextCursor: null,
+      sort: "createdAt",
+      order: "desc",
+      filters: {}
+    }
+  };
+}
+
+afterEach(() => {
+  (globalThis as { window?: unknown }).window = originalWindow;
+  globalThis.fetch = originalFetch;
+  __apiAuthTokenTestInternals.resetRuntimeTokenLoaderForTests();
+  __apiAuthTokenTestInternals.setStaticTokenForTests(null);
+  __apiAuthTokenTestInternals.resetTokenCacheForTests();
+});
+
+test("desktop API auth prefers the runtime token over stale static and stored tokens", async () => {
+  const storage = new MemoryStorage();
+  storage.setItem("honeycomb.apiToken", "stored-old-token");
+  installWindow(storage);
+  __apiAuthTokenTestInternals.setStaticTokenForTests("static-old-token");
+  __apiAuthTokenTestInternals.setRuntimeTokenLoaderForTests(async () => "runtime-fresh-token");
+
+  const seenAuthHeaders: string[] = [];
+  globalThis.fetch = async (_url, init) => {
+    seenAuthHeaders.push(new Headers(init?.headers).get("authorization") ?? "");
+    return new Response(JSON.stringify(listJobsResponse()), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    });
+  };
+
+  await listJobs(1);
+
+  assert.deepEqual(seenAuthHeaders, ["Bearer runtime-fresh-token"]);
+  assert.equal(storage.getItem("honeycomb.apiToken"), "runtime-fresh-token");
+});
+
+test("desktop API auth refreshes the token and retries once after invalid_api_token", async () => {
+  const storage = new MemoryStorage();
+  installWindow(storage);
+  let runtimeToken = "runtime-old-token";
+  __apiAuthTokenTestInternals.setRuntimeTokenLoaderForTests(async () => runtimeToken);
+
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify(listJobsResponse()), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    });
+  await listJobs(1);
+
+  runtimeToken = "runtime-fresh-token";
+  const seenAuthHeaders: string[] = [];
+  globalThis.fetch = async (_url, init) => {
+    const authorization = new Headers(init?.headers).get("authorization") ?? "";
+    seenAuthHeaders.push(authorization);
+    if (authorization === "Bearer runtime-old-token") {
+      return new Response(JSON.stringify({ error: "invalid_api_token" }), {
+        status: 401,
+        headers: { "content-type": "application/json" }
+      });
+    }
+    return new Response(JSON.stringify(listJobsResponse()), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    });
+  };
+
+  await listJobs(1);
+
+  assert.deepEqual(seenAuthHeaders, ["Bearer runtime-old-token", "Bearer runtime-fresh-token"]);
+  assert.equal(storage.getItem("honeycomb.apiToken"), "runtime-fresh-token");
+});

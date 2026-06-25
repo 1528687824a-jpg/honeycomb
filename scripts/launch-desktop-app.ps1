@@ -126,6 +126,74 @@ function Convert-DpapiProviderSecretsForDocker {
   }
 }
 
+function Test-LikelyRealProviderBaseUrl {
+  param([string]$BaseUrl)
+
+  if ([string]::IsNullOrWhiteSpace($BaseUrl)) {
+    return $false
+  }
+
+  try {
+    $uri = [Uri]$BaseUrl
+    $hostName = $uri.Host.ToLowerInvariant()
+    if ($uri.Scheme -ne "https") {
+      return $false
+    }
+    if (
+      $hostName -eq "localhost" -or
+      $hostName -eq "127.0.0.1" -or
+      $hostName -eq "::1" -or
+      $hostName.EndsWith(".localhost") -or
+      $hostName.EndsWith(".invalid") -or
+      $hostName -eq "example.invalid" -or
+      $hostName -eq "api.example.invalid"
+    ) {
+      return $false
+    }
+    return $true
+  } catch {
+    return $false
+  }
+}
+
+function Test-HoneycombRealAgentModeReady {
+  param([string]$RuntimeHostDir)
+
+  $configPath = Join-Path $RuntimeHostDir "agent-model-configs.json"
+  if (-not (Test-Path -LiteralPath $configPath)) {
+    return $false
+  }
+
+  try {
+    $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json -ErrorAction Stop
+    foreach ($property in $config.PSObject.Properties) {
+      if ($property.Name -in @("schemaVersion", "generatedBy", "generatedAt")) {
+        continue
+      }
+      if ($property.Name -like "docker-smoke-*" -or $property.Name -like "network-policy-*") {
+        continue
+      }
+
+      $entry = $property.Value
+      $model = [string]$entry.model
+      $providerId = [string]$entry.providerId
+      $baseUrl = [string]$entry.baseUrl
+      if (
+        $entry.apiKeyConfigured -eq $true -and
+        -not [string]::IsNullOrWhiteSpace($providerId) -and
+        -not [string]::IsNullOrWhiteSpace($model) -and
+        (Test-LikelyRealProviderBaseUrl -BaseUrl $baseUrl)
+      ) {
+        return $true
+      }
+    }
+  } catch {
+    Write-LaunchLog "Could not inspect agent model config for real-mode readiness: $($_.Exception.Message)"
+  }
+
+  return $false
+}
+
 function Invoke-ProcessWithTimeout {
   param(
     [string]$FilePath,
@@ -261,6 +329,36 @@ function Test-HttpReady($Url) {
   } catch {
     return $false
   }
+}
+
+function Test-BackendRuntimeEnvMatches {
+  param([string]$DockerCli)
+
+  $expectedMode = $env:OPENCLAW_AGENT_MODE
+  $expectedRunner = $env:OPENCLAW_AGENT_RUNNER
+  foreach ($container in @("agent-openclaw-orchestrator-api", "agent-openclaw-dbos-worker")) {
+    try {
+      $inspect = Invoke-ProcessWithTimeout `
+        -FilePath $DockerCli `
+        -ArgumentList @("inspect", "--format", "{{range .Config.Env}}{{println .}}{{end}}", $container) `
+        -TimeoutSeconds 10 `
+        -IgnoreExitCode
+      if ($inspect.ExitCode -ne 0) {
+        return $false
+      }
+      $lines = $inspect.Stdout -split "`r?`n"
+      if (-not ($lines -contains "OPENCLAW_AGENT_MODE=$expectedMode")) {
+        return $false
+      }
+      if (-not ($lines -contains "OPENCLAW_AGENT_RUNNER=$expectedRunner")) {
+        return $false
+      }
+    } catch {
+      return $false
+    }
+  }
+
+  return $true
 }
 
 function Test-AuthenticatedApiReady {
@@ -406,11 +504,21 @@ function Invoke-TauriNoBundleBuild {
     [string]$NpmCli
   )
 
-  return Invoke-ProcessWithTimeout `
-    -FilePath $npmCli `
-    -ArgumentList @("--prefix", "apps/desktop-app", "exec", "tauri", "build", "--", "--no-bundle") `
-    -TimeoutSeconds $desktopBuildTimeoutSeconds `
-    -IgnoreExitCode
+  $previousViteApiToken = $env:VITE_HONEYCOMB_API_TOKEN
+  try {
+    Remove-Item Env:\VITE_HONEYCOMB_API_TOKEN -ErrorAction SilentlyContinue
+    return Invoke-ProcessWithTimeout `
+      -FilePath $npmCli `
+      -ArgumentList @("--prefix", "apps/desktop-app", "exec", "tauri", "build", "--", "--no-bundle") `
+      -TimeoutSeconds $desktopBuildTimeoutSeconds `
+      -IgnoreExitCode
+  } finally {
+    if ($null -eq $previousViteApiToken) {
+      Remove-Item Env:\VITE_HONEYCOMB_API_TOKEN -ErrorAction SilentlyContinue
+    } else {
+      $env:VITE_HONEYCOMB_API_TOKEN = $previousViteApiToken
+    }
+  }
 }
 
 function Invoke-CargoCleanForDesktop {
@@ -477,6 +585,17 @@ function Invoke-DesktopNoBundleBuild {
 try {
   Write-LaunchLog "Launcher started"
   Convert-DpapiProviderSecretsForDocker -SecretHostDir $honeycombSecretHostDir
+  if ([string]::IsNullOrWhiteSpace($env:OPENCLAW_AGENT_MODE)) {
+    if (Test-HoneycombRealAgentModeReady -RuntimeHostDir $honeycombRuntimeHostDir) {
+      $env:OPENCLAW_AGENT_MODE = "real"
+    } else {
+      $env:OPENCLAW_AGENT_MODE = "mock"
+    }
+  }
+  if ([string]::IsNullOrWhiteSpace($env:OPENCLAW_AGENT_RUNNER)) {
+    $env:OPENCLAW_AGENT_RUNNER = "provider-direct"
+  }
+  Write-LaunchLog "Backend agent runtime mode=$env:OPENCLAW_AGENT_MODE runner=$env:OPENCLAW_AGENT_RUNNER"
 
   $mutex = [System.Threading.Mutex]::new($false, "Global\HoneycombDesktopLauncher")
   $lockTaken = $mutex.WaitOne(0)
@@ -507,9 +626,13 @@ try {
   }
 
   $backendNeedsBuild = Test-BackendStackNeedsBuild
-  if ((Test-HttpReady $apiHealthUrl) -and (Test-AuthenticatedApiReady) -and -not $backendNeedsBuild) {
+  $backendRuntimeMatches = Test-BackendRuntimeEnvMatches -DockerCli $dockerCli
+  if ((Test-HttpReady $apiHealthUrl) -and (Test-AuthenticatedApiReady) -and -not $backendNeedsBuild -and $backendRuntimeMatches) {
     Write-LaunchLog "API already healthy and authenticated, and backend images are up to date; skipping Docker Compose startup"
   } else {
+    if (-not $backendRuntimeMatches) {
+      Write-LaunchLog "Backend containers do not match desired agent runtime env; Docker Compose will refresh them"
+    }
     $dockerReadyDeadline = (Get-Date).AddSeconds($TimeoutSeconds)
     $initialProbeTimeoutSeconds = [Math]::Min($dockerProbeTimeoutSeconds, [Math]::Max(1, $TimeoutSeconds))
     if (-not (Test-DockerReady -TimeoutSeconds $initialProbeTimeoutSeconds)) {

@@ -1,4 +1,4 @@
-import { appendFile, mkdir, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import {
@@ -60,8 +60,13 @@ import {
   type AgentRuntimeRoute,
   type AgentRuntimeSecrets
 } from "./agent-runtime";
-import { runOpenClawAgent, type OpenClawRunResult } from "./adapters/openclaw";
-import { loadClusterConfig } from "./config/cluster";
+import {
+  getOpenClawAgentRunner,
+  runOpenClawAgent,
+  shouldUseProviderDirectRunner,
+  type OpenClawRunResult
+} from "./adapters/openclaw";
+import { loadClusterConfig, type LoadedClusterConfig } from "./config/cluster";
 import { deliverOutboundMessage } from "./egress/dispatcher";
 import { maybeCrashOnce } from "./test-crash";
 
@@ -92,6 +97,13 @@ function sha256(input: string) {
   return createHash("sha256").update(input).digest("hex");
 }
 
+function truncateForPrompt(value: string | null | undefined, maxChars = 6000) {
+  if (!value) {
+    return "";
+  }
+  return value.length > maxChars ? `${value.slice(0, maxChars)}\n[truncated]` : value;
+}
+
 function toSafeErrorMessage(error: unknown) {
   return (error instanceof Error ? error.message : String(error)).replace(/\u0000/g, "");
 }
@@ -101,8 +113,11 @@ function isOpenClawRealMode() {
 }
 
 function routeReadinessError(route: AgentRuntimeSecrets) {
-  if (!isOpenClawRealMode() || !route.providerId) {
+  if (!isOpenClawRealMode()) {
     return null;
+  }
+  if (!route.providerId) {
+    return shouldUseProviderDirectRunner() ? "provider_not_bound" : null;
   }
   if (!route.providerBaseUrl) {
     return "provider_base_url_missing";
@@ -147,6 +162,8 @@ async function runOpenClawAgentIdempotent(input: {
   agentId: string;
   sessionId: string;
   message: string;
+  providerDirectMessage?: string | null;
+  outputDir?: string | null;
   timeoutSeconds: number;
 }): Promise<OpenClawRunResult | null> {
   const idempotencyKey = [
@@ -226,6 +243,11 @@ async function runOpenClawAgentIdempotent(input: {
       actionType: input.actionType,
       idempotencyKey,
       mode: isOpenClawRealMode() ? "real" : "mock",
+      runner: isOpenClawRealMode()
+        ? shouldUseProviderDirectRunner()
+          ? "provider-direct"
+          : getOpenClawAgentRunner()
+        : "mock",
       route: redactedPrimaryRoute,
       routeCandidates: redactedRouteCandidates
     },
@@ -258,12 +280,15 @@ async function runOpenClawAgentIdempotent(input: {
           agentId: route.openclawAgentId,
           sessionId: input.sessionId,
           message: input.message,
+          providerDirectMessage: input.providerDirectMessage,
           provider: {
             providerId: route.providerId,
             baseUrl: route.providerBaseUrl,
             model: route.model,
-            apiKey: route.apiKey
+            apiKey: route.apiKey,
+            agentRole: route.agentRole
           },
+          outputDir: input.outputDir,
           timeoutSeconds: input.timeoutSeconds
         });
         const successAttempt = routeAttemptPayload({
@@ -550,6 +575,27 @@ export async function markJobWaitingForHuman(jobId: string, reason: string) {
   await setJobStatus(jobId, "waiting_for_human", { reason });
 }
 
+export async function ensureJobWaitingForHuman(input: { jobId: string; reason: string }) {
+  const job = await getJob(input.jobId);
+  if (!job) {
+    throw new Error(`Job not found: ${input.jobId}`);
+  }
+  if (job.status === "waiting_for_human") {
+    return {
+      changed: false,
+      status: job.status,
+      reason: job.heartbeatNote ?? input.reason
+    };
+  }
+
+  await markJobWaitingForHuman(input.jobId, input.reason);
+  return {
+    changed: true,
+    status: "waiting_for_human" as const,
+    reason: input.reason
+  };
+}
+
 export async function markJobFailed(jobId: string, reason: string) {
   await setJobStatus(jobId, "failed", { reason });
 }
@@ -604,6 +650,7 @@ export async function prepareJobWorkspace(jobId: string) {
     messageType: "user_task",
     artifactId: userRequest.id,
     content: [
+      `Task completed: ${jobId}`,
       `@main-agent 新任务 ${jobId}`,
       displayOnlyHandoffLine("main-agent", "真人输入，进入主 Agent 编排"),
       "",
@@ -718,16 +765,216 @@ export function mergePromptStagesWithClusterStages(
   if (!clusterStages?.length) {
     return promptStages;
   }
-
-  const seenAgentIds = new Set(clusterStages.map((stage) => stage.agentId));
-  const merged = [...clusterStages];
-  for (const stage of promptStages) {
-    if (!seenAgentIds.has(stage.agentId)) {
-      merged.push(stage);
-      seenAgentIds.add(stage.agentId);
-    }
+  if (!promptStages.length) {
+    return clusterStages;
   }
-  return merged;
+
+  return promptStages.map((stage) => {
+    const matchingClusterStage =
+      clusterStages.find((candidate) => candidate.agentId === stage.agentId) ??
+      clusterStages.find((candidate) => candidate.stageType === stage.stageType);
+
+    if (!matchingClusterStage) {
+      return stage;
+    }
+
+    return {
+      ...stage,
+      stageType: matchingClusterStage.stageType || stage.stageType,
+      name: matchingClusterStage.name || stage.name,
+      acceptanceCriteria: matchingClusterStage.acceptanceCriteria.length
+        ? matchingClusterStage.acceptanceCriteria
+        : stage.acceptanceCriteria,
+      maxRetries: matchingClusterStage.maxRetries ?? stage.maxRetries
+    };
+  });
+}
+
+type StageSelectionSummary = {
+  stageType: string;
+  agentId: string;
+  name: string;
+  reason: string;
+  source: "prompt" | "cluster";
+};
+
+type SkippedClusterStageSummary = {
+  stageType: string;
+  agentId: string;
+  name: string;
+  reason: string;
+};
+
+function stageSelectionReason(stage: StageDefinition) {
+  if (stage.agentId === "research-agent" || stage.stageType === "research") {
+    return "Selected only when the task needs fresh facts, sources, market context, or external research before production.";
+  }
+  if (stage.agentId === "writer-agent" || stage.stageType === "write" || stage.stageType === "writing") {
+    return "Selected because the task needs written copy, titles, scripts, captions, summaries, or text that a downstream media stage can use.";
+  }
+  if (stage.agentId === "image-agent" || stage.stageType === "image") {
+    return "Selected because the task asks for a still image, poster, cover, visual brief, or image-generation artifact.";
+  }
+  if (stage.agentId === "video-agent" || stage.stageType === "video") {
+    return "Selected because the task asks for video, animation, storyboard, motion, timing, or a video-generation artifact.";
+  }
+  if (stage.agentId === "test-agent" || stage.stageType === "review") {
+    return "Selected as the quality gate for child-agent deliverables.";
+  }
+  return "Selected because prompt analysis matched this specialist capability to the requested deliverable.";
+}
+
+function skippedClusterStageReason(stage: StageDefinition) {
+  if (stage.agentId === "research-agent" || stage.stageType === "research") {
+    return "Skipped because this task did not require fresh sourced research before production.";
+  }
+  if (stage.agentId === "writer-agent" || stage.stageType === "write" || stage.stageType === "writing") {
+    return "Skipped because this task did not require a separate writing stage.";
+  }
+  if (stage.agentId === "image-agent" || stage.stageType === "image") {
+    return "Skipped because this task did not request still-image or poster output.";
+  }
+  if (stage.agentId === "video-agent" || stage.stageType === "video") {
+    return "Skipped because this task did not request video, animation, motion, storyboard, or video output.";
+  }
+  if (stage.agentId === "test-agent" || stage.stageType === "review") {
+    return "Skipped from production stages because test-agent is invoked as a quality gate, not as a production child agent.";
+  }
+  return "Skipped because configured cluster stages are a capability pool and this specialist was not needed for the current deliverable.";
+}
+
+export function describeStageSelection(input: {
+  promptStages: StageDefinition[];
+  selectedStages: StageDefinition[];
+  clusterStages?: StageDefinition[];
+}) {
+  const promptAgentIds = new Set(input.promptStages.map((stage) => stage.agentId));
+  const promptStageTypes = new Set(input.promptStages.map((stage) => stage.stageType));
+  const selectedAgentIds = new Set(input.selectedStages.map((stage) => stage.agentId));
+  const selectedStageTypes = new Set(input.selectedStages.map((stage) => stage.stageType));
+
+  const selectedStages: StageSelectionSummary[] = input.selectedStages.map((stage) => ({
+    stageType: stage.stageType,
+    agentId: stage.agentId,
+    name: stage.name,
+    reason: stageSelectionReason(stage),
+    source:
+      promptAgentIds.has(stage.agentId) || promptStageTypes.has(stage.stageType)
+        ? "prompt"
+        : "cluster"
+  }));
+
+  const skippedClusterStages: SkippedClusterStageSummary[] = (input.clusterStages ?? [])
+    .filter((stage) => !selectedAgentIds.has(stage.agentId) && !selectedStageTypes.has(stage.stageType))
+    .map((stage) => ({
+      stageType: stage.stageType,
+      agentId: stage.agentId,
+      name: stage.name,
+      reason: skippedClusterStageReason(stage)
+    }));
+
+  return {
+    policy: [
+      "Infer required stages from the current user task first.",
+      "Use cluster.config as a capability pool that enriches selected stages, not as a mandatory fixed pipeline.",
+      "Run the minimal specialist set needed for the requested deliverable, then quality-gate production outputs."
+    ],
+    selectedStages,
+    skippedClusterStages
+  };
+}
+
+type AgentPromptSnapshot = {
+  path: string | null;
+  contents: string | null;
+  error: string | null;
+};
+
+async function loadAgentPromptSnapshot(
+  agentId: string,
+  clusterConfig: LoadedClusterConfig | null
+): Promise<AgentPromptSnapshot> {
+  if (!clusterConfig) {
+    return {
+      path: null,
+      contents: null,
+      error: "cluster_config_not_loaded"
+    };
+  }
+
+  const agentConfig = clusterConfig.agents.find((agent) => agent.id === agentId);
+  if (!agentConfig?.promptPath) {
+    return {
+      path: null,
+      contents: null,
+      error: "agent_prompt_path_not_configured"
+    };
+  }
+
+  const promptPath = path.isAbsolute(agentConfig.promptPath)
+    ? agentConfig.promptPath
+    : path.resolve(path.dirname(clusterConfig.configPath), agentConfig.promptPath);
+
+  try {
+    return {
+      path: promptPath,
+      contents: truncateForPrompt(await readFile(promptPath, "utf8"), 5000),
+      error: null
+    };
+  } catch (error) {
+    return {
+      path: promptPath,
+      contents: null,
+      error: toSafeErrorMessage(error)
+    };
+  }
+}
+
+function formatAgentPromptSnapshot(snapshot: AgentPromptSnapshot) {
+  if (snapshot.contents) {
+    return [
+      `Agent AGENTS.md prompt snapshot (${snapshot.path ?? "unknown path"}):`,
+      snapshot.contents
+    ].join("\n");
+  }
+  return [
+    "Agent AGENTS.md prompt snapshot:",
+    `Path: ${snapshot.path ?? "not configured"}`,
+    `Unavailable: ${snapshot.error ?? "not found"}`
+  ].join("\n");
+}
+
+function stagePreflightInstructions(input: {
+  workLogPath: string;
+  stateDir: string;
+  stageDir: string;
+  upstreamArtifactPath?: string | null;
+}) {
+  return [
+    "Agent preflight contract:",
+    "- First review the AGENTS.md prompt snapshot/path supplied in this task packet and stay inside that specialist role.",
+    "- Before producing, inspect available upstream artifacts, agent-work-log.md, final-summary/task-summary files, and experience-library hints.",
+    "- Treat previous summaries and experience memory as hints; re-check the current user task before deciding what to create.",
+    "- If the current runner cannot read a prompt, summary, or experience file, note the missing context in agent-work-log.md and continue with the supplied task packet.",
+    "- Do not use a different specialist role just because that agent exists in the configured cluster.",
+    `Work log path: ${input.workLogPath}`,
+    `State JSON directory: ${input.stateDir}`,
+    `Output directory: ${input.stageDir}`,
+    input.upstreamArtifactPath ? `Upstream artifact path: ${input.upstreamArtifactPath}` : "Upstream artifact path: none"
+  ].join("\n");
+}
+
+function isReviewStage(stage: StageDefinition) {
+  return stage.stageType === "review" || stage.agentId === "test-agent";
+}
+
+export function executablePipelineStages(stages: StageDefinition[]): StageDefinition[] {
+  return stages
+    .filter((stage) => !isReviewStage(stage))
+    .map((stage) => ({
+      ...stage,
+      maxRetries: Math.max(1, stage.maxRetries ?? 3)
+    }));
 }
 
 export async function createPipelinePlan(input: {
@@ -745,13 +992,23 @@ export async function createPipelinePlan(input: {
   const rawPrompt = job.rawPrompt;
   const clusterConfig = await loadClusterConfig();
   const promptStages = inferStagesFromPrompt(rawPrompt);
-  const stages = mergePromptStagesWithClusterStages(clusterConfig?.stages, promptStages);
+  const mergedStages = mergePromptStagesWithClusterStages(clusterConfig?.stages, promptStages);
+  const stages = executablePipelineStages(mergedStages);
+  const orchestrationDecision = describeStageSelection({
+    promptStages,
+    selectedStages: mergedStages,
+    clusterStages: clusterConfig?.stages
+  });
+  const selectedAgents = orchestrationDecision.selectedStages.map((stage) => stage.agentId);
+  const skippedClusterAgents = orchestrationDecision.skippedClusterStages.map((stage) => stage.agentId);
+  const skippedClusterStageCount = orchestrationDecision.skippedClusterStages.length;
 
   const plan = {
     jobId: input.jobId,
     sourceArtifactId: input.userRequestArtifactId,
     planningAgentId: "main-agent",
     routingMode: job.routingMode ?? clusterConfig?.defaultRoutingMode ?? DEFAULT_ROUTING_MODE,
+    orchestrationDecision,
     clusterConfig: clusterConfig
       ? {
           clusterId: clusterConfig.clusterId,
@@ -778,7 +1035,17 @@ export async function createPipelinePlan(input: {
     planPath,
     routingMode: plan.routingMode,
     stageCount: plan.stages.length,
-    clusterId: clusterConfig?.clusterId ?? null
+    clusterId: clusterConfig?.clusterId ?? null,
+    filteredStageCount: mergedStages.length - stages.length,
+    promptStageCount: promptStages.length,
+    skippedClusterStageCount,
+    selectedAgents,
+    skippedClusterAgents,
+    stageSelectionReasons: orchestrationDecision.selectedStages.map((stage) => ({
+      agentId: stage.agentId,
+      stageType: stage.stageType,
+      reason: stage.reason
+    }))
   });
 
   return createPipelineStages(input.jobId, plan.stages, input.userRequestArtifactId);
@@ -856,7 +1123,51 @@ export async function runStageAgent(input: {
 
   const quality = shouldForceFirstFailure || shouldAlwaysFail ? "needs_fix" : "ready_for_test";
   const upstreamArtifact = stage.inputArtifactId ? await getArtifact(stage.inputArtifactId) : null;
+  const upstreamPromptContext = upstreamArtifact
+    ? truncateForPrompt(upstreamArtifact.content || upstreamArtifact.uri || "", 6000)
+    : "";
+  const clusterConfig = await loadClusterConfig().catch(() => null);
+  const agentPromptSnapshot = await loadAgentPromptSnapshot(stage.agentId, clusterConfig);
+  const preflightInstructions = stagePreflightInstructions({
+    workLogPath,
+    stateDir,
+    stageDir,
+    upstreamArtifactPath: upstreamArtifact?.uri ?? null
+  });
+  const isMediaProviderDirectStage = stage.stageType === "image" || stage.stageType === "video";
+  await appendJobEvent(input.jobId, "stage.agent_prompt_context_loaded", {
+    stageId: stage.id,
+    agentId: stage.agentId,
+    promptPath: agentPromptSnapshot.path,
+    promptLoaded: Boolean(agentPromptSnapshot.contents),
+    promptError: agentPromptSnapshot.error,
+    memoryContext: {
+      workLogPath,
+      stateDir,
+      upstreamArtifactPath: upstreamArtifact?.uri ?? null
+    }
+  });
+  const providerDirectPrompt = [
+    isMediaProviderDirectStage ? "" : formatAgentPromptSnapshot(agentPromptSnapshot),
+    isMediaProviderDirectStage ? "" : preflightInstructions,
+    `User task: ${truncateForPrompt(job.rawPrompt, 4000)}`,
+    `Stage type: ${stage.stageType}`,
+    `Stage name: ${stage.name}`,
+    upstreamPromptContext ? `Upstream artifact context:\n${upstreamPromptContext}` : "",
+    stage.stageType === "image"
+      ? "Generate the requested image/poster directly. Use the user task as the visual brief."
+      : "",
+    stage.stageType === "video"
+      ? "Create the requested video generation task directly. Use the user task as the creative brief."
+      : ""
+  ].filter(Boolean).join("\n\n");
   const agentPrompt = [
+    formatAgentPromptSnapshot(agentPromptSnapshot),
+    "",
+    preflightInstructions,
+    "",
+    `User task: ${truncateForPrompt(job.rawPrompt, 4000)}`,
+    upstreamPromptContext ? `Upstream artifact context:\n${upstreamPromptContext}` : "",
     `工作模式：${input.attemptNo === 1 ? "生产" : "修正"}`,
     `任务编号：${input.jobId}`,
     `阶段编号：${stage.stageIndex}`,
@@ -882,6 +1193,8 @@ export async function runStageAgent(input: {
     agentId: stage.agentId,
     sessionId: agentSessionId,
     message: agentPrompt,
+    providerDirectMessage: providerDirectPrompt,
+    outputDir: stageDir,
     timeoutSeconds: Number(process.env.OPENCLAW_AGENT_TIMEOUT_SECONDS ?? 600)
   });
 
@@ -922,11 +1235,13 @@ export async function runStageAgent(input: {
     openclaw: openClawResult
       ? {
           mode: openClawResult.mode,
-          sessionId: openClawResult.sessionId
+          sessionId: openClawResult.sessionId,
+          artifacts: openClawResult.artifacts ?? []
         }
       : {
           mode: "mock",
-          sessionId: agentSessionId
+          sessionId: agentSessionId,
+          artifacts: []
         },
     acceptanceCriteria: stage.acceptanceCriteria
   };
@@ -938,6 +1253,12 @@ export async function runStageAgent(input: {
     )}-output.json`
   );
   const outputMdPath = path.join(stageDir, `output-attempt-${input.attemptNo}.md`);
+  const generatedArtifactLines = (openClawResult?.artifacts ?? []).flatMap((artifact, index) => [
+    `Generated artifact ${index + 1}:`,
+    artifact.filePath ? `- File: ${artifact.filePath}` : "",
+    artifact.url ? `- URL: ${artifact.url}` : "",
+    artifact.note ? `- Note: ${artifact.note}` : ""
+  ]).filter(Boolean);
   output.artifact_path = outputMdPath;
 
   await writeFile(stateJsonPath, `${JSON.stringify(output, null, 2)}\n`, "utf8");
@@ -951,6 +1272,8 @@ export async function runStageAgent(input: {
       `Quality: ${quality}`,
       "",
       output.summary,
+      "",
+      ...generatedArtifactLines,
       ""
     ].join("\n"),
     "utf8"
@@ -981,10 +1304,13 @@ export async function runStageAgent(input: {
       workLogPath,
       stateJsonPath,
       agentSessionId,
+      agentPromptPath: agentPromptSnapshot.path,
+      agentPromptLoaded: Boolean(agentPromptSnapshot.contents),
       attemptNo: input.attemptNo,
       routingMode,
       handoffTargetAgentId,
-      quality
+      quality,
+      generatedArtifacts: openClawResult?.artifacts ?? []
     }
   });
 
@@ -1567,6 +1893,48 @@ function parseArtifactSummary(artifact: ArtifactRecord | null): string {
   return compactMultiline(artifact.content);
 }
 
+function parseArtifactJson(artifact: ArtifactRecord | null): Record<string, unknown> | null {
+  if (!artifact?.content) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(artifact.content);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function extractGeneratedArtifactRefs(parsed: Record<string, unknown> | null) {
+  const openclaw = parsed?.openclaw;
+  const openclawArtifacts =
+    openclaw && typeof openclaw === "object" && !Array.isArray(openclaw)
+      ? (openclaw as Record<string, unknown>).artifacts
+      : null;
+  const generatedArtifacts = parsed?.generatedArtifacts;
+  const artifactInputs = [
+    ...(Array.isArray(openclawArtifacts) ? openclawArtifacts : []),
+    ...(Array.isArray(generatedArtifacts) ? generatedArtifacts : [])
+  ];
+  const refs = new Set<string>();
+
+  for (const artifact of artifactInputs) {
+    if (!artifact || typeof artifact !== "object" || Array.isArray(artifact)) {
+      continue;
+    }
+    const item = artifact as Record<string, unknown>;
+    const ref = asString(item.filePath) ?? asString(item.url);
+    if (ref) {
+      refs.add(ref);
+    }
+  }
+
+  return [...refs];
+}
+
 async function getArtifactOrNull(artifactId: string | null) {
   if (!artifactId) {
     return null;
@@ -1924,28 +2292,49 @@ export async function finalizeJob(jobId: string) {
   await heartbeat(jobId, "finalize.started");
 
   const stages = await getStagesForJob(jobId);
+  const stageSummaries = await Promise.all(
+    stages.map(async (stage) => {
+      const outputArtifact = await getArtifactOrNull(stage.outputArtifactId);
+      const parsed = parseArtifactJson(outputArtifact);
+      return {
+        stage,
+        summary: (asString(parsed?.summary) ?? parseArtifactSummary(outputArtifact)) || "No summary recorded.",
+        artifactPath: asString(parsed?.artifact_path) ?? outputArtifact?.uri ?? null,
+        generatedArtifacts: extractGeneratedArtifactRefs(parsed)
+      };
+    })
+  );
   const workdir = job.workdir ?? path.resolve(process.env.JOB_DATA_DIR ?? "data/jobs", jobId);
   const finalPath = path.join(workdir, "final", "final-answer.md");
   const discussionSynthesis =
     job.routingMode === "master_slave_discussion"
       ? await getArtifactOrNull(`${jobId}-ART-DISCUSSION-SYNTHESIS`)
       : null;
+  const executionMode = isOpenClawRealMode()
+    ? `real provider-backed execution (${getOpenClawAgentRunner()})`
+    : "mock execution";
+  const stageLines = stageSummaries.flatMap(({ stage, summary, artifactPath, generatedArtifacts }) => [
+    `- ${stage.stageIndex}. ${stage.name} (${stage.agentId})`,
+    `  Status: ${stage.status}`,
+    `  Summary: ${compactMultiline(summary, 500)}`,
+    artifactPath ? `  Artifact: ${artifactPath}` : "",
+    ...generatedArtifacts.map((artifact, index) => `  Generated artifact ${index + 1}: ${artifact}`)
+  ]).filter(Boolean);
   const finalOutput = [
     `# ${jobId} Final Output`,
     "",
-    "Mock pipeline completed successfully.",
+    `Pipeline completed successfully with ${executionMode}.`,
     "",
     `Routing mode: ${job.routingMode ?? DEFAULT_ROUTING_MODE}`,
     "",
     "Completed stages:",
-    ...stages.map((stage) => `- ${stage.stageIndex}. ${stage.name} (${stage.agentId})`),
+    ...stageLines,
     "",
     discussionSynthesis
       ? ["Main-agent discussion synthesis:", "", discussionSynthesis.content ?? ""].join("\n")
       : "No dedicated discussion synthesis artifact was required for this routing mode.",
     "",
     "Final owner: main-agent summarized the completed stage outputs.",
-    "Next milestone: replace mock activities with real OpenClaw agent calls.",
     ""
   ].join("\n");
 
@@ -1981,9 +2370,18 @@ export async function finalizeJob(jobId: string) {
       "",
       `Routing mode: ${job.routingMode ?? DEFAULT_ROUTING_MODE}`,
       "All configured stages completed and the final result has been generated.",
+      `Final artifact: ${artifact.id}`,
+      `Final path: ${finalPath}`,
       `最终 artifact：${artifact.id}`,
       `最终路径：${finalPath}`
-    ].join("\n")
+    ]
+      .filter(
+        (line) =>
+          !line.includes("{jobId}") &&
+          !line.includes("{artifact.id}") &&
+          !(line.includes(finalPath) && !line.startsWith("Final path:"))
+      )
+      .join("\n")
   });
   await appendJobEvent(jobId, "final.artifact_created", {
     artifactId: artifact.id,

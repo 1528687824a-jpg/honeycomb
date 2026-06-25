@@ -54,6 +54,10 @@ const markJobWaitingForHuman = DBOS.registerStep(activities.markJobWaitingForHum
   name: "markJobWaitingForHuman",
   ...retryingStepConfig
 });
+const ensureJobWaitingForHuman = DBOS.registerStep(activities.ensureJobWaitingForHuman, {
+  name: "ensureJobWaitingForHuman",
+  ...retryingStepConfig
+});
 const markJobFailed = DBOS.registerStep(activities.markJobFailed, {
   name: "markJobFailed",
   ...retryingStepConfig
@@ -364,7 +368,18 @@ async function runJobPipelineWorkflow(input: JobWorkflowInput) {
   const routingMode = await getJobRoutingMode(input.jobId);
   const status = await runRoutingMode(input.jobId, routingMode, stages);
 
-  if (status === "waiting_for_human" || status === "cancelled") {
+  if (status === "waiting_for_human") {
+    await ensureJobWaitingForHuman({
+      jobId: input.jobId,
+      reason: `Routing mode ${routingMode} is waiting for human input`
+    });
+    return {
+      jobId: input.jobId,
+      status
+    };
+  }
+
+  if (status === "cancelled") {
     return {
       jobId: input.jobId,
       status
@@ -381,6 +396,10 @@ async function runJobPipelineWorkflow(input: JobWorkflowInput) {
     }
 
     if (!(await hasModelCallBudget(input.jobId, "main-agent-synthesis", "main-agent"))) {
+      await ensureJobWaitingForHuman({
+        jobId: input.jobId,
+        reason: "Model-call budget exhausted before main-agent-synthesis"
+      });
       return {
         jobId: input.jobId,
         status: "waiting_for_human"
@@ -408,6 +427,10 @@ async function runJobPipelineWorkflow(input: JobWorkflowInput) {
     }
 
     if (!(await hasModelCallBudget(input.jobId, "final-test-agent", "test-agent"))) {
+      await ensureJobWaitingForHuman({
+        jobId: input.jobId,
+        reason: "Model-call budget exhausted before final-test-agent"
+      });
       return {
         jobId: input.jobId,
         status: "waiting_for_human"

@@ -1,4 +1,6 @@
 import "dotenv/config";
+import { stat } from "node:fs/promises";
+import path from "node:path";
 import express from "express";
 import { z } from "zod";
 import {
@@ -12,6 +14,7 @@ import {
   getJobHeartbeatSummary,
   InvalidJobListCursorError,
   listJobs,
+  requestJobResume,
   scanStalledJobHeartbeats,
   restoreJobSession
 } from "../../../packages/db/src/jobs";
@@ -30,10 +33,12 @@ import {
   setExperienceStatus
 } from "../../../packages/db/src/experience";
 import {
+  getArtifactForJob,
   getGroupMessagesForJob,
   getJobDetails,
   getJobTimeline,
-  InvalidTimelineCursorError
+  InvalidTimelineCursorError,
+  listArtifactsForJob
 } from "../../../packages/db/src/pipeline";
 import {
   createPlanForJob,
@@ -201,6 +206,7 @@ import {
   RUNTIME_REPAIR_ACTION_IDS,
   runRuntimeRepairAction
 } from "./runtime-repair";
+import { extractArtifactFileRefs } from "./artifact-files";
 
 const unstickModelCallSchema = z.object({
   jobId: z.string().min(1),
@@ -228,6 +234,8 @@ const runtimeUsageQuerySchema = z.object({
   since: z.string().datetime({ offset: true }).optional(),
   until: z.string().datetime({ offset: true }).optional()
 });
+
+const artifactFileIndexSchema = z.coerce.number().int().min(0).max(10000);
 
 const jobHeartbeatQuerySchema = z.object({
   timeoutSeconds: z.coerce.number().int().min(10).max(86400).optional(),
@@ -984,6 +992,10 @@ function buildPanelChatSystemPrompt(input: {
   experiences: ExperienceRecord[];
 }) {
   const agentName = input.chat.supervisorName?.trim() || input.agent.displayName || "Panel agent";
+  const backendAgentMode = process.env.OPENCLAW_AGENT_MODE === "real" ? "real" : "mock";
+  const configuredRunner = process.env.OPENCLAW_AGENT_RUNNER?.trim() || "auto";
+  const effectiveRunner =
+    configuredRunner === "auto" ? process.platform === "win32" ? "wsl" : "provider-direct" : configuredRunner;
   const languageInstruction = input.chat.language === "zh"
     ? "Reply in Chinese unless the user explicitly asks for another language."
     : "Reply in the user's language unless they explicitly ask for another language.";
@@ -1002,10 +1014,19 @@ function buildPanelChatSystemPrompt(input: {
     languageInstruction,
     "You answer panel conversations directly, help the user shape work, and coordinate tasks that Honeycomb may send to the agent team.",
     "If the user is chatting, answer normally. If the user is asking for task work, be concrete and mention any missing requirement only when it blocks execution.",
+    "Before coordinating task work, classify the requested deliverable, choose the routing mode, and choose the minimal child-agent set dynamically. Configured agents are a capability pool, not a mandatory fixed pipeline.",
+    "For still poster/image tasks, use writer-agent and/or image-agent as needed and skip video-agent. For video tasks, use video-agent and add writer-agent/image-agent only when script, captions, storyboard, cover, keyframe, or visual-asset support is needed.",
+    "Use research-agent only when fresh facts, sources, market context, or time-sensitive claims are needed. Use test-agent as the quality gate for each production child-agent deliverable.",
+    "Before starting task work, review your own prompt contract plus adopted experience/task-summary context supplied by Honeycomb. Treat previous memory as hints, then re-check the current user request.",
     "You own first-run work-profile configuration: use the user's profession, daily work, and quality bar to personalize each child agent's AGENTS.md while preserving its original role, experience-library rules, and state JSON handoff contract.",
     "When the user updates their work profile, explain that Honeycomb can regenerate the child-agent prompts from that profile and keep API keys out of prompt files.",
     `Configured provider: ${input.provider.displayName}`,
     `Configured model: ${input.model}`,
+    `Backend agent mode: ${backendAgentMode}`,
+    `Backend agent runner: ${effectiveRunner}`,
+    backendAgentMode === "real"
+      ? "Real provider-backed jobs can be dispatched. Do not claim that image or media generation is offline merely because Honeycomb is running locally."
+      : "The backend worker is in mock mode. If the user asks why provider keys are not used, say OPENCLAW_AGENT_MODE must be real before child-agent provider keys drive generation.",
     `Current project: ${input.chat.projectPath || input.chat.projectName || "not selected"}`,
     `Latest job: ${input.chat.latestJobId || "none"}`,
     panelOutputStyleInstruction(input.chat.outputStyle),
@@ -1323,6 +1344,12 @@ const listJobsQuerySchema = z.object({
 const cancelJobSchema = z.object({
   reason: z.string().max(500).optional(),
   requesterId: z.string().max(200).optional()
+});
+
+const resumeJobSchema = z.object({
+  reason: z.string().max(500).optional(),
+  requesterId: z.string().max(200).optional(),
+  maxModelCalls: z.number().int().min(1).max(100).optional()
 });
 
 const listExperiencesQuerySchema = z.object({
@@ -4019,6 +4046,99 @@ async function main() {
     }
   });
 
+  app.get("/jobs/:jobId/artifacts", async (request, response, next) => {
+    try {
+      const job = await getJob(request.params.jobId);
+
+      if (!job) {
+        response.status(404).json({ error: "job_not_found" });
+        return;
+      }
+
+      const artifacts = await listArtifactsForJob(request.params.jobId);
+      const artifactSummaries = await Promise.all(
+        artifacts.map(async (artifact) => {
+          const files = await Promise.all(
+            extractArtifactFileRefs(artifact).map(async (file) => {
+              try {
+                const fileStat = await stat(file.filePath);
+                return {
+                  ...file,
+                  downloadable: fileStat.isFile(),
+                  sizeBytes: file.sizeBytes ?? (fileStat.isFile() ? fileStat.size : null),
+                  downloadUrl: fileStat.isFile()
+                    ? `/jobs/${job.id}/artifacts/${artifact.id}/files/${file.index}`
+                    : null
+                };
+              } catch {
+                return {
+                  ...file,
+                  downloadable: false,
+                  downloadUrl: null
+                };
+              }
+            })
+          );
+
+          return {
+            id: artifact.id,
+            jobId: artifact.jobId,
+            stageId: artifact.stageId,
+            type: artifact.type,
+            title: artifact.title,
+            uri: artifact.uri,
+            metadata: artifact.metadata,
+            createdAt: artifact.createdAt,
+            files
+          };
+        })
+      );
+
+      response.json({
+        jobId: job.id,
+        artifactCount: artifactSummaries.length,
+        fileCount: artifactSummaries.reduce((count, artifact) => count + artifact.files.length, 0),
+        artifacts: artifactSummaries
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/jobs/:jobId/artifacts/:artifactId/files/:fileIndex", async (request, response, next) => {
+    try {
+      const fileIndex = artifactFileIndexSchema.parse(request.params.fileIndex);
+      const artifact = await getArtifactForJob(request.params.jobId, request.params.artifactId);
+
+      if (!artifact) {
+        response.status(404).json({ error: "artifact_not_found" });
+        return;
+      }
+
+      const file = extractArtifactFileRefs(artifact).find((candidate) => candidate.index === fileIndex);
+      if (!file) {
+        response.status(404).json({ error: "artifact_file_not_found" });
+        return;
+      }
+
+      const fileStat = await stat(file.filePath).catch(() => null);
+      if (!fileStat?.isFile()) {
+        response.status(404).json({ error: "artifact_file_not_found" });
+        return;
+      }
+
+      const fileName = path.basename(file.fileName);
+      response.setHeader("Content-Type", file.mimeType ?? "application/octet-stream");
+      response.setHeader(
+        "Content-Disposition",
+        `inline; filename="${fileName.replace(/["\\]/g, "_")}"; filename*=UTF-8''${encodeURIComponent(fileName)}`
+      );
+      response.sendFile(file.filePath);
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post("/jobs/:jobId/cancel", async (request, response, next) => {
     try {
       const input = cancelJobSchema.parse(request.body ?? {});
@@ -4050,6 +4170,61 @@ async function main() {
         status: result.job.status
       });
     } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/jobs/:jobId/resume", async (request, response, next) => {
+    try {
+      const input = resumeJobSchema.parse(request.body ?? {});
+      const resume = await requestJobResume({
+        jobId: request.params.jobId,
+        reason: input.reason,
+        requesterId: input.requesterId,
+        maxModelCalls: input.maxModelCalls
+      });
+
+      if (!resume.job) {
+        response.status(404).json({ error: "job_not_found" });
+        return;
+      }
+
+      if (!resume.changed) {
+        response.status(409).json({
+          error: "job_not_resumable",
+          reason: resume.reason,
+          jobId: resume.job.id,
+          status: resume.job.status,
+          heartbeatStatus: resume.job.heartbeatStatus
+        });
+        return;
+      }
+
+      const stamp = new Date().toISOString().replace(/[^0-9]/g, "").slice(0, 14);
+      const workflowId = await startJobWorkflow(request.params.jobId, `job-${request.params.jobId}-resume-${stamp}`);
+      const job = await getJob(request.params.jobId);
+
+      response.json({
+        ok: true,
+        changed: true,
+        reason: resume.reason,
+        jobId: request.params.jobId,
+        status: job?.status ?? resume.job.status,
+        heartbeatStatus: job?.heartbeatStatus ?? resume.job.heartbeatStatus,
+        workflowId,
+        maxModelCalls: job?.maxModelCalls ?? resume.maxModelCalls
+      });
+    } catch (error) {
+      await appendJobEvent(
+        request.params.jobId,
+        "job.resume_failed",
+        {
+          error: error instanceof Error ? error.message : String(error)
+        },
+        {
+          actor: "system"
+        }
+      ).catch(() => undefined);
       next(error);
     }
   });

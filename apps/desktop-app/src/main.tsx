@@ -1930,17 +1930,71 @@ function looksLikeTaskRequest(value: string) {
   return englishTaskPattern.test(trimmed) || chineseTaskPattern.test(trimmed);
 }
 
+const DEFAULT_EXECUTABLE_STAGE_COUNT = 4;
+const DEFAULT_DISCUSSION_ROUNDS_FOR_BUDGET = 2;
+const MIN_CONVERSATION_TASK_MODEL_CALLS = 20;
+
+function minimumModelCallsForRoutingMode(mode: RoutingMode) {
+  switch (mode) {
+    case "pipeline":
+      return DEFAULT_EXECUTABLE_STAGE_COUNT + 1;
+    case "supervisor_pipeline":
+      return DEFAULT_EXECUTABLE_STAGE_COUNT * 2;
+    case "classic_master_slave":
+      return DEFAULT_EXECUTABLE_STAGE_COUNT;
+    case "master_slave_discussion":
+      return DEFAULT_EXECUTABLE_STAGE_COUNT * DEFAULT_DISCUSSION_ROUNDS_FOR_BUDGET + 2;
+    default:
+      return MIN_CONVERSATION_TASK_MODEL_CALLS;
+  }
+}
+
+function effectiveConversationTaskModelCalls(mode: RoutingMode, requested: number) {
+  return Math.max(
+    requested,
+    minimumModelCallsForRoutingMode(mode),
+    MIN_CONVERSATION_TASK_MODEL_CALLS
+  );
+}
+
+function providerVerificationErrorDetail(parsed: Record<string, unknown>) {
+  const provider = parsed.provider && typeof parsed.provider === "object"
+    ? parsed.provider as Record<string, unknown>
+    : null;
+  const verification = parsed.verification && typeof parsed.verification === "object"
+    ? parsed.verification as Record<string, unknown>
+    : null;
+  const providerName = typeof provider?.displayName === "string" ? provider.displayName : typeof provider?.id === "string" ? provider.id : "";
+  const model = typeof verification?.model === "string"
+    ? verification.model
+    : typeof provider?.defaultModel === "string"
+      ? provider.defaultModel
+      : typeof parsed.model === "string"
+        ? parsed.model
+        : "";
+  const statusCode = typeof verification?.statusCode === "number" ? verification.statusCode : null;
+  const message = typeof verification?.message === "string" && verification.message.trim()
+    ? verification.message.trim()
+    : typeof provider?.lastError === "string" && provider.lastError.trim()
+      ? provider.lastError.trim()
+      : typeof parsed.message === "string" && parsed.message.trim()
+        ? parsed.message.trim()
+        : "";
+  return [providerName, model, statusCode ? `HTTP ${statusCode}` : "", message].filter(Boolean).join(" / ");
+}
+
 function friendlyApiErrorMessage(error: unknown, language: Language = "en") {
   const raw = error instanceof Error ? error.message : String(error);
   try {
-    const parsed = JSON.parse(raw) as { message?: unknown; error?: unknown };
+    const parsed = JSON.parse(raw) as { message?: unknown; error?: unknown } & Record<string, unknown>;
     if (typeof parsed.message === "string" && parsed.message.trim()) {
       return parsed.message.trim();
     }
     if (parsed.error === "provider_verification_failed") {
+      const detail = providerVerificationErrorDetail(parsed);
       return language === "zh"
-        ? "\u9762\u677f Agent \u7684\u6a21\u578b\u8fde\u63a5\u9a8c\u8bc1\u5931\u8d25\uff0c\u8bf7\u68c0\u67e5\u6a21\u578b\u540d\u3001API Key \u548c\u670d\u52a1\u5546\u8d26\u53f7\u72b6\u6001\u3002"
-        : "The panel agent model verification failed. Check the model name, API Key, and provider account status.";
+        ? `\u9762\u677f Agent \u7684\u6a21\u578b\u8fde\u63a5\u9a8c\u8bc1\u5931\u8d25${detail ? `\uff1a${detail}` : ""}\u3002\u8bf7\u68c0\u67e5\u6a21\u578b\u540d\u3001API Key \u548c\u670d\u52a1\u5546\u8d26\u53f7\u72b6\u6001\u3002`
+        : `The panel agent model verification failed${detail ? `: ${detail}` : ""}. Check the model name, API Key, and provider account status.`;
     }
     if (typeof parsed.error === "string" && parsed.error.trim()) {
       return parsed.error.trim();
@@ -2677,17 +2731,24 @@ function App() {
         panelSupervisorDisplayName,
         language
       );
+      const effectiveMaxModelCalls = effectiveConversationTaskModelCalls(inferredRoutingMode, maxModelCalls);
       const created = await createJob({
         prompt: promptWithWorkbenchContext,
         workdir: activeWorkspacePath.trim() || undefined,
         routingMode: inferredRoutingMode,
-        maxModelCalls
+        maxModelCalls: effectiveMaxModelCalls
       });
+      const budgetNote =
+        effectiveMaxModelCalls > maxModelCalls
+          ? language === "zh"
+            ? `\n\u5df2\u81ea\u52a8\u628a\u6a21\u578b\u8c03\u7528\u9884\u7b97\u4ece ${maxModelCalls} \u63d0\u9ad8\u5230 ${effectiveMaxModelCalls}\uff0c\u907f\u514d\u8be5\u6a21\u5f0f\u5728\u4e2d\u9014\u56e0\u9884\u7b97\u4e0d\u8db3\u505c\u4f4f\u3002`
+            : `\nAutomatically raised the model-call budget from ${maxModelCalls} to ${effectiveMaxModelCalls} so this routing mode does not pause mid-run.`
+          : "";
       const assistantMessage = createConversationMessage(
         "assistant",
         language === "zh"
-          ? `\u5df2\u53d1\u9001\u7ed9 Agent \u56e2\u961f\uff1a${created.jobId}\u3002\u4f60\u53ef\u4ee5\u5728 Tasks \u9875\u67e5\u770b\u8fdb\u7a0b\u3002`
-          : `Sent to the agent team: ${created.jobId}. You can inspect progress in Tasks.`,
+          ? `\u5df2\u53d1\u9001\u7ed9 Agent \u56e2\u961f\uff1a${created.jobId}\u3002\u4f60\u53ef\u4ee5\u5728 Tasks \u9875\u67e5\u770b\u8fdb\u7a0b\u3002${budgetNote}`
+          : `Sent to the agent team: ${created.jobId}. You can inspect progress in Tasks.${budgetNote}`,
         { jobId: created.jobId, status: "sent" }
       );
       appendMessagesToConversationState(nextConversationState, activeProject.id, activeThread.id, [assistantMessage]);

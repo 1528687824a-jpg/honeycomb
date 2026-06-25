@@ -37,7 +37,9 @@ services:
       JOB_DATA_DIR: /app/data/jobs
       FEISHU_ADAPTER_ENABLED: "false"
       FEISHU_DRY_RUN: "true"
-      OPENCLAW_AGENT_MODE: mock
+      OPENCLAW_AGENT_MODE: ${OPENCLAW_AGENT_MODE:-mock}
+      OPENCLAW_AGENT_RUNNER: ${OPENCLAW_AGENT_RUNNER:-provider-direct}
+      HONEYCOMB_RUNTIME_CONTAINER: "true"
       HONEYCOMB_SECRET_DIR: /app/honeycomb-secrets
       HONEYCOMB_OPENCLAW_RUNTIME_DIR: /app/honeycomb-runtime
       AGENT_CLUSTER_CONFIG_PATH: ${AGENT_CLUSTER_CONFIG_PATH:-}
@@ -75,7 +77,9 @@ services:
       JOB_DATA_DIR: /app/data/jobs
       FEISHU_ADAPTER_ENABLED: "false"
       FEISHU_DRY_RUN: "true"
-      OPENCLAW_AGENT_MODE: mock
+      OPENCLAW_AGENT_MODE: ${OPENCLAW_AGENT_MODE:-mock}
+      OPENCLAW_AGENT_RUNNER: ${OPENCLAW_AGENT_RUNNER:-provider-direct}
+      HONEYCOMB_RUNTIME_CONTAINER: "true"
       HONEYCOMB_SECRET_DIR: /app/honeycomb-secrets
       HONEYCOMB_OPENCLAW_RUNTIME_DIR: /app/honeycomb-runtime
       AGENT_CLUSTER_CONFIG_PATH: ${AGENT_CLUSTER_CONFIG_PATH:-}

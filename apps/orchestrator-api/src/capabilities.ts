@@ -28,13 +28,16 @@ const capabilities: RuntimeCapability[] = [
     id: "jobs_sessions",
     title: "Jobs and sessions",
     status: "ready",
-    summary: "Task intake, session lifecycle, timelines, cancellation, archive, restore, fork, and compression are available.",
+    summary: "Task intake, session lifecycle, timelines, cancellation, resume, archive, restore, fork, and compression are available.",
     routes: [
       "POST /jobs",
       "GET /jobs",
       "GET /jobs/:jobId",
+      "GET /jobs/:jobId/artifacts",
+      "GET /jobs/:jobId/artifacts/:artifactId/files/:fileIndex",
       "GET /jobs/:jobId/timeline",
       "POST /jobs/:jobId/cancel",
+      "POST /jobs/:jobId/resume",
       "GET /sessions",
       "POST /sessions/:sessionId/archive",
       "POST /sessions/:sessionId/restore",
@@ -45,6 +48,9 @@ const capabilities: RuntimeCapability[] = [
       "HTTP job ingress",
       "Feishu webhook ingress skeleton",
       "DBOS workflow launch path",
+      "Task artifact listing",
+      "Safe local artifact file download",
+      "Waiting/stalled job resume path",
       "Session archive/restore/fork/compress"
     ],
     missing: [

@@ -1,9 +1,17 @@
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import http from "node:http";
+import os from "node:os";
+import path from "node:path";
 import { test } from "node:test";
 import {
   buildOpenClawAgentArgs,
+  collectMediaCandidates,
   extractOpenClawText,
-  extractOpenClawUsage
+  extractOpenClawUsage,
+  extractProviderDirectChatText,
+  persistMediaCandidates,
+  selectProviderDirectKind
 } from "../apps/dbos-worker/src/adapters/openclaw";
 
 test("extractOpenClawText accepts every recognized output shape", () => {
@@ -98,4 +106,111 @@ test("buildOpenClawAgentArgs wraps the CLI in a Linux-side timeout", () => {
   assert.equal(args[args.indexOf("--session-id") + 1], "job-123-stage-4");
   assert.equal(args[args.indexOf("--timeout") + 1], "600");
   assert.equal(args[args.indexOf("--agent") + 1], "research-agent");
+});
+
+test("selectProviderDirectKind routes specialist agents to media endpoints", () => {
+  assert.equal(selectProviderDirectKind({ providerId: "p", baseUrl: "https://example.com", model: "deepseek-chat", apiKey: "k", agentRole: "research" }), "chat");
+  assert.equal(selectProviderDirectKind({ providerId: "p", baseUrl: "https://example.com", model: "deepseek-chat", apiKey: "k", agentRole: "image" }), "image");
+  assert.equal(selectProviderDirectKind({ providerId: "p", baseUrl: "https://example.com", model: "doubao-seedream-5-0", apiKey: "k" }), "image");
+  assert.equal(selectProviderDirectKind({ providerId: "p", baseUrl: "https://example.com", model: "doubao-seedance-2-0", apiKey: "k" }), "video");
+});
+
+test("extractProviderDirectChatText reads OpenAI-compatible choices", () => {
+  assert.equal(
+    extractProviderDirectChatText({
+      choices: [
+        {
+          message: {
+            content: "hello from provider"
+          }
+        }
+      ]
+    }),
+    "hello from provider"
+  );
+  assert.equal(
+    extractProviderDirectChatText({
+      choices: [
+        {
+          message: {
+            content: [
+              { type: "text", text: "part one" },
+              { type: "text", text: "part two" }
+            ]
+          }
+        }
+      ]
+    }),
+    "part one\npart two"
+  );
+  assert.equal(
+    extractProviderDirectChatText({
+      choices: [
+        {
+          message: {
+            reasoning_content: "reasoning-only provider text"
+          }
+        }
+      ]
+    }),
+    "reasoning-only provider text"
+  );
+  assert.equal(
+    extractProviderDirectChatText({
+      output_text: "responses-api provider text"
+    }),
+    "responses-api provider text"
+  );
+  assert.equal(
+    extractProviderDirectChatText({
+      output: [
+        {
+          content: [
+            {
+              type: "output_text",
+              text: "nested output item"
+            }
+          ]
+        }
+      ]
+    }),
+    "nested output item"
+  );
+});
+
+test("persistMediaCandidates downloads URL media into the output directory", async () => {
+  const body = Buffer.from("fake-image-bytes");
+  const server = http.createServer((_request, response) => {
+    response.writeHead(200, {
+      "content-type": "image/jpeg",
+      "content-length": String(body.byteLength)
+    });
+    response.end(body);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "honeycomb-media-"));
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    const url = `http://127.0.0.1:${address.port}/poster.jpg`;
+    const candidates = collectMediaCandidates({ data: [{ url, revised_prompt: "poster" }] }, "image");
+    const artifacts = await persistMediaCandidates({
+      candidates,
+      outputDir: tempDir,
+      sessionId: "job:stage/image"
+    });
+
+    assert.equal(artifacts.length, 1);
+    assert.equal(artifacts[0].url, url);
+    assert.equal(artifacts[0].mimeType, "image/jpeg");
+    assert.equal(artifacts[0].source, "url");
+    assert.equal(artifacts[0].sizeBytes, body.byteLength);
+    assert.equal(artifacts[0].downloadError, null);
+    assert.match(artifacts[0].filePath ?? "", /\.jpg$/);
+    assert.deepEqual(await readFile(artifacts[0].filePath ?? ""), body);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await rm(tempDir, { recursive: true, force: true });
+  }
 });

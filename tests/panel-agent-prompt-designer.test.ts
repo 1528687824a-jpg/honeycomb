@@ -48,6 +48,9 @@ test("panel agent personalizes child prompts from the work profile", () => {
   assert.match(researchPrompt, /数据可追溯、风险清楚、能直接给一线执行/);
   assert.match(researchPrompt, /经验库-资料\.md/);
   assert.match(researchPrompt, /state\/stage-\{stage_number\}-\{type\}-output\.json/);
+  assert.match(researchPrompt, /Before specialist work begins/);
+  assert.match(researchPrompt, /final-summary\/task-summary files/);
+  assert.match(researchPrompt, /Use previous summaries and experience memory as decision hints/);
   assert.match(researchPrompt, /Post-work self-evolution review/);
   assert.match(researchPrompt, /experience_candidate object/);
   assert.match(researchPrompt, /success_pattern, failure_pattern, or agent_lesson/);
@@ -60,6 +63,9 @@ test("panel agent personalizes child prompts from the work profile", () => {
   assert.match(panelPrompt, /# 蜂后/);
   assert.match(panelPrompt, /Prompt-personalization responsibility/);
   assert.match(panelPrompt, /AGENTS\.md must contain the work profile/);
+  assert.match(panelPrompt, /capability pool, not as a mandatory fixed pipeline/);
+  assert.match(panelPrompt, /For a still poster\/image task/);
+  assert.match(panelPrompt, /Record why each included child agent is needed/);
   assert.match(panelPrompt, /post-work self-evolution review/);
   assert.match(panelPrompt, /Capacity control/);
   assert.match(panelPrompt, /Preferred output style: formal/);

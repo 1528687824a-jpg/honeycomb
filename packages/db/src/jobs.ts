@@ -15,6 +15,7 @@ import {
   type RoutingMode,
   type JobStatus
 } from "../../shared/src/types";
+import { normalizeJobModelCallBudget } from "../../shared/src/routing-budget";
 import { pool } from "./pool";
 import { appendAgentEvent } from "./session";
 
@@ -90,6 +91,52 @@ function heartbeatNoteFromPayload(payload: Record<string, unknown>) {
     return reason.trim().slice(0, 500);
   }
   return null;
+}
+
+export type JobResumeRejectReason =
+  | "job_archived"
+  | "job_terminal"
+  | "job_not_waiting_or_stalled";
+
+export type JobResumeAllowedReason = "waiting_for_human" | "stalled";
+
+export function resolveJobResumeEligibility(
+  job: Pick<JobRecord, "status" | "heartbeatStatus" | "archivedAt">
+):
+  | { resumable: true; reason: JobResumeAllowedReason }
+  | { resumable: false; reason: JobResumeRejectReason } {
+  if (job.archivedAt) {
+    return {
+      resumable: false,
+      reason: "job_archived"
+    };
+  }
+
+  if (job.status === "succeeded" || job.status === "failed" || job.status === "cancelled") {
+    return {
+      resumable: false,
+      reason: "job_terminal"
+    };
+  }
+
+  if (job.status === "waiting_for_human") {
+    return {
+      resumable: true,
+      reason: "waiting_for_human"
+    };
+  }
+
+  if (job.heartbeatStatus === "stalled") {
+    return {
+      resumable: true,
+      reason: "stalled"
+    };
+  }
+
+  return {
+    resumable: false,
+    reason: "job_not_waiting_or_stalled"
+  };
 }
 
 function normalizeJobListSort(value: unknown): JobListSort {
@@ -178,6 +225,15 @@ export async function createJob(input: CreateJobInput): Promise<JobRecord> {
   const id = `JOB-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${randomUUID()
     .slice(0, 8)
     .toUpperCase()}`;
+  const routingMode = input.routingMode ?? DEFAULT_ROUTING_MODE;
+  const discussionRounds = input.discussionRounds ?? DEFAULT_DISCUSSION_ROUNDS;
+  const classicFinalGateEnabled = input.classicFinalGateEnabled ?? false;
+  const maxModelCalls = normalizeJobModelCallBudget({
+    requestedMaxModelCalls: input.maxModelCalls,
+    routingMode,
+    discussionRounds,
+    classicFinalGateEnabled
+  });
 
   const result = await pool.query(
     `insert into agent.jobs (
@@ -208,10 +264,10 @@ export async function createJob(input: CreateJobInput): Promise<JobRecord> {
       input.ingressOrigin ?? "http",
       input.rawPrompt,
       input.workdir?.trim() || null,
-      input.routingMode ?? DEFAULT_ROUTING_MODE,
-      input.maxModelCalls ?? DEFAULT_MAX_MODEL_CALLS,
-      input.classicFinalGateEnabled ?? false,
-      input.discussionRounds ?? DEFAULT_DISCUSSION_ROUNDS
+      routingMode,
+      maxModelCalls,
+      classicFinalGateEnabled,
+      discussionRounds
     ]
   );
 
@@ -219,11 +275,22 @@ export async function createJob(input: CreateJobInput): Promise<JobRecord> {
     requesterId: input.requesterId ?? null,
     ingressOrigin: input.ingressOrigin ?? "http",
     workdir: input.workdir?.trim() || null,
-    routingMode: input.routingMode ?? DEFAULT_ROUTING_MODE,
-    maxModelCalls: input.maxModelCalls ?? DEFAULT_MAX_MODEL_CALLS,
-    classicFinalGateEnabled: input.classicFinalGateEnabled ?? false,
-    discussionRounds: input.discussionRounds ?? DEFAULT_DISCUSSION_ROUNDS
+    routingMode,
+    maxModelCalls,
+    requestedMaxModelCalls: input.maxModelCalls ?? null,
+    classicFinalGateEnabled,
+    discussionRounds
   });
+
+  if (input.maxModelCalls !== undefined && input.maxModelCalls !== maxModelCalls) {
+    await appendJobEvent(id, "budget.model_calls_normalized", {
+      requestedMaxModelCalls: input.maxModelCalls,
+      maxModelCalls,
+      routingMode,
+      discussionRounds,
+      classicFinalGateEnabled
+    });
+  }
 
   return toJobRecord(result.rows[0]);
 }
@@ -557,6 +624,96 @@ export async function cancelJob(input: {
     job: archivedJob,
     changed: true,
     reason: "cancelled"
+  } as const;
+}
+
+export async function requestJobResume(input: {
+  jobId: string;
+  reason?: string;
+  requesterId?: string;
+  maxModelCalls?: number;
+}) {
+  const job = await getJob(input.jobId);
+  if (!job) {
+    return {
+      job: null,
+      changed: false,
+      reason: "job_not_found"
+    } as const;
+  }
+
+  const eligibility = resolveJobResumeEligibility(job);
+  if (!eligibility.resumable) {
+    return {
+      job,
+      changed: false,
+      reason: eligibility.reason
+    } as const;
+  }
+
+  const nextMaxModelCalls = normalizeJobModelCallBudget({
+    requestedMaxModelCalls: input.maxModelCalls ?? job.maxModelCalls,
+    routingMode: job.routingMode,
+    discussionRounds: job.discussionRounds,
+    classicFinalGateEnabled: job.classicFinalGateEnabled
+  });
+
+  const result = await pool.query(
+    `update agent.jobs
+     set max_model_calls = $2,
+         updated_at = now()
+     where id = $1
+       and status not in ('succeeded', 'failed', 'cancelled')
+       and archived_at is null
+       and (status = 'waiting_for_human' or heartbeat_status = 'stalled')
+     returning *`,
+    [input.jobId, nextMaxModelCalls]
+  );
+  if (!result.rows[0]) {
+    const latestJob = await getJob(input.jobId);
+    if (!latestJob) {
+      return {
+        job: null,
+        changed: false,
+        reason: "job_not_found"
+      } as const;
+    }
+
+    const latestEligibility = resolveJobResumeEligibility(latestJob);
+    return {
+      job: latestJob,
+      changed: false,
+      reason: latestEligibility.resumable ? "job_not_waiting_or_stalled" : latestEligibility.reason
+    } as const;
+  }
+
+  const resumedJob = toJobRecord(result.rows[0]);
+
+  await appendJobEvent(
+    input.jobId,
+    "job.resume_requested",
+    {
+      reason: input.reason ?? null,
+      requesterId: input.requesterId ?? null,
+      resumeReason: eligibility.reason,
+      previousStatus: job.status,
+      previousHeartbeatStatus: job.heartbeatStatus,
+      previousWorkflowId: job.workflowId,
+      requestedMaxModelCalls: input.maxModelCalls ?? null,
+      previousMaxModelCalls: job.maxModelCalls,
+      maxModelCalls: nextMaxModelCalls,
+      budgetChanged: nextMaxModelCalls !== job.maxModelCalls
+    },
+    {
+      actor: "user"
+    }
+  );
+
+  return {
+    job: resumedJob,
+    changed: true,
+    reason: eligibility.reason,
+    maxModelCalls: nextMaxModelCalls
   } as const;
 }
 

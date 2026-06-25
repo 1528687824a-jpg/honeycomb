@@ -73,6 +73,26 @@ function isLikelyRealProviderBaseUrl(baseUrl: string) {
   }
 }
 
+function agentExecutionMode() {
+  return process.env.OPENCLAW_AGENT_MODE === "real" ? "real" : "mock";
+}
+
+function agentExecutionRunner() {
+  const configured = process.env.OPENCLAW_AGENT_RUNNER?.trim().toLowerCase();
+  if (configured === "provider-direct" || configured === "wsl" || configured === "auto") {
+    return configured;
+  }
+  return "auto";
+}
+
+function agentExecutionEffectiveRunner() {
+  const runner = agentExecutionRunner();
+  if (runner === "auto") {
+    return process.platform === "win32" ? "wsl" : "provider-direct";
+  }
+  return runner;
+}
+
 export async function getRuntimeDiagnostics(input: {
   openClawRootPath?: string;
 } = {}): Promise<RuntimeDiagnosticsResponse> {
@@ -272,6 +292,34 @@ export async function getRuntimeDiagnostics(input: {
   }
   if (failedProviders.length > 0) {
     pushAction(recommendedActions, "Re-verify failed model providers after checking model and API key.");
+  }
+
+  const executionMode = agentExecutionMode();
+  const executionRunner = agentExecutionRunner();
+  const effectiveRunner = agentExecutionEffectiveRunner();
+  const executionIsMockWithKeys = executionMode === "mock" && configuredProviders.length > 0;
+  checks.push({
+    id: "agent_execution",
+    title: "Agent execution",
+    status: executionIsMockWithKeys ? "warning" : "ok",
+    summary:
+      executionMode === "real"
+        ? `Real agent execution is enabled with ${effectiveRunner}.`
+        : "Agent execution is in mock mode.",
+    details: {
+      mode: executionMode,
+      configuredRunner: executionRunner,
+      effectiveRunner,
+      providerDirect: effectiveRunner === "provider-direct",
+      configuredProviderCount: configuredProviders.length,
+      verifiedLiveProviderCount: verifiedLiveProviders.length
+    }
+  });
+  if (executionIsMockWithKeys) {
+    pushAction(
+      recommendedActions,
+      "Restart the backend with OPENCLAW_AGENT_MODE=real so configured provider keys are used."
+    );
   }
 
   const agents = await listAgentConfigs();

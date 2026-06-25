@@ -10,6 +10,7 @@ import {
   type ScheduledTaskStatus,
   type ScheduleType
 } from "../../shared/src/types";
+import { normalizeJobModelCallBudget } from "../../shared/src/routing-budget";
 import { pool } from "./pool";
 
 type ScheduledTaskWritable = {
@@ -54,6 +55,13 @@ function normalizeRoutingMode(value: unknown): RoutingMode {
   return typeof value === "string" && (ROUTING_MODES as readonly string[]).includes(value)
     ? (value as RoutingMode)
     : DEFAULT_ROUTING_MODE;
+}
+
+function normalizedScheduleModelCalls(value: unknown, routingMode: RoutingMode) {
+  return normalizeJobModelCallBudget({
+    requestedMaxModelCalls: typeof value === "number" ? value : Number(value),
+    routingMode
+  });
 }
 
 function parseDate(value?: string | null): Date | null {
@@ -119,6 +127,7 @@ export function computeNextScheduledRunAt(
 }
 
 function toScheduledTaskRecord(row: any): ScheduledTaskRecord {
+  const routingMode = normalizeRoutingMode(row.routing_mode);
   return {
     id: row.id,
     title: row.title,
@@ -126,8 +135,8 @@ function toScheduledTaskRecord(row: any): ScheduledTaskRecord {
     scheduleType: normalizeScheduleType(row.schedule_type),
     enabled: row.enabled ?? true,
     workspacePath: row.workspace_path,
-    routingMode: normalizeRoutingMode(row.routing_mode),
-    maxModelCalls: Number(row.max_model_calls ?? DEFAULT_MAX_MODEL_CALLS),
+    routingMode,
+    maxModelCalls: normalizedScheduleModelCalls(row.max_model_calls ?? DEFAULT_MAX_MODEL_CALLS, routingMode),
     providerId: row.provider_id,
     agentId: row.agent_config_id,
     runAt: row.run_at ? row.run_at.toISOString() : null,
@@ -246,6 +255,11 @@ export async function upsertScheduledTask(input: ScheduledTaskWritable): Promise
   const scheduleType = input.scheduleType ?? "manual";
   const enabled = input.enabled ?? true;
   const status = enabled ? input.status ?? "idle" : "disabled";
+  const routingMode = input.routingMode ?? DEFAULT_ROUTING_MODE;
+  const maxModelCalls = normalizeJobModelCallBudget({
+    requestedMaxModelCalls: input.maxModelCalls,
+    routingMode
+  });
   const nextRunAt =
     input.nextRunAt !== undefined
       ? input.nextRunAt
@@ -304,8 +318,8 @@ export async function upsertScheduledTask(input: ScheduledTaskWritable): Promise
       scheduleType,
       enabled,
       input.workspacePath ?? null,
-      input.routingMode ?? DEFAULT_ROUTING_MODE,
-      input.maxModelCalls ?? DEFAULT_MAX_MODEL_CALLS,
+      routingMode,
+      maxModelCalls,
       input.providerId ?? null,
       input.agentId ?? null,
       input.runAt ?? null,

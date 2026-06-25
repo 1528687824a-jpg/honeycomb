@@ -126,6 +126,19 @@ export async function getArtifact(artifactId: string): Promise<ArtifactRecord> {
   return toArtifactRecord(result.rows[0]);
 }
 
+export async function getArtifactForJob(jobId: string, artifactId: string): Promise<ArtifactRecord | null> {
+  const result = await pool.query(`select * from agent.artifacts where job_id = $1 and id = $2`, [
+    jobId,
+    artifactId
+  ]);
+  return result.rows[0] ? toArtifactRecord(result.rows[0]) : null;
+}
+
+export async function listArtifactsForJob(jobId: string): Promise<ArtifactRecord[]> {
+  const result = await pool.query(`select * from agent.artifacts where job_id = $1 order by created_at`, [jobId]);
+  return result.rows.map(toArtifactRecord);
+}
+
 export async function createGroupMessage(input: {
   jobId: string;
   stageId?: string | null;

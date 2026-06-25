@@ -1,33 +1,50 @@
 const viteEnv = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env ?? {};
 const API_BASE = viteEnv.VITE_ORCHESTRATOR_URL ?? "http://127.0.0.1:3000";
 const STATIC_API_AUTH_TOKEN = viteEnv.VITE_HONEYCOMB_API_TOKEN ?? "";
+const API_TOKEN_STORAGE_KEY = "honeycomb.apiToken";
 
 let apiAuthTokenPromise: Promise<string | null> | null = null;
+let runtimeApiAuthTokenLoader: () => Promise<string | null> = loadTauriApiAuthToken;
+let staticApiAuthTokenOverride: string | null = null;
+
+function staticApiAuthToken() {
+  return (staticApiAuthTokenOverride ?? STATIC_API_AUTH_TOKEN).trim() || null;
+}
 
 function browserStoredApiToken() {
   try {
-    return window.localStorage.getItem("honeycomb.apiToken")?.trim() || null;
+    return window.localStorage.getItem(API_TOKEN_STORAGE_KEY)?.trim() || null;
   } catch {
     return null;
   }
 }
 
-async function loadApiAuthToken() {
-  if (STATIC_API_AUTH_TOKEN.trim()) {
-    return STATIC_API_AUTH_TOKEN.trim();
+function storeBrowserApiToken(token: string) {
+  try {
+    window.localStorage.setItem(API_TOKEN_STORAGE_KEY, token);
+  } catch {
+    // Local storage is optional in tests and restricted browser contexts.
   }
+}
 
-  const stored = browserStoredApiToken();
-  if (stored) {
-    return stored;
+function clearBrowserApiToken(token?: string | null) {
+  try {
+    const current = window.localStorage.getItem(API_TOKEN_STORAGE_KEY)?.trim() || null;
+    if (!token || current === token) {
+      window.localStorage.removeItem(API_TOKEN_STORAGE_KEY);
+    }
+  } catch {
+    // Ignore storage errors.
   }
+}
 
+async function loadTauriApiAuthToken() {
   try {
     const { invoke } = await import("@tauri-apps/api/core");
     const token = await invoke<string | null>("load_api_auth_token");
     const trimmed = token?.trim() || null;
     if (trimmed) {
-      window.localStorage.setItem("honeycomb.apiToken", trimmed);
+      storeBrowserApiToken(trimmed);
     }
     return trimmed;
   } catch {
@@ -35,10 +52,54 @@ async function loadApiAuthToken() {
   }
 }
 
+async function loadApiAuthToken() {
+  const runtimeToken = await runtimeApiAuthTokenLoader();
+  if (runtimeToken) {
+    storeBrowserApiToken(runtimeToken);
+    return runtimeToken;
+  }
+
+  const stored = browserStoredApiToken();
+  if (stored) {
+    return stored;
+  }
+
+  return staticApiAuthToken();
+}
+
 async function getApiAuthToken() {
   apiAuthTokenPromise ??= loadApiAuthToken();
   return apiAuthTokenPromise;
 }
+
+async function refreshApiAuthToken(previousToken: string | null) {
+  apiAuthTokenPromise = null;
+  clearBrowserApiToken(previousToken);
+  const refreshed = await loadApiAuthToken();
+  apiAuthTokenPromise = Promise.resolve(refreshed);
+  return refreshed;
+}
+
+export const __apiAuthTokenTestInternals = {
+  setRuntimeTokenLoaderForTests(loader: () => Promise<string | null>) {
+    runtimeApiAuthTokenLoader = loader;
+    apiAuthTokenPromise = null;
+  },
+  resetRuntimeTokenLoaderForTests() {
+    runtimeApiAuthTokenLoader = loadTauriApiAuthToken;
+    apiAuthTokenPromise = null;
+  },
+  setStaticTokenForTests(token: string | null) {
+    staticApiAuthTokenOverride = token;
+    apiAuthTokenPromise = null;
+  },
+  resetTokenCacheForTests() {
+    apiAuthTokenPromise = null;
+  },
+  clearStoredTokenForTests() {
+    clearBrowserApiToken();
+  }
+};
 
 function appendSearchParams(
   params: URLSearchParams,
@@ -1368,22 +1429,54 @@ export type ListSessionsInput = {
   prompt?: string;
 };
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+function requestHeaders(init: RequestInit | undefined, token: string | null) {
   const headers = new Headers(init?.headers);
   if (!headers.has("content-type")) {
     headers.set("content-type", "application/json");
   }
-
-  const token = await getApiAuthToken();
   if (token) {
     headers.set("authorization", `Bearer ${token}`);
+  } else {
+    headers.delete("authorization");
   }
+  return headers;
+}
 
+async function isInvalidApiTokenResponse(response: Response) {
+  if (response.status !== 401) {
+    return false;
+  }
+  try {
+    const body = await response.clone().json() as { error?: unknown };
+    return body?.error === "invalid_api_token";
+  } catch {
+    return false;
+  }
+}
+
+async function fetchWithAuthRetry(path: string, init?: RequestInit) {
+  const token = await getApiAuthToken();
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
-    headers
+    headers: requestHeaders(init, token)
   });
+  if (!(await isInvalidApiTokenResponse(response))) {
+    return response;
+  }
 
+  const refreshedToken = await refreshApiAuthToken(token);
+  if (!refreshedToken || refreshedToken === token) {
+    return response;
+  }
+
+  return fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers: requestHeaders(init, refreshedToken)
+  });
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetchWithAuthRetry(path, init);
   if (!response.ok) {
     const body = await response.text();
     throw new Error(body || `${response.status} ${response.statusText}`);
@@ -1523,15 +1616,8 @@ export async function listRuntimeRepairActions() {
 }
 
 export async function runRuntimeRepairAction(input: RuntimeRepairInput) {
-  const headers = new Headers({ "content-type": "application/json" });
-  const token = await getApiAuthToken();
-  if (token) {
-    headers.set("authorization", `Bearer ${token}`);
-  }
-
-  const response = await fetch(`${API_BASE}/runtime/repair`, {
+  const response = await fetchWithAuthRetry("/runtime/repair", {
     method: "POST",
-    headers,
     body: JSON.stringify(input)
   });
   const body = await response.text();

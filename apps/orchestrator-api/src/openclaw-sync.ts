@@ -188,6 +188,7 @@ function modelForAgent(
 function buildStageDefinitions(agents: OpenClawAgentSyncItem[]) {
   return agents
     .filter((agent) => agent.openclawAgentId !== "main-agent")
+    .filter((agent) => agent.openclawAgentId !== "test-agent" && agent.role !== "review")
     .map((agent, index) => ({
       stageType: agent.role,
       agentId: agent.openclawAgentId,
@@ -196,9 +197,19 @@ function buildStageDefinitions(agents: OpenClawAgentSyncItem[]) {
         "The agent output is specific to the user task.",
         "The handoff is clear enough for the next agent or final reviewer."
       ],
-      maxRetries: agent.role === "review" ? 0 : 1,
+      maxRetries: 1,
       position: index + 1
     }));
+}
+
+function shouldSyncAgent(agent: AgentConfigRecord) {
+  if (!agent.enabled) {
+    return false;
+  }
+  if (agent.required) {
+    return true;
+  }
+  return agent.metadata.includeInOpenClawSync === true || agent.metadata.openclawSyncEnabled === true;
 }
 
 function buildClusterConfig(plan: OpenClawSyncPlan, providers: ModelProviderRecord[]) {
@@ -314,7 +325,7 @@ export async function buildOpenClawSyncPlan(input: {
   const rootPath = path.resolve(rootCandidate.rootPath);
 
   const [agents, providers] = await Promise.all([listAgentConfigs(), listModelProviders()]);
-  const enabledAgents = agents.filter((agent) => agent.enabled);
+  const enabledAgents = agents.filter(shouldSyncAgent);
   const providersById = providerById(providers);
   const warnings: string[] = [];
   if (enabledAgents.length === 0) {

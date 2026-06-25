@@ -1,15 +1,29 @@
 import { execFile } from "node:child_process";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
 export type OpenClawRunResult = {
-  mode: "mock" | "real";
+  mode: "mock" | "real" | "provider-direct";
   sessionId: string;
   text: string;
   textSource: OpenClawTextSource;
   usage: OpenClawTokenUsage | null;
+  artifacts?: OpenClawGeneratedArtifact[];
   raw: unknown;
+};
+
+export type OpenClawGeneratedArtifact = {
+  kind: "image" | "video";
+  url: string | null;
+  filePath: string | null;
+  mimeType: string | null;
+  note: string | null;
+  source?: "base64" | "url";
+  sizeBytes?: number | null;
+  downloadError?: string | null;
 };
 
 export type OpenClawTokenUsage = {
@@ -23,6 +37,7 @@ export type OpenClawProviderRuntime = {
   baseUrl: string | null;
   model: string | null;
   apiKey: string | null;
+  agentRole?: string | null;
 };
 
 export type OpenClawTextSource =
@@ -34,7 +49,10 @@ export type OpenClawTextSource =
   | "field:output"
   | "payloads"
   | "finalAssistantVisibleText"
-  | "finalAssistantRawText";
+  | "finalAssistantRawText"
+  | "provider:chat"
+  | "provider:image"
+  | "provider:video";
 
 export class OpenClawOutputError extends Error {
   constructor(
@@ -49,12 +67,48 @@ function openClawRealMode() {
   return process.env.OPENCLAW_AGENT_MODE === "real";
 }
 
+export type OpenClawAgentRunner = "auto" | "wsl" | "provider-direct";
+
+export function getOpenClawAgentRunner(): OpenClawAgentRunner {
+  const configured = process.env.OPENCLAW_AGENT_RUNNER?.trim().toLowerCase();
+  if (configured === "wsl" || configured === "provider-direct" || configured === "auto") {
+    return configured;
+  }
+  return "auto";
+}
+
+export function shouldUseProviderDirectRunner() {
+  const runner = getOpenClawAgentRunner();
+  if (runner === "provider-direct") {
+    return true;
+  }
+  if (runner === "wsl") {
+    return false;
+  }
+  return process.platform !== "win32";
+}
+
 function getOpenClawCommand() {
   return process.env.OPENCLAW_CLI ?? "/home/administrator/.npm-global/bin/openclaw";
 }
 
 function getWslDistro() {
   return process.env.OPENCLAW_WSL_DISTRO ?? "Ubuntu-24.04";
+}
+
+function chatCompletionsUrl(baseUrl: string) {
+  const normalized = baseUrl.replace(/\/+$/, "");
+  return `${normalized}/chat/completions`;
+}
+
+function imageGenerationsUrl(baseUrl: string) {
+  const normalized = baseUrl.replace(/\/+$/, "");
+  return `${normalized}/images/generations`;
+}
+
+function videoTasksUrl(baseUrl: string) {
+  const normalized = baseUrl.replace(/\/+$/, "");
+  return `${normalized}/contents/generations/tasks`;
 }
 
 function toOpenClawSessionId(sessionId: string) {
@@ -175,6 +229,675 @@ export function extractOpenClawUsage(raw: unknown): OpenClawTokenUsage | null {
   return null;
 }
 
+class ProviderDirectResponseError extends Error {
+  constructor(
+    message: string,
+    readonly statusCode: number | null
+  ) {
+    super(message);
+  }
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function numberValue(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function isLikelyImageGenerationModel(model: string | null | undefined) {
+  return Boolean(
+    model?.match(/(dall-e|gpt-image-|imagen|cogview|wanx|seedream|doubao[-_]?seedream|doubao.*image|flux|stable-diffusion)/i)
+  );
+}
+
+function isLikelyVideoGenerationModel(model: string | null | undefined) {
+  return Boolean(
+    model?.match(/(seedance|doubao[-_]?seedance|sora|veo|video-generation|cogvideo|kling|wanx.*video)/i)
+  );
+}
+
+export function selectProviderDirectKind(provider?: OpenClawProviderRuntime | null): "chat" | "image" | "video" {
+  const role = provider?.agentRole?.toLowerCase() ?? "";
+  if (role === "image" || isLikelyImageGenerationModel(provider?.model)) {
+    return "image";
+  }
+  if (role === "video" || isLikelyVideoGenerationModel(provider?.model)) {
+    return "video";
+  }
+  return "chat";
+}
+
+function providerTimeoutMs(timeoutSeconds: number) {
+  return Math.max(1, timeoutSeconds) * 1000;
+}
+
+async function providerResponseErrorMessage(response: Response) {
+  let message = `${response.status} ${response.statusText}`.trim();
+  try {
+    const body = await response.json() as {
+      error?: { message?: unknown; code?: unknown };
+      message?: unknown;
+      code?: unknown;
+    };
+    const remoteMessage =
+      typeof body.error?.message === "string"
+        ? body.error.message
+        : typeof body.message === "string"
+          ? body.message
+          : null;
+    if (remoteMessage) {
+      message = `${message}: ${remoteMessage}`.slice(0, 500);
+    }
+  } catch {
+    // Keep the status-only message. Do not echo raw provider bodies.
+  }
+  return message;
+}
+
+async function fetchProviderJson(input: {
+  url: string;
+  apiKey: string;
+  body: Record<string, unknown>;
+  timeoutMs: number;
+}) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), input.timeoutMs);
+  try {
+    const response = await fetch(input.url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${input.apiKey}`
+      },
+      body: JSON.stringify(input.body),
+      signal: controller.signal
+    });
+
+    if (!response.ok) {
+      throw new ProviderDirectResponseError(await providerResponseErrorMessage(response), response.status);
+    }
+
+    const responseText = await response.text();
+    try {
+      return JSON.parse(responseText) as unknown;
+    } catch {
+      return responseText;
+    }
+  } catch (error) {
+    if (error instanceof ProviderDirectResponseError) {
+      throw error;
+    }
+    throw new ProviderDirectResponseError(
+      error instanceof Error ? error.message.slice(0, 500) : "provider_direct_request_failed",
+      null
+    );
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export function extractProviderDirectChatText(raw: unknown) {
+  const value = recordValue(raw);
+  const outputText = stringValue(value?.output_text) ?? stringValue(value?.outputText);
+  if (outputText) {
+    return outputText;
+  }
+
+  const choices = Array.isArray(value?.choices) ? value.choices : [];
+  for (const choice of choices) {
+    const choiceRecord = recordValue(choice);
+    const message = recordValue(choiceRecord?.message);
+    const delta = recordValue(choiceRecord?.delta);
+    const text =
+      extractTextContent(message?.content) ??
+      extractTextContent(message?.reasoning_content) ??
+      extractTextContent(message?.reasoningContent) ??
+      extractTextContent(choiceRecord?.text) ??
+      extractTextContent(delta?.content) ??
+      extractTextContent(delta?.reasoning_content) ??
+      extractTextContent(delta?.reasoningContent);
+    if (text) {
+      return text;
+    }
+  }
+
+  const outputItemsText = extractOutputItemsText(value?.output);
+  if (outputItemsText) {
+    return outputItemsText;
+  }
+
+  return extractOpenClawText(raw)?.text ?? null;
+}
+
+function extractOutputItemsText(value: unknown): string | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  const parts = value
+    .map((item) => {
+      const record = recordValue(item);
+      if (!record) {
+        return "";
+      }
+      const direct = extractTextContent(record.content) ?? extractTextContent(record.text);
+      if (direct) {
+        return direct;
+      }
+      return extractOutputItemsText(record.content) ?? "";
+    })
+    .filter(Boolean);
+
+  return parts.length > 0 ? parts.join("\n") : null;
+}
+
+function extractTextContent(value: unknown): string | null {
+  if (typeof value === "string" && value.trim()) {
+    return value;
+  }
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const parts = value
+    .map((item) => {
+      if (typeof item === "string") {
+        return item;
+      }
+      const record = recordValue(item);
+      return (
+        stringValue(record?.text) ??
+        stringValue(record?.content) ??
+        stringValue(record?.output_text) ??
+        stringValue(record?.outputText) ??
+        ""
+      );
+    })
+    .filter(Boolean);
+  return parts.length > 0 ? parts.join("\n") : null;
+}
+
+export type MediaCandidate = {
+  kind: "image" | "video";
+  url: string | null;
+  b64Json: string | null;
+  mimeType: string | null;
+  note: string | null;
+};
+
+function dataUrlParts(value: string | null) {
+  const match = value?.match(/^data:([^;]+);base64,(.+)$/s);
+  if (!match) {
+    return {
+      mimeType: null,
+      base64: value
+    };
+  }
+  return {
+    mimeType: match[1],
+    base64: match[2]
+  };
+}
+
+export function collectMediaCandidates(raw: unknown, kind: "image" | "video"): MediaCandidate[] {
+  const value = recordValue(raw);
+  const data =
+    Array.isArray(value?.data)
+      ? value.data
+      : Array.isArray(value?.images)
+        ? value.images
+        : Array.isArray(value?.videos)
+          ? value.videos
+          : value
+            ? [value]
+            : [];
+
+  return data
+    .map((item): MediaCandidate | null => {
+      const record = recordValue(item);
+      if (!record) {
+        return null;
+      }
+      const rawBase64 =
+        stringValue(record.b64_json) ??
+        stringValue(record.b64Json) ??
+        stringValue(record.base64) ??
+        stringValue(record.image) ??
+        stringValue(record.video);
+      const parts = dataUrlParts(rawBase64);
+      const url =
+        stringValue(record.url) ??
+        stringValue(record.image_url) ??
+        stringValue(record.video_url) ??
+        stringValue(record.uri);
+      const note =
+        stringValue(record.revised_prompt) ??
+        stringValue(record.revisedPrompt) ??
+        stringValue(record.message) ??
+        stringValue(record.status);
+
+      if (!url && !parts.base64 && !note) {
+        return null;
+      }
+
+      return {
+        kind,
+        url,
+        b64Json: parts.base64,
+        mimeType: parts.mimeType,
+        note
+      };
+    })
+    .filter((item): item is MediaCandidate => Boolean(item));
+}
+
+function extensionForMimeType(mimeType: string | null, kind: "image" | "video" = "image") {
+  if (!mimeType) {
+    return kind === "video" ? "mp4" : "png";
+  }
+  if (mimeType?.includes("jpeg") || mimeType?.includes("jpg")) {
+    return "jpg";
+  }
+  if (mimeType?.includes("webp")) {
+    return "webp";
+  }
+  if (mimeType?.includes("gif")) {
+    return "gif";
+  }
+  if (mimeType?.includes("mp4")) {
+    return "mp4";
+  }
+  return mimeType.startsWith("video/") || kind === "video" ? "mp4" : "png";
+}
+
+function extensionForMediaUrl(url: string | null) {
+  if (!url) {
+    return null;
+  }
+  try {
+    const extension = path.extname(new URL(url).pathname).replace(".", "").toLowerCase();
+    return ["jpg", "jpeg", "png", "webp", "gif", "mp4", "mov", "webm"].includes(extension)
+      ? extension.replace("jpeg", "jpg")
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function isSpecificMediaMimeType(mimeType: string | null) {
+  return Boolean(mimeType?.startsWith("image/") || mimeType?.startsWith("video/"));
+}
+
+function mediaDownloadMaxBytes(kind: "image" | "video") {
+  const configured = Number(process.env.OPENCLAW_MEDIA_DOWNLOAD_MAX_BYTES);
+  if (Number.isFinite(configured) && configured > 0) {
+    return Math.floor(configured);
+  }
+  return kind === "video" ? 250 * 1024 * 1024 : 50 * 1024 * 1024;
+}
+
+function mediaDownloadTimeoutMs() {
+  const configured = Number(process.env.OPENCLAW_MEDIA_DOWNLOAD_TIMEOUT_MS);
+  return Number.isFinite(configured) && configured > 0 ? Math.floor(configured) : 60_000;
+}
+
+function appendArtifactNote(note: string | null, extra: string) {
+  return [note, extra].filter(Boolean).join("\n");
+}
+
+async function downloadMediaUrl(input: {
+  url: string;
+  kind: "image" | "video";
+  outputDir: string;
+  sessionId: string;
+  index: number;
+  fallbackMimeType: string | null;
+}) {
+  const maxBytes = mediaDownloadMaxBytes(input.kind);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), mediaDownloadTimeoutMs());
+  try {
+    const response = await fetch(input.url, {
+      method: "GET",
+      signal: controller.signal
+    });
+    if (!response.ok) {
+      throw new Error(`media_download_http_${response.status}`);
+    }
+
+    const contentLength = Number(response.headers.get("content-length"));
+    if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+      throw new Error(`media_download_too_large_${contentLength}`);
+    }
+
+    const contentType = response.headers.get("content-type")?.split(";")[0]?.trim() || null;
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+    const body = response.body;
+    if (body) {
+      const reader = body.getReader();
+      for (;;) {
+        const chunk = await reader.read();
+        if (chunk.done) {
+          break;
+        }
+        const buffer = Buffer.from(chunk.value);
+        totalBytes += buffer.byteLength;
+        if (totalBytes > maxBytes) {
+          throw new Error(`media_download_too_large_${totalBytes}`);
+        }
+        chunks.push(buffer);
+      }
+    } else {
+      const buffer = Buffer.from(await response.arrayBuffer());
+      totalBytes = buffer.byteLength;
+      if (totalBytes > maxBytes) {
+        throw new Error(`media_download_too_large_${totalBytes}`);
+      }
+      chunks.push(buffer);
+    }
+
+    const extension = isSpecificMediaMimeType(contentType)
+      ? extensionForMimeType(contentType, input.kind)
+      : extensionForMediaUrl(input.url) ?? extensionForMimeType(input.fallbackMimeType, input.kind);
+    const filePath = path.join(
+      input.outputDir,
+      `${toOpenClawSessionId(input.sessionId)}-${input.kind}-${input.index + 1}.${extension}`
+    );
+    await writeFile(filePath, Buffer.concat(chunks, totalBytes));
+    return {
+      filePath,
+      mimeType: contentType ?? input.fallbackMimeType,
+      sizeBytes: totalBytes
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export async function persistMediaCandidates(input: {
+  candidates: MediaCandidate[];
+  outputDir?: string | null;
+  sessionId: string;
+}) {
+  if (!input.outputDir) {
+    return input.candidates.map((candidate) => ({
+      kind: candidate.kind,
+      url: candidate.url,
+      filePath: null,
+      mimeType: candidate.mimeType,
+      note: candidate.note,
+      source: undefined,
+      sizeBytes: null,
+      downloadError: null
+    }));
+  }
+
+  await mkdir(input.outputDir, { recursive: true });
+  const artifacts: OpenClawGeneratedArtifact[] = [];
+  for (let index = 0; index < input.candidates.length; index++) {
+    const candidate = input.candidates[index];
+    let filePath: string | null = null;
+    if (candidate.b64Json) {
+      const extension = extensionForMimeType(candidate.mimeType, candidate.kind);
+      filePath = path.join(
+        input.outputDir,
+        `${toOpenClawSessionId(input.sessionId)}-${candidate.kind}-${index + 1}.${extension}`
+      );
+      const buffer = Buffer.from(candidate.b64Json, "base64");
+      await writeFile(filePath, buffer);
+      artifacts.push({
+        kind: candidate.kind,
+        url: candidate.url,
+        filePath,
+        mimeType: candidate.mimeType,
+        note: candidate.note,
+        source: "base64",
+        sizeBytes: buffer.byteLength,
+        downloadError: null
+      });
+      continue;
+    }
+
+    let mimeType = candidate.mimeType;
+    let sizeBytes: number | null = null;
+    let downloadError: string | null = null;
+    let note = candidate.note;
+    if (candidate.url) {
+      try {
+        const downloaded = await downloadMediaUrl({
+          url: candidate.url,
+          kind: candidate.kind,
+          outputDir: input.outputDir,
+          sessionId: input.sessionId,
+          index,
+          fallbackMimeType: candidate.mimeType
+        });
+        filePath = downloaded.filePath;
+        mimeType = downloaded.mimeType;
+        sizeBytes = downloaded.sizeBytes;
+      } catch (error) {
+        downloadError = error instanceof Error ? error.message.slice(0, 300) : "media_download_failed";
+        note = appendArtifactNote(note, `Media download failed: ${downloadError}`);
+      }
+    }
+
+    artifacts.push({
+      kind: candidate.kind,
+      url: candidate.url,
+      filePath,
+      mimeType,
+      note,
+      source: candidate.url ? "url" : undefined,
+      sizeBytes,
+      downloadError
+    });
+  }
+  return artifacts;
+}
+
+function providerDirectText(input: {
+  kind: "image" | "video";
+  raw: unknown;
+  artifacts: OpenClawGeneratedArtifact[];
+}) {
+  const directText = extractOpenClawText(input.raw)?.text;
+  if (input.artifacts.length === 0 && !directText) {
+    return "";
+  }
+  const lines = [
+    `Provider direct ${input.kind} generation completed.`,
+    ...input.artifacts.flatMap((artifact, index) => [
+      `${input.kind === "image" ? "Image" : "Video"} ${index + 1}:`,
+      artifact.filePath ? `File: ${artifact.filePath}` : "",
+      artifact.url ? `URL: ${artifact.url}` : "",
+      artifact.note ? `Note: ${artifact.note}` : ""
+    ]).filter(Boolean),
+    directText ? `Provider message: ${directText}` : ""
+  ].filter(Boolean);
+  return lines.join("\n");
+}
+
+function sanitizeProviderForDirectRun(provider?: OpenClawProviderRuntime | null) {
+  if (!provider?.baseUrl) {
+    throw new Error("provider_base_url_missing");
+  }
+  if (!provider.model) {
+    throw new Error("model_not_configured");
+  }
+  if (!provider.apiKey) {
+    throw new Error("provider_api_key_missing");
+  }
+  return provider as OpenClawProviderRuntime & {
+    baseUrl: string;
+    model: string;
+    apiKey: string;
+  };
+}
+
+async function runProviderDirectChat(input: {
+  sessionId: string;
+  message: string;
+  provider: OpenClawProviderRuntime & { baseUrl: string; model: string; apiKey: string };
+  timeoutSeconds: number;
+}): Promise<OpenClawRunResult> {
+  const maxTokens = numberValue(process.env.OPENCLAW_PROVIDER_DIRECT_MAX_TOKENS) ?? 1200;
+  const raw = await fetchProviderJson({
+    url: chatCompletionsUrl(input.provider.baseUrl),
+    apiKey: input.provider.apiKey,
+    timeoutMs: providerTimeoutMs(input.timeoutSeconds),
+    body: {
+      model: input.provider.model,
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are a Honeycomb child agent. Follow the supplied AGENTS.md prompt snapshot, stay inside the assigned specialist role, inspect the task packet and memory hints before producing, and return concise usable output for this stage only."
+        },
+        {
+          role: "user",
+          content: input.message
+        }
+      ],
+      max_tokens: maxTokens,
+      temperature: 0.2,
+      stream: false
+    }
+  });
+  const text = extractProviderDirectChatText(raw);
+  if (!text) {
+    const preview = (typeof raw === "string" ? raw : JSON.stringify(raw) ?? String(raw)).slice(0, 2000);
+    throw new OpenClawOutputError(
+      `Provider direct chat returned empty or unrecognized output. Response preview: ${preview.slice(0, 500)}`,
+      preview
+    );
+  }
+  return {
+    mode: "provider-direct",
+    sessionId: toOpenClawSessionId(input.sessionId),
+    text,
+    textSource: "provider:chat",
+    usage: extractOpenClawUsage(raw),
+    raw
+  };
+}
+
+async function runProviderDirectImage(input: {
+  sessionId: string;
+  message: string;
+  outputDir?: string | null;
+  provider: OpenClawProviderRuntime & { baseUrl: string; model: string; apiKey: string };
+  timeoutSeconds: number;
+}): Promise<OpenClawRunResult> {
+  const body: Record<string, unknown> = {
+    model: input.provider.model,
+    prompt: input.message
+  };
+  const size = process.env.OPENCLAW_IMAGE_SIZE?.trim();
+  const responseFormat = process.env.OPENCLAW_IMAGE_RESPONSE_FORMAT?.trim();
+  if (size) {
+    body.size = size;
+  }
+  if (responseFormat) {
+    body.response_format = responseFormat;
+  }
+
+  const raw = await fetchProviderJson({
+    url: imageGenerationsUrl(input.provider.baseUrl),
+    apiKey: input.provider.apiKey,
+    timeoutMs: providerTimeoutMs(input.timeoutSeconds),
+    body
+  });
+  const artifacts = await persistMediaCandidates({
+    candidates: collectMediaCandidates(raw, "image"),
+    outputDir: input.outputDir,
+    sessionId: input.sessionId
+  });
+  const text = providerDirectText({ kind: "image", raw, artifacts });
+  if (!text.trim()) {
+    throw new OpenClawOutputError(
+      "Provider direct image generation returned empty or unrecognized output.",
+      JSON.stringify(raw).slice(0, 2000)
+    );
+  }
+  return {
+    mode: "provider-direct",
+    sessionId: toOpenClawSessionId(input.sessionId),
+    text,
+    textSource: "provider:image",
+    usage: extractOpenClawUsage(raw),
+    artifacts,
+    raw
+  };
+}
+
+async function runProviderDirectVideo(input: {
+  sessionId: string;
+  message: string;
+  outputDir?: string | null;
+  provider: OpenClawProviderRuntime & { baseUrl: string; model: string; apiKey: string };
+  timeoutSeconds: number;
+}): Promise<OpenClawRunResult> {
+  const raw = await fetchProviderJson({
+    url: videoTasksUrl(input.provider.baseUrl),
+    apiKey: input.provider.apiKey,
+    timeoutMs: providerTimeoutMs(input.timeoutSeconds),
+    body: {
+      model: input.provider.model,
+      prompt: input.message
+    }
+  });
+  const artifacts = await persistMediaCandidates({
+    candidates: collectMediaCandidates(raw, "video"),
+    outputDir: input.outputDir,
+    sessionId: input.sessionId
+  });
+  const taskId =
+    stringValue(recordValue(raw)?.id) ??
+    stringValue(recordValue(raw)?.task_id) ??
+    stringValue(recordValue(raw)?.taskId);
+  const text = [
+    "Provider direct video generation task submitted.",
+    taskId ? `Task ID: ${taskId}` : "",
+    providerDirectText({ kind: "video", raw, artifacts })
+  ].filter(Boolean).join("\n");
+  return {
+    mode: "provider-direct",
+    sessionId: toOpenClawSessionId(input.sessionId),
+    text,
+    textSource: "provider:video",
+    usage: extractOpenClawUsage(raw),
+    artifacts,
+    raw
+  };
+}
+
+async function runProviderDirectAgent(input: {
+  sessionId: string;
+  message: string;
+  provider?: OpenClawProviderRuntime | null;
+  outputDir?: string | null;
+  timeoutSeconds: number;
+}) {
+  const provider = sanitizeProviderForDirectRun(input.provider);
+  const kind = selectProviderDirectKind(provider);
+  if (kind === "image") {
+    return runProviderDirectImage({ ...input, provider });
+  }
+  if (kind === "video") {
+    return runProviderDirectVideo({ ...input, provider });
+  }
+  return runProviderDirectChat({ ...input, provider });
+}
+
 export function buildOpenClawAgentArgs(input: {
   agentId: string;
   sessionId: string;
@@ -209,7 +932,9 @@ export async function runOpenClawAgent(input: {
   agentId: string;
   sessionId: string;
   message: string;
+  providerDirectMessage?: string | null;
   provider?: OpenClawProviderRuntime | null;
+  outputDir?: string | null;
   timeoutSeconds?: number;
 }): Promise<OpenClawRunResult | null> {
   if (!openClawRealMode()) {
@@ -217,6 +942,16 @@ export async function runOpenClawAgent(input: {
   }
 
   const timeoutSeconds = input.timeoutSeconds ?? 600;
+  if (shouldUseProviderDirectRunner()) {
+    return runProviderDirectAgent({
+      sessionId: input.sessionId,
+      message: input.providerDirectMessage ?? input.message,
+      provider: input.provider,
+      outputDir: input.outputDir,
+      timeoutSeconds
+    });
+  }
+
   const args = buildOpenClawAgentArgs({
     agentId: input.agentId,
     sessionId: input.sessionId,
