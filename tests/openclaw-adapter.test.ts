@@ -11,6 +11,7 @@ import {
   extractOpenClawUsage,
   extractProviderDirectChatText,
   persistMediaCandidates,
+  runOpenClawAgent,
   selectProviderDirectKind
 } from "../apps/dbos-worker/src/adapters/openclaw";
 
@@ -113,6 +114,68 @@ test("selectProviderDirectKind routes specialist agents to media endpoints", () 
   assert.equal(selectProviderDirectKind({ providerId: "p", baseUrl: "https://example.com", model: "deepseek-chat", apiKey: "k", agentRole: "image" }), "image");
   assert.equal(selectProviderDirectKind({ providerId: "p", baseUrl: "https://example.com", model: "doubao-seedream-5-0", apiKey: "k" }), "image");
   assert.equal(selectProviderDirectKind({ providerId: "p", baseUrl: "https://example.com", model: "doubao-seedance-2-0", apiKey: "k" }), "video");
+});
+
+test("provider-direct video requests use Volcengine content payloads", async () => {
+  let capturedBody: Record<string, unknown> | null = null;
+  const server = http.createServer(async (request, response) => {
+    assert.equal(request.method, "POST");
+    assert.equal(request.url, "/contents/generations/tasks");
+
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) {
+      chunks.push(Buffer.from(chunk));
+    }
+    capturedBody = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ id: "video-task-1", status: "queued" }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+  const previousMode = process.env.OPENCLAW_AGENT_MODE;
+  const previousRunner = process.env.OPENCLAW_AGENT_RUNNER;
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    process.env.OPENCLAW_AGENT_MODE = "real";
+    process.env.OPENCLAW_AGENT_RUNNER = "provider-direct";
+
+    const result = await runOpenClawAgent({
+      agentId: "video-agent",
+      sessionId: "job:video/stage",
+      message: "Generate a five-second product teaser video.",
+      provider: {
+        providerId: "volcengine",
+        baseUrl: `http://127.0.0.1:${address.port}`,
+        model: "doubao-seedance-2-0",
+        apiKey: "test-key",
+        agentRole: "video"
+      },
+      timeoutSeconds: 5
+    });
+
+    assert.equal(result?.textSource, "provider:video");
+    assert.deepEqual(capturedBody?.content, [
+      {
+        type: "text",
+        text: "Generate a five-second product teaser video."
+      }
+    ]);
+    assert.equal("prompt" in (capturedBody ?? {}), false);
+  } finally {
+    if (previousMode === undefined) {
+      delete process.env.OPENCLAW_AGENT_MODE;
+    } else {
+      process.env.OPENCLAW_AGENT_MODE = previousMode;
+    }
+    if (previousRunner === undefined) {
+      delete process.env.OPENCLAW_AGENT_RUNNER;
+    } else {
+      process.env.OPENCLAW_AGENT_RUNNER = previousRunner;
+    }
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });
 
 test("extractProviderDirectChatText reads OpenAI-compatible choices", () => {

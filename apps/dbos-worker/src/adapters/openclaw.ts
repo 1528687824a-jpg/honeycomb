@@ -852,7 +852,12 @@ async function runProviderDirectVideo(input: {
     timeoutMs: providerTimeoutMs(input.timeoutSeconds),
     body: {
       model: input.provider.model,
-      prompt: input.message
+      content: [
+        {
+          type: "text",
+          text: input.message
+        }
+      ]
     }
   });
   const artifacts = await persistMediaCandidates({
