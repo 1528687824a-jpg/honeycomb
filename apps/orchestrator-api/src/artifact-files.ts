@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import type { ArtifactRecord } from "../../../packages/shared/src/types";
 
@@ -8,7 +9,7 @@ export type ArtifactFileRef = {
   mimeType: string | null;
   sizeBytes: number | null;
   source: string | null;
-  filePath: string;
+  filePath: string | null;
   fileName: string;
   externalUrl: string | null;
   note: string | null;
@@ -45,6 +46,23 @@ function parseJsonRecord(value: string | null): Record<string, unknown> | null {
   }
 }
 
+function parseJsonFileRecord(filePath: string | null, jobDataDir: string) {
+  if (!filePath) {
+    return null;
+  }
+
+  const safePath = resolveArtifactFilePath(filePath, jobDataDir);
+  if (!safePath || path.extname(safePath).toLowerCase() !== ".json") {
+    return null;
+  }
+
+  try {
+    return parseJsonRecord(readFileSync(safePath, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
 function defaultJobDataDir() {
   return process.env.JOB_DATA_DIR ?? "data/jobs";
 }
@@ -62,6 +80,16 @@ export function resolveArtifactFilePath(filePath: string, jobDataDir = defaultJo
 
 function fileNameForPath(filePath: string) {
   return path.basename(filePath) || "artifact";
+}
+
+function fileNameForUrl(url: string, fallback: string) {
+  try {
+    const urlPath = new URL(url).pathname;
+    const candidate = decodeURIComponent(path.basename(urlPath));
+    return candidate || fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 function buildFileRef(input: {
@@ -91,6 +119,34 @@ function buildFileRef(input: {
     filePath: safePath,
     fileName: fileNameForPath(safePath),
     externalUrl: input.externalUrl ?? null,
+    note: input.note ?? null
+  };
+}
+
+function buildUrlRef(input: {
+  index: number;
+  label: string;
+  externalUrl: string | null;
+  kind?: string | null;
+  mimeType?: string | null;
+  sizeBytes?: number | null;
+  source?: string | null;
+  note?: string | null;
+}): ArtifactFileRef | null {
+  if (!input.externalUrl) {
+    return null;
+  }
+
+  return {
+    index: input.index,
+    label: input.label,
+    kind: input.kind ?? null,
+    mimeType: input.mimeType ?? null,
+    sizeBytes: input.sizeBytes ?? null,
+    source: input.source ?? "url",
+    filePath: null,
+    fileName: fileNameForUrl(input.externalUrl, input.label),
+    externalUrl: input.externalUrl,
     note: input.note ?? null
   };
 }
@@ -143,6 +199,26 @@ export function extractArtifactFileRefs(
     note?: string | null;
   }) => {
     if (!input.filePath) {
+      const ref = buildUrlRef({
+        index: refs.length,
+        label: input.label,
+        kind: input.kind,
+        mimeType: input.mimeType,
+        sizeBytes: input.sizeBytes,
+        source: input.source,
+        externalUrl: input.externalUrl ?? null,
+        note: input.note
+      });
+      if (!ref) {
+        return;
+      }
+
+      const key = `url:${ref.externalUrl?.toLowerCase()}`;
+      if (seen.has(key)) {
+        return;
+      }
+      seen.add(key);
+      refs.push({ ...ref, index: refs.length });
       return;
     }
 
@@ -162,7 +238,12 @@ export function extractArtifactFileRefs(
       return;
     }
 
-    const key = ref.filePath.toLowerCase();
+    const filePath = ref.filePath;
+    if (!filePath) {
+      return;
+    }
+
+    const key = filePath.toLowerCase();
     if (seen.has(key)) {
       return;
     }
@@ -174,11 +255,37 @@ export function extractArtifactFileRefs(
   addPath({ label: "artifact-path", filePath: asString(parsedContent?.artifact_path) });
 
   const metadata = artifact.metadata ?? {};
+  const metadataFilePaths: Array<string | null> = [];
   for (const key of ["markdownPath", "workLogPath", "stateJsonPath", "finalPath"] as const) {
+    const filePath = asString(metadata[key]);
+    metadataFilePaths.push(filePath);
     addPath({
       label: key,
-      filePath: asString(metadata[key])
+      filePath
     });
+  }
+
+  let referencedGeneratedIndex = 0;
+  const referencedJsonRecords = [
+    parseJsonFileRecord(artifact.uri, jobDataDir),
+    parseJsonFileRecord(asString(parsedContent?.artifact_path), jobDataDir),
+    ...metadataFilePaths.map((filePath) => parseJsonFileRecord(filePath, jobDataDir))
+  ].filter((record): record is Record<string, unknown> => Boolean(record));
+
+  for (const record of referencedJsonRecords) {
+    for (const generated of collectGeneratedArtifactRecords(record)) {
+      referencedGeneratedIndex += 1;
+      addPath({
+        label: `referenced-generated-${referencedGeneratedIndex}`,
+        filePath: asString(generated.filePath),
+        kind: asString(generated.kind),
+        mimeType: asString(generated.mimeType),
+        sizeBytes: asNumber(generated.sizeBytes),
+        source: asString(generated.source),
+        externalUrl: asString(generated.url),
+        note: asString(generated.note) ?? asString(generated.downloadError)
+      });
+    }
   }
 
   for (const [index, generated] of collectGeneratedArtifactRecords(parsedContent).entries()) {

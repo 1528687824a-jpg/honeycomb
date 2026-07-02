@@ -46,6 +46,7 @@ import {
   createJob,
   getHealth,
   getJob,
+  getJobArtifacts,
   getJobTimeline,
   getRuntimeDiagnostics,
   listExperiences,
@@ -75,6 +76,10 @@ import {
   type ModelProviderRecord,
   type ToolApprovalRecord
 } from "./api";
+import {
+  inferJobDisplayTitle,
+  userTaskPrompt
+} from "../../../packages/shared/src/job-title";
 import { FirstRunPanel, type FirstRunFlow } from "./firstRun";
 import { HoneycombLogo } from "./brand";
 import {
@@ -377,6 +382,11 @@ function isNewForDesktopNotification(timestamp: string | null | undefined, monit
   return Number.isFinite(parsed) && parsed >= monitorStartedAt - 5000;
 }
 
+function jobDisplayTitle(job: Pick<JobRecord, "id" | "rawPrompt"> | null | undefined) {
+  if (!job) return "";
+  return inferJobDisplayTitle(job.rawPrompt || "") || job.id;
+}
+
 function jobDesktopNotification(
   job: JobRecord,
   language: Language
@@ -386,48 +396,51 @@ function jobDesktopNotification(
   }
 
   if (job.status === "succeeded") {
+    const title = jobDisplayTitle(job);
     return language === "zh"
       ? {
           id: `job:${job.id}:succeeded`,
           title: "Honeycomb \u4efb\u52a1\u5df2\u5b8c\u6210",
-          body: `${job.id} \u5df2\u751f\u6210\u7ed3\u679c\u3002`,
+          body: `${title} \u5df2\u751f\u6210\u7ed3\u679c\u3002`,
           tag: `honeycomb-job-${job.id}`
         }
       : {
           id: `job:${job.id}:succeeded`,
           title: "Honeycomb job completed",
-          body: `${job.id} generated a result.`,
+          body: `${title} generated a result.`,
           tag: `honeycomb-job-${job.id}`
         };
   }
 
   if (job.status === "failed") {
+    const title = jobDisplayTitle(job);
     return language === "zh"
       ? {
           id: `job:${job.id}:failed`,
           title: "Honeycomb \u4efb\u52a1\u5931\u8d25",
-          body: `${job.id} \u9700\u8981\u68c0\u67e5\u5931\u8d25\u539f\u56e0\u3002`,
+          body: `${title} \u9700\u8981\u68c0\u67e5\u5931\u8d25\u539f\u56e0\u3002`,
           tag: `honeycomb-job-${job.id}`
         }
       : {
           id: `job:${job.id}:failed`,
           title: "Honeycomb job failed",
-          body: `${job.id} needs attention.`,
+          body: `${title} needs attention.`,
           tag: `honeycomb-job-${job.id}`
         };
   }
 
+  const title = jobDisplayTitle(job);
   return language === "zh"
     ? {
         id: `job:${job.id}:waiting_for_human`,
         title: "Honeycomb \u9700\u8981\u4f60\u51b3\u5b9a",
-        body: `${job.id} \u6b63\u5728\u7b49\u5f85\u4eba\u5de5\u5904\u7406\u3002`,
+        body: `${title} \u6b63\u5728\u7b49\u5f85\u4eba\u5de5\u5904\u7406\u3002`,
         tag: `honeycomb-job-${job.id}`
       }
     : {
         id: `job:${job.id}:waiting_for_human`,
         title: "Honeycomb needs your input",
-        body: `${job.id} is waiting for a human decision.`,
+        body: `${title} is waiting for a human decision.`,
         tag: `honeycomb-job-${job.id}`
       };
 }
@@ -1307,6 +1320,39 @@ async function invokeDesktopCommand<T>(command: string, args: Record<string, unk
   }
 }
 
+const DESKTOP_EXPORT_STORAGE_KEY = "honeycomb.desktopExportedJobs";
+
+type DesktopDownloadResult = {
+  path: string;
+  bytes: number;
+};
+
+function loadDesktopExportedJobIds() {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(DESKTOP_EXPORT_STORAGE_KEY) || "[]") as unknown;
+    return new Set(Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === "string") : []);
+  } catch {
+    return new Set<string>();
+  }
+}
+
+function saveDesktopExportedJobIds(ids: Set<string>) {
+  try {
+    window.localStorage.setItem(DESKTOP_EXPORT_STORAGE_KEY, JSON.stringify([...ids].slice(-200)));
+  } catch {
+    // Best-effort cache; failing to remember only means a later refresh may retry export.
+  }
+}
+
+function shouldExportJobToDesktop(job: JobRecord) {
+  return /\u684c\u9762|desktop/i.test(userTaskPrompt(job.rawPrompt || ""));
+}
+
+function extensionFromFileName(fileName: string, fallback = ".png") {
+  const match = fileName.match(/\.[a-z0-9]{2,5}$/i);
+  return match ? match[0].toLowerCase() : fallback;
+}
+
 const providerPresets = [
   { name: "DeepSeek", baseUrl: "https://api.deepseek.com", pattern: /deepseek/i },
   { name: "OpenAI", baseUrl: "https://api.openai.com/v1", pattern: /^(gpt-|o[134]|chatgpt|openai)/i },
@@ -1817,14 +1863,14 @@ function buildWorkbenchPlanSteps(job: JobRecord | null, timeline: JobTimeline | 
 
   const labels = language === "zh"
     ? [
-        ["任务进入", job ? `${job.id} · ${routingModeLabels.zh[job.routingMode]}` : "等待用户创建第一个任务"],
+        ["任务进入", job ? `${jobDisplayTitle(job)} · ${routingModeLabels.zh[job.routingMode]}` : "等待用户创建第一个任务"],
         ["智能编排", job ? "面板 agent 已根据任务自动选择起步编排模式" : "创建任务后自动分析"],
         ["专业 agent 执行", workVisible ? "时间线已出现 agent 工作事件" : "等待 OpenClaw 写入执行事件"],
         ["质量关卡", terminal ? "任务已进入最终状态" : "等待测试、修正或人工确认"],
         ["交付与复盘", terminal ? "可进入记忆页采纳可复用经验" : "任务完成后沉淀经验候选"]
       ]
     : [
-        ["Task intake", job ? `${job.id} · ${routingModeLabels.en[job.routingMode]}` : "Waiting for the first job"],
+        ["Task intake", job ? `${jobDisplayTitle(job)} · ${routingModeLabels.en[job.routingMode]}` : "Waiting for the first job"],
         ["Smart routing", job ? "The panel agent selected an initial orchestration mode for this task" : "Analyzes automatically after job creation"],
         ["Specialist execution", workVisible ? "Timeline events show agent work in progress" : "Waiting for OpenClaw execution events"],
         ["Quality gate", terminal ? "The job reached a final state" : "Waiting for testing, fixing, or human review"],
@@ -2110,6 +2156,7 @@ function App() {
   const jobsRequestSeq = useRef(0);
   const notificationStartedAt = useRef(Date.now());
   const seenNotificationIds = useRef<Set<string>>(loadSeenNotificationIds());
+  const desktopExportedJobIds = useRef<Set<string>>(loadDesktopExportedJobIds());
   const panelBackendConfigSyncKey = useRef("");
   const copy = translations[language];
 
@@ -2392,6 +2439,58 @@ function App() {
     }
   }
 
+  async function maybeExportGeneratedMediaToDesktop(job: JobRecord) {
+    if (job.status !== "succeeded" || !shouldExportJobToDesktop(job) || desktopExportedJobIds.current.has(job.id)) {
+      return;
+    }
+
+    try {
+      const artifacts = await getJobArtifacts(job.id);
+      const seenMediaUrls = new Set<string>();
+      const mediaFiles = artifacts.artifacts
+        .flatMap((artifact) => artifact.files)
+        .filter((file) => {
+          const kind = (file.kind ?? "").toLowerCase();
+          const url = file.externalUrl;
+          const isMedia = kind === "image" || kind === "video" || /^image\//i.test(file.mimeType ?? "") || /^video\//i.test(file.mimeType ?? "");
+          if (!url || !isMedia || seenMediaUrls.has(url)) {
+            return false;
+          }
+          seenMediaUrls.add(url);
+          return true;
+        });
+
+      if (!mediaFiles.length) {
+        return;
+      }
+
+      const title = jobDisplayTitle(job);
+      for (const [index, file] of mediaFiles.entries()) {
+        const url = file.externalUrl;
+        if (!url) {
+          continue;
+        }
+        const suffix = mediaFiles.length > 1 ? `-${index + 1}` : "";
+        const fallbackExtension = (file.kind ?? "").toLowerCase() === "video" ? ".mp4" : ".png";
+        const fileName = `${title}${suffix}${extensionFromFileName(file.fileName, fallbackExtension)}`;
+        const result = await invokeDesktopCommand<DesktopDownloadResult>("download_url_to_desktop", {
+          payload: {
+            url,
+            fileName
+          }
+        });
+        if (result.error || !result.available) {
+          throw result.error ?? new Error("desktop_export_unavailable");
+        }
+      }
+
+      desktopExportedJobIds.current.add(job.id);
+      saveDesktopExportedJobIds(desktopExportedJobIds.current);
+    } catch (caught) {
+      console.warn("Failed to export generated media to desktop", caught);
+    }
+  }
+
   async function refreshJob(targetJobId = selectedJobId) {
     if (!targetJobId) {
       setSelectedJob(null);
@@ -2408,6 +2507,7 @@ function App() {
       getJobTimeline(targetJobId, 500, undefined, timelineCursor)
     ]);
     setSelectedJob(job);
+    void maybeExportGeneratedMediaToDesktop(job);
     setTimeline((currentTimeline) => {
       if (!timelineCursor || currentTimeline?.job.id !== targetJobId) {
         return nextTimeline;
@@ -2744,11 +2844,12 @@ function App() {
             ? `\n\u5df2\u81ea\u52a8\u628a\u6a21\u578b\u8c03\u7528\u9884\u7b97\u4ece ${maxModelCalls} \u63d0\u9ad8\u5230 ${effectiveMaxModelCalls}\uff0c\u907f\u514d\u8be5\u6a21\u5f0f\u5728\u4e2d\u9014\u56e0\u9884\u7b97\u4e0d\u8db3\u505c\u4f4f\u3002`
             : `\nAutomatically raised the model-call budget from ${maxModelCalls} to ${effectiveMaxModelCalls} so this routing mode does not pause mid-run.`
           : "";
+      const createdJobTitle = inferJobDisplayTitle(messageWithAttachments);
       const assistantMessage = createConversationMessage(
         "assistant",
         language === "zh"
-          ? `\u5df2\u53d1\u9001\u7ed9 Agent \u56e2\u961f\uff1a${created.jobId}\u3002\u4f60\u53ef\u4ee5\u5728 Tasks \u9875\u67e5\u770b\u8fdb\u7a0b\u3002${budgetNote}`
-          : `Sent to the agent team: ${created.jobId}. You can inspect progress in Tasks.${budgetNote}`,
+          ? `\u4efb\u52a1\u5df2\u6d3e\u53d1\uff1a${createdJobTitle}\u3002\u4f60\u53ef\u4ee5\u5728 Tasks \u9875\u67e5\u770b\u8fdb\u7a0b\u3002${budgetNote}`
+          : `Task dispatched: ${createdJobTitle}. You can inspect progress in Tasks.${budgetNote}`,
         { jobId: created.jobId, status: "sent" }
       );
       appendMessagesToConversationState(nextConversationState, activeProject.id, activeThread.id, [assistantMessage]);
@@ -3815,7 +3916,7 @@ function App() {
               }}>
                 <span className={`dot ${statusTone(latestJob.status)}`} />
                 <span>
-                  <strong>{latestJob.id}</strong>
+                  <strong>{jobDisplayTitle(latestJob)}</strong>
                   <small>{routingLabel(latestJob.routingMode)}</small>
                 </span>
                 <em>{copy.statuses[latestJob.status]}</em>
@@ -3938,7 +4039,7 @@ function App() {
               <div className="streamSnapshot">
                 <div>
                   <span>{copy.workbenchLatestJob}</span>
-                  <em>{workbenchJob?.id ?? copy.workbenchNoJob}</em>
+                  <em>{workbenchJob ? jobDisplayTitle(workbenchJob) : copy.workbenchNoJob}</em>
                 </div>
                 <div>
                   <span>{copy.status}</span>
@@ -4461,7 +4562,7 @@ function App() {
                 </li>
                 <li>
                   <strong>{conversationCopy.latestJob}</strong>
-                  <p>{latestJob?.id ?? copy.noLatestJob}</p>
+                  <p>{latestJob ? jobDisplayTitle(latestJob) : copy.noLatestJob}</p>
                 </li>
               </ul>
             </article>
@@ -4702,7 +4803,7 @@ function App() {
           </div>
           <div className="selectedRunProgress">
             <div>
-              <span>{selectedFromList?.id ?? taskCopy.selectedRun}</span>
+              <span>{selectedFromList ? jobDisplayTitle(selectedFromList) : taskCopy.selectedRun}</span>
               <strong>{selectedFromList ? copy.statuses[selectedFromList.status] : copy.noJobSelected}</strong>
             </div>
             <div className="processMeter" aria-label={taskCopy.process}>
@@ -4732,7 +4833,7 @@ function App() {
           </div>
           <div>
             <span>{copy.latestJob}</span>
-            <strong>{latestJob?.id ?? copy.noLatestJob}</strong>
+            <strong>{latestJob ? jobDisplayTitle(latestJob) : copy.noLatestJob}</strong>
           </div>
         </div>
 
@@ -4815,7 +4916,7 @@ function App() {
                   >
                     <span className={`dot ${statusTone(job.status)}`} />
                     <span className="jobMeta">
-                      <strong>{job.id}</strong>
+                      <strong>{jobDisplayTitle(job)}</strong>
                       <span>{routingLabel(job.routingMode)}</span>
                     </span>
                     <span className="jobStatus">{copy.statuses[job.status]}</span>
@@ -4837,8 +4938,8 @@ function App() {
           <section className="jobDetail">
             <div className="sectionHeader detailHeader">
               <div>
-                <h2>{selectedFromList?.id ?? taskCopy.selectedRun}</h2>
-                <p>{selectedFromList ? `${selectedFromList.ingressOrigin} / ${routingLabel(selectedFromList.routingMode)}` : "-"}</p>
+                <h2>{selectedFromList ? jobDisplayTitle(selectedFromList) : taskCopy.selectedRun}</h2>
+                <p>{selectedFromList ? `${selectedFromList.id} / ${selectedFromList.ingressOrigin} / ${routingLabel(selectedFromList.routingMode)}` : "-"}</p>
               </div>
               <button
                 className="dangerButton"

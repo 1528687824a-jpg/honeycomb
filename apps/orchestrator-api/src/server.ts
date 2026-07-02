@@ -4060,6 +4060,14 @@ async function main() {
         artifacts.map(async (artifact) => {
           const files = await Promise.all(
             extractArtifactFileRefs(artifact).map(async (file) => {
+              if (!file.filePath) {
+                return {
+                  ...file,
+                  downloadable: Boolean(file.externalUrl),
+                  downloadUrl: null
+                };
+              }
+
               try {
                 const fileStat = await stat(file.filePath);
                 return {
@@ -4117,6 +4125,11 @@ async function main() {
 
       const file = extractArtifactFileRefs(artifact).find((candidate) => candidate.index === fileIndex);
       if (!file) {
+        response.status(404).json({ error: "artifact_file_not_found" });
+        return;
+      }
+
+      if (!file.filePath) {
         response.status(404).json({ error: "artifact_file_not_found" });
         return;
       }

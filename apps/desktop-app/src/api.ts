@@ -1204,6 +1204,7 @@ export type JobRecord = {
   sessionId: string;
   status: JobStatus;
   ingressOrigin: string;
+  rawPrompt: string;
   routingMode: RoutingMode;
   maxModelCalls: number;
   classicFinalGateEnabled: boolean;
@@ -1220,6 +1221,40 @@ export type JobRecord = {
   createdAt: string;
   updatedAt: string;
   completedAt: string | null;
+};
+
+export type JobArtifactFile = {
+  index: number;
+  label: string;
+  kind: string | null;
+  mimeType: string | null;
+  sizeBytes: number | null;
+  source: string | null;
+  filePath: string | null;
+  fileName: string;
+  externalUrl: string | null;
+  note: string | null;
+  downloadable: boolean;
+  downloadUrl: string | null;
+};
+
+export type JobArtifactSummary = {
+  id: string;
+  jobId: string;
+  stageId: string | null;
+  type: string;
+  title: string | null;
+  uri: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  files: JobArtifactFile[];
+};
+
+export type JobArtifactsResponse = {
+  jobId: string;
+  artifactCount: number;
+  fileCount: number;
+  artifacts: JobArtifactSummary[];
 };
 
 export type TimelineItem = {
@@ -1541,6 +1576,10 @@ export async function getJobTimeline(jobId: string, limit = 500, since?: string,
     params.set("cursor", cursor);
   }
   return request<JobTimeline>(`/jobs/${jobId}/timeline?${params.toString()}`);
+}
+
+export async function getJobArtifacts(jobId: string) {
+  return request<JobArtifactsResponse>(`/jobs/${jobId}/artifacts`);
 }
 
 export async function cancelJob(jobId: string) {

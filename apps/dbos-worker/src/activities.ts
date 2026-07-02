@@ -54,6 +54,7 @@ import {
   DEFAULT_MAX_MODEL_CALLS,
   DEFAULT_ROUTING_MODE
 } from "../../../packages/shared/src/types";
+import { userTaskPrompt } from "../../../packages/shared/src/job-title";
 import {
   redactAgentRuntime,
   resolveAgentRuntimeCandidates,
@@ -667,35 +668,36 @@ export async function prepareJobWorkspace(jobId: string) {
 }
 
 export function inferStagesFromPrompt(rawPrompt: string): StageDefinition[] {
+  const prompt = userTaskPrompt(rawPrompt);
   const needsResearch =
     /研究|调研|资料|网上|搜索|查询|查一下|最新|现状|竞品|事实|数据|来源|research|search|latest|current/i.test(
-      rawPrompt
+      prompt
     );
   const needsWriting =
     /文案|文章|脚本|故事|标题|邮件|公告|推文|方案|报告|总结|润色|写|copy|story|script|write|writing|content/i.test(
-      rawPrompt
+      prompt
     );
   const needsImage =
     /图片|图像|插画|海报|封面|配图|视觉|生成图|image|picture|illustration|poster|visual/i.test(
-      rawPrompt
+      prompt
     );
   const needsVideo =
     /视频|短片|动画|分镜|镜头|运镜|动态画面|生成视频|video|movie|clip|animation|animate|storyboard/i.test(
-      rawPrompt
+      prompt
     );
 
   const shouldRunResearch =
     needsResearch ||
-    /\u7814\u7a76|\u8c03\u7814|\u8d44\u6599|\u7f51\u4e0a|\u641c\u7d22|\u67e5\u8be2|\u6700\u65b0|\u73b0\u72b6|\u7ade\u54c1|\u4e8b\u5b9e|\u6570\u636e|\u6765\u6e90/i.test(rawPrompt);
+    /\u7814\u7a76|\u8c03\u7814|\u8d44\u6599|\u7f51\u4e0a|\u641c\u7d22|\u67e5\u8be2|\u6700\u65b0|\u73b0\u72b6|\u7ade\u54c1|\u4e8b\u5b9e|\u6570\u636e|\u6765\u6e90/i.test(prompt);
   const shouldRunWriting =
     needsWriting ||
-    /\u6587\u6848|\u6587\u7ae0|\u811a\u672c|\u6545\u4e8b|\u6807\u9898|\u90ae\u4ef6|\u516c\u544a|\u63a8\u6587|\u65b9\u6848|\u62a5\u544a|\u603b\u7ed3|\u6da6\u8272|\u5199/i.test(rawPrompt);
+    /\u6587\u6848|\u6587\u7ae0|\u811a\u672c|\u6545\u4e8b|\u6807\u9898|\u90ae\u4ef6|\u516c\u544a|\u63a8\u6587|\u65b9\u6848|\u62a5\u544a|\u603b\u7ed3|\u6da6\u8272|\u5199/i.test(prompt);
   const shouldRunImage =
     needsImage ||
-    /\u56fe\u7247|\u56fe\u50cf|\u63d2\u753b|\u6d77\u62a5|\u5c01\u9762|\u914d\u56fe|\u89c6\u89c9|\u5ba3\u4f20\u56fe|\u751f\u6210\u56fe/i.test(rawPrompt);
+    /\u56fe\u7247|\u56fe\u50cf|\u63d2\u753b|\u6d77\u62a5|\u5c01\u9762|\u914d\u56fe|\u89c6\u89c9|\u5ba3\u4f20\u56fe|\u751f\u6210\u56fe/i.test(prompt);
   const shouldRunVideo =
     needsVideo ||
-    /\u89c6\u9891|\u77ed\u7247|\u52a8\u753b|\u5206\u955c|\u955c\u5934|\u8fd0\u955c|\u52a8\u6001\u753b\u9762|\u751f\u6210\u89c6\u9891/i.test(rawPrompt);
+    /\u89c6\u9891|\u77ed\u7247|\u52a8\u753b|\u5206\u955c|\u955c\u5934|\u8fd0\u955c|\u52a8\u6001\u753b\u9762|\u751f\u6210\u89c6\u9891/i.test(prompt);
 
   const stages: StageDefinition[] = [];
 

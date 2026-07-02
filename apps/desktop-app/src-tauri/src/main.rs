@@ -53,6 +53,21 @@ struct ProviderConnectionResult {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct DownloadToDesktopPayload {
+    url: String,
+    file_name: String,
+    authorization: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DownloadToDesktopResult {
+    path: String,
+    bytes: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct AgentModelConfigPayload {
     agent_id: String,
     provider_name: String,
@@ -211,6 +226,51 @@ fn safe_storage_name(input: &str) -> String {
     } else {
         output.chars().take(96).collect()
     }
+}
+
+fn safe_desktop_file_name(input: &str) -> String {
+    let mut output = String::new();
+    for value in input.trim().chars() {
+        if value.is_control() || matches!(value, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
+            output.push('_');
+        } else {
+            output.push(value);
+        }
+    }
+    let cleaned = output.trim().trim_matches('.').to_string();
+    if cleaned.is_empty() {
+        "honeycomb-artifact".to_string()
+    } else {
+        cleaned.chars().take(120).collect()
+    }
+}
+
+fn unique_desktop_file_path(desktop_dir: &Path, file_name: &str) -> PathBuf {
+    let safe_name = safe_desktop_file_name(file_name);
+    let path = desktop_dir.join(&safe_name);
+    if !path.exists() {
+        return path;
+    }
+
+    let parsed = Path::new(&safe_name);
+    let stem = parsed
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("honeycomb-artifact");
+    let extension = parsed
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| format!(".{value}"))
+        .unwrap_or_default();
+
+    for index in 2..1000 {
+        let candidate = desktop_dir.join(format!("{stem}-{index}{extension}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+
+    desktop_dir.join(format!("{stem}-{}{}", timestamp_string(), extension))
 }
 
 fn agent_api_key_path(app: &AppHandle, agent_id: &str) -> Result<PathBuf, String> {
@@ -801,6 +861,46 @@ fn pick_files() -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
+async fn download_url_to_desktop(
+    app: AppHandle,
+    payload: DownloadToDesktopPayload,
+) -> Result<DownloadToDesktopResult, String> {
+    let url = payload.url.trim();
+    if url.is_empty() || !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err("download_url_invalid".to_string());
+    }
+
+    let desktop_dir = app.path().desktop_dir().map_err(|error| error.to_string())?;
+    let target = unique_desktop_file_path(&desktop_dir, &payload.file_name);
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(120))
+        .build()
+        .map_err(|error| error.to_string())?;
+    let mut request = client.get(url);
+    if let Some(authorization) = payload
+        .authorization
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        request = request.header(reqwest::header::AUTHORIZATION, authorization);
+    }
+
+    let response = request.send().await.map_err(|error| error.to_string())?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("download_http_{}", status.as_u16()));
+    }
+    let bytes = response.bytes().await.map_err(|error| error.to_string())?;
+    fs::write(&target, bytes.as_ref()).map_err(|error| error.to_string())?;
+
+    Ok(DownloadToDesktopResult {
+        path: target.to_string_lossy().to_string(),
+        bytes: bytes.len() as u64,
+    })
+}
+
+#[tauri::command]
 fn open_in_file_explorer(path: String) -> Result<(), String> {
     let trimmed = path.trim();
     if trimmed.is_empty() {
@@ -946,6 +1046,7 @@ fn main() {
             save_provider_api_key,
             load_provider_api_key,
             load_api_auth_token,
+            download_url_to_desktop,
             open_in_file_explorer,
             pick_directory,
             pick_files
