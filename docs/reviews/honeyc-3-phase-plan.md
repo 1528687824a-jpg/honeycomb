@@ -20,10 +20,10 @@ already ahead of the earlier plan.
    - workspace registration target/path validation
    - API auth token parsing and public route rules
    - MCP policy matching
-3. Before remote/iOS exposure:
+3. Before remote browser/IM exposure:
    - Replace SSE query tokens with short-lived tickets or cookie-based auth.
    - Add per-device token issuance/revocation instead of copying the local admin
-     token to phones.
+     token to remote clients.
    - Cache DPAPI reads in-process with a TTL and avoid plaintext fallback on
      recognized encrypted envelopes.
 4. Move external review notes into the repository under `docs/reviews/`.
@@ -41,8 +41,8 @@ already ahead of the earlier plan.
   batch, and CI.
 - Phase 19: packaged OpenClaw launch/restart defaults and real provider E2E.
 - Phase 20: schedule workspace/model/reasoning policy binding and UI.
-- Phase 21.5: first iOS path through hosted API, PWA/mobile UI, per-device
-  token, and SSE ticketing.
+- Phase 21.5: remote browser/IM access through hosted API, per-client token,
+  and SSE ticketing.
 - Phase 22: Feishu/IM background agent model.
 - Phase 23: cross-platform release work, keychain support, installer diagnostics,
   and GitHub Release v0.1.

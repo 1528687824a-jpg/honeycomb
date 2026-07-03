@@ -1,56 +1,59 @@
-# Honeycomb iOS Client Framework
+# Honeycomb macOS Desktop Framework
 
-Created local scaffold:
+This replaces the earlier iOS direction. The Apple target is macOS desktop,
+not iPhone/iPad.
 
-```text
-D:\honeycomb-ios
-```
+## Local Scaffold
 
-## Architecture
-
-The iOS app is a remote client. It does not run:
-
-- Docker
-- Postgres
-- DBOS worker
-- WSL/OpenClaw local process execution
-- PowerShell launcher commands
-
-Instead, it connects to a Honeycomb backend host over HTTP/HTTPS.
-
-## Current Scaffold
-
-The first iOS scaffold uses Capacitor + React + Vite.
-
-Implemented in the scaffold:
-
-- backend URL setting,
-- bearer token setting,
-- `/health` check,
-- job creation through `POST /jobs`,
-- recent job list through `GET /jobs`,
-- mobile-safe status display.
-
-Verified on Windows:
+The independent macOS planning folder lives at:
 
 ```text
-cd D:\honeycomb-ios
-npm install
-npm run build
+D:\honeycomb-macos
 ```
 
-The native iOS project itself must be generated on macOS with Xcode:
+The production implementation should stay in the main Honeycomb repo because
+the existing desktop app already uses Tauri + React:
 
-```bash
-cd /path/to/honeycomb-ios
-npm run ios:add
-npm run ios:open
+```text
+D:\honeycomb\apps\desktop-app
 ```
 
-## Backend Work Required Before Real iOS Release
+## Product Position
 
-1. Per-device token issuance/revocation.
-2. HTTPS/public ingress deployment path.
-3. Short-lived timeline/SSE tickets.
-4. Artifact proxy/download policy for expired provider URLs.
-5. Mobile capability endpoint so iOS can hide desktop-only actions.
+macOS should run Honeycomb as a desktop product, parallel to Windows:
+
+- local desktop UI through Tauri,
+- local Docker/Postgres/worker stack when available,
+- local OpenClaw execution without WSL,
+- macOS Keychain for local secrets,
+- bash/zsh launcher scripts,
+- DMG or app bundle packaging.
+
+It is not a remote-only companion client. It should be able to own real task
+execution on the Mac.
+
+## Required Backend/Desktop Work
+
+1. Add a platform execution adapter for OpenClaw:
+   - Windows keeps `wsl -d ...`;
+   - macOS uses local `openclaw` command discovery.
+2. Replace Windows-only DPAPI secret storage with a SecretBackend interface:
+   - Windows: DPAPI;
+   - macOS: Keychain;
+   - Linux/headless: libsecret or encrypted file fallback.
+3. Add bash/zsh equivalents for dev, tryout, smoke, and repair scripts.
+4. Add macOS readiness diagnostics:
+   - Docker engine reachable;
+   - OpenClaw installed;
+   - Keychain access working;
+   - required ports available.
+5. Add Tauri macOS build notes and later CI build verification.
+
+## What Was Rolled Back
+
+The previous mobile/iOS backend-token slice was reverted because it solved the
+wrong platform problem. Device pairing, mobile tokens, and mobile-only SSE
+tickets are no longer the next platform priority.
+
+Remote web or mobile access can still be revisited later, but it should not
+drive the Apple desktop architecture.

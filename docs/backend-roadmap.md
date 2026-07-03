@@ -305,8 +305,8 @@ changes land.
    - Local secret reads now have TTL caching and safer corrupted-envelope
      behavior.
    - Second unit-test batch and CI wiring are implemented.
-   - Remote/iOS still needs short-lived SSE tickets or cookie auth, plus
-     per-device token issuance/revocation.
+   - Remote browser/IM access still needs short-lived SSE tickets or cookie
+     auth. Apple desktop support is macOS-first, not iOS-first.
    - OpenClaw real provider E2E should happen before Schedule UI investment.
 
 ## Work Order
@@ -473,19 +473,18 @@ deliberately the LAST stage (user decision: finish the product first).
 11. Safe WSL/Docker repair actions on top of the read-only checks (explicit
     confirmation, scoped to Honeycomb's own stack).
 
-### Stage D - IM and mobile ingress
+### Stage D - IM and remote browser ingress
 
 12. Feishu relay completion and independent background agent sessions; then
     WeChat/other channels.
 13. Remote access auth: per-device tokens and short-lived SSE tickets
-    (HONEYC~3 item; shared prerequisite for Stage E iOS access).
+    (HONEYC~3 item; shared prerequisite for remote browser/IM access).
 
 ### Stage E - Cross-platform adaptation (LAST) + Alpha
 
 14. Execute `docs/cross-platform-plan.md`: process-execution adapter
     (win32 WSL wrapper vs native CLI), SecretBackend abstraction
     (DPAPI/Keychain/libsecret/encrypted-file), bash launchers, Tauri
-    macOS/Linux builds, hosted web panel + PWA for headless Linux/WSL2 and
-    iOS remote use. iOS gets no native app: IM channels + PWA + per-device
-    tokens cover it.
+    macOS/Linux builds, and hosted web panel for headless Linux/WSL2.
+    Apple computer support means macOS desktop support, not iOS support.
 15. Cross-platform installer validation, then the first public Alpha.

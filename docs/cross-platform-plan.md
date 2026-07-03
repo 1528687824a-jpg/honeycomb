@@ -1,6 +1,6 @@
 # Honeycomb 跨平台适配设计（阶段 E，刻意最后执行）
 
-用户分布覆盖 Windows、WSL2、Linux、macOS、iOS。本设计先定架构边界，
+用户分布覆盖 Windows、WSL2、Linux、macOS。本设计先定架构边界，
 实施排在产品功能研发完成之后（见 backend-roadmap.md 的工作计划阶段 E）。
 
 ## 现状盘点
@@ -25,8 +25,8 @@ Windows 专属耦合点（跨平台要解决的全部清单）：
 
 1. 后端 API 契约不变；平台差异收敛到三个适配层：
    进程执行、密钥存储、启动器。UI 与编排逻辑零分叉。
-2. iOS 不做原生 App。定位是"远程伴侣"：IM 渠道（阶段 D 成果）+
-   PWA/web 面板 + 每设备 token 与短时 SSE ticket（HONEYC~3 既定方案）。
+2. 苹果平台当前目标是 macOS 桌面端，不是 iPhone/iPad。macOS 要能像
+   Windows 一样本地运行任务，而不是只做远程伴侣。
 3. headless Linux 服务器与"全栈跑在 WSL2 里"的用户走同一条路径：
    docker compose + web 面板。
 4. 桌面体验（Tauri）只承诺 Windows/macOS/Linux 桌面三端。
@@ -39,7 +39,6 @@ Windows 专属耦合点（跨平台要解决的全部清单）：
 | macOS | Tauri 构建 | 本机 CLI 直调 | Keychain | bash |
 | Linux 桌面 | Tauri 构建 | 本机 CLI 直调 | libsecret，回退加密文件 | bash |
 | Linux 服务器 / WSL2 | web 面板（PWA） | 本机 CLI 直调 | 口令派生加密文件 | docker compose |
-| iOS | PWA + IM 渠道 | —（远程访问） | 每设备 token | — |
 
 ## 三个适配层
 
@@ -69,7 +68,7 @@ Windows 专属耦合点（跨平台要解决的全部清单）：
   走与后端相同的 SecretBackend 策略。
 - web 面板：orchestrator-api 静态托管现有 React 构建产物（desktop-app
   的 UI 层本就是 React，把 Tauri invoke 调用面收敛到已有的 API
-  fallback 路径即可），加 PWA manifest 供 iOS 添加到主屏幕。
+  fallback 路径即可）。这属于服务器/浏览器模式，不再作为苹果平台主线。
 
 ## 实施顺序（阶段 E 内部）
 
@@ -78,11 +77,12 @@ Windows 专属耦合点（跨平台要解决的全部清单）：
 3. bash 启动器 + docker compose headless 文档。
 4. macOS Keychain / Linux libsecret 实现。
 5. Tauri macOS/Linux 构建与冒烟。
-6. web 面板托管 + PWA + 每设备 token/SSE ticket（与阶段 D 远程认证合流）。
+6. web 面板托管（服务器/浏览器模式，与阶段 D 远程认证合流）。
 7. 跨平台安装器验证 + Alpha 发布。
 
 ## 不做的事
 
 - iOS/Android 原生 App。
+- 把 macOS 当作手机远程客户端来设计。
 - 在 Windows 上绕开 WSL 直跑 OpenClaw（保持单一可信执行环境）。
 - 为 headless 模式单独再写一套 UI（复用桌面 React 构建产物）。

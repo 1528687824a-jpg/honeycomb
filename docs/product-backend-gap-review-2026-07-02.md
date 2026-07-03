@@ -5,13 +5,14 @@ a multi-agent product, not just as a local developer demo.
 
 ## Product Conclusion
 
-The Windows-local backend is now usable enough for owner trials, but iOS changes
-the product standard. A phone cannot run the local Docker/Postgres/worker stack,
-so the backend must become a secure remote host that a mobile client can trust.
+The Windows-local backend is now usable enough for owner trials, but macOS raises
+the product standard. The Apple target is a real desktop product, not a phone
+companion, so the backend must remove Windows-only assumptions while keeping the
+same local task-execution model.
 
 The most important next backend work is:
 
-1. Mobile-safe authentication and device pairing.
+1. Cross-platform local execution and macOS readiness checks.
 2. Reliable job execution: queue, cancellation, retry, and provider failure
    handling.
 3. Durable artifact delivery: generated files must be recoverable, previewable,
@@ -19,32 +20,34 @@ The most important next backend work is:
 
 ## Deepening Opportunities
 
-### 1. Mobile Device Access Module
+### 1. macOS Desktop Runtime Module
 
 Files/modules involved:
-- `apps/orchestrator-api/src/api-auth.ts`
-- `apps/orchestrator-api/src/server.ts`
-- `apps/desktop-app/src/api.ts`
-- future iOS client under `D:\honeycomb-ios`
+- `apps/dbos-worker/src/adapters/openclaw.ts`
+- `packages/runtime/src/local-secrets.ts`
+- `apps/desktop-app/src-tauri/src/main.rs`
+- `scripts/`
+- macOS planning folder under `D:\honeycomb-macos`
 
 Problem:
-- The current bearer token is a local desktop token. It works for Windows on
-  one machine, but it is too blunt for iOS.
-- iOS needs device pairing, device revocation, HTTPS-only production mode, and
-  short-lived stream access.
+- OpenClaw execution is Windows/WSL oriented.
+- Secret storage currently depends on Windows DPAPI.
+- Launcher, smoke, and repair scripts are mostly PowerShell.
+- A macOS user should not need WSL or Windows-specific setup.
 
 Solution:
-- Add a deep Module for device access:
-  - pair a phone with a backend host,
-  - issue per-device tokens,
-  - revoke a device,
-  - mint short-lived SSE/timeline tickets.
+- Add a deep module for platform runtime:
+  - choose the correct OpenClaw execution command per OS,
+  - route secrets through a SecretBackend interface,
+  - provide bash/zsh launchers and diagnostics,
+  - expose macOS readiness status to the desktop UI.
 
 Benefits:
-- Locality: token and stream rules stop leaking across every route.
-- Leverage: Windows, iOS, PWA, and future IM clients use the same Interface.
-- Tests improve because auth behaviour can be tested at one seam instead of
-  repeating route-level token cases.
+- Locality: platform-specific behavior stops leaking through workers and
+  scripts.
+- Leverage: Windows, macOS, Linux desktop, and server mode share one interface.
+- Tests improve because platform decisions can be asserted without running a
+  full desktop app.
 
 ### 2. Job Execution Control Module
 
@@ -79,13 +82,13 @@ Files/modules involved:
 - `apps/orchestrator-api/src/artifact-files.ts`
 - `apps/orchestrator-api/src/server.ts`
 - `apps/dbos-worker/src/activities.ts`
-- desktop and iOS artifact clients
+- desktop and web artifact clients
 
 Problem:
 - Recent work fixed URL-only media discovery, but artifact delivery is still
   split between local files, external URLs, and task JSON records.
-- iOS needs previews and download links that remain valid after provider URLs
-  expire.
+- macOS and web clients need previews and download links that remain valid after
+  provider URLs expire.
 
 Solution:
 - Add one deep Module for generated artifacts:
@@ -97,7 +100,7 @@ Solution:
 
 Benefits:
 - Locality: media handling stops being scattered across worker, API, and UI.
-- Leverage: desktop, iOS, memory, and review pages all get the same artifact
+- Leverage: desktop, web, memory, and review pages all get the same artifact
   contract.
 - Tests improve because URL expiry, missing files, and download fallback can be
   verified through one Interface.
@@ -126,7 +129,7 @@ Solution:
 Benefits:
 - Locality: routing mistakes can be fixed in the planner contract instead of
   in scattered UI and worker heuristics.
-- Leverage: Tasks page, mobile UI, logs, and memory can explain the same plan.
+- Leverage: Tasks page, desktop UI, logs, and memory can explain the same plan.
 - Tests improve because task routing can assert a structured plan.
 
 ### 5. Remote Operations Module
@@ -138,8 +141,8 @@ Files/modules involved:
 - `docker-compose.yml`
 
 Problem:
-- Diagnostics are strong for Windows-local use, but remote/iOS needs a server
-  operations story: health, upgrades, logs, repair, and backup.
+- Diagnostics are strong for Windows-local use, but macOS and server mode need a
+  clearer operations story: health, upgrades, logs, repair, and backup.
 
 Solution:
 - Add a deployable remote operations Module:
@@ -152,16 +155,16 @@ Solution:
 Benefits:
 - Locality: operations knowledge is concentrated instead of spread across
   scripts and docs.
-- Leverage: Windows owner trials, server mode, and iOS all use the same health
+- Leverage: Windows owner trials, macOS desktop, and server mode all use the same health
   story.
 
 ## Recommended Execution Order
 
-1. Device access and pairing.
+1. macOS desktop runtime.
 2. Artifact delivery.
 3. Job execution control.
 4. Planner orchestration contract.
 5. Remote operations.
 
-This order lets iOS become useful without pretending the phone can run the
-agent backend locally.
+This order lets Apple computers become first-class desktop hosts instead of
+treating them like mobile remote clients.

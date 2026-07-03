@@ -7,7 +7,7 @@ Source context: external review file `HONEYC~2.MD`.
 ## Review Findings
 
 The review identified six local-security gaps that had to be closed before
-remote/iOS exposure or broader tool access:
+remote browser/IM exposure or broader tool access:
 
 1. S1: Local API routes lacked unified authentication and development ports
    could be exposed beyond localhost.
