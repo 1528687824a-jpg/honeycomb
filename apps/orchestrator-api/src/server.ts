@@ -96,6 +96,11 @@ import {
   upsertScheduledTask
 } from "../../../packages/db/src/schedules";
 import {
+  issueMobileDevice,
+  listMobileDevices,
+  revokeMobileDevice
+} from "../../../packages/db/src/mobile-devices";
+import {
   formatWorkspaceCommand,
   getWorkspaceGitStatus,
   inspectWorkspace,
@@ -183,7 +188,7 @@ import {
   withLiveProviderSecretStatuses
 } from "./provider-secret-status";
 import { checkMcpCommand } from "./mcp-diagnostics";
-import { requireApiToken, timingSafeEqualString } from "./api-auth";
+import { requireApiToken, timingSafeEqualString, type ApiAuthActor } from "./api-auth";
 import {
   evaluateAgentNetworkPolicy,
   type AgentNetworkOperation
@@ -389,6 +394,16 @@ const panelPromptPersonalizationSchema = z.object({
 });
 
 type PanelPromptPersonalizationInput = z.infer<typeof panelPromptPersonalizationSchema>;
+
+const mobileDeviceSchema = z.object({
+  displayName: z.string().trim().min(1).max(200),
+  platform: z.string().trim().min(1).max(80).nullable().optional(),
+  metadata: z.record(z.unknown()).optional()
+});
+
+const mobileDevicesQuerySchema = z.object({
+  includeRevoked: z.coerce.boolean().optional()
+});
 
 type PanelChatCompletionMessage = {
   role: "system" | "user" | "assistant";
@@ -768,6 +783,20 @@ function previewJson(value: unknown, maxLength = 4000) {
   } catch {
     return String(value).slice(0, maxLength);
   }
+}
+
+function apiAuthActor(response: express.Response) {
+  return response.locals.apiAuth as ApiAuthActor | undefined;
+}
+
+function requireAdminApiAuth(response: express.Response) {
+  const actor = apiAuthActor(response);
+  if (actor?.kind === "admin" || actor?.kind === "insecure") {
+    return true;
+  }
+
+  response.status(403).json({ error: "admin_api_token_required" });
+  return false;
 }
 
 async function requireAgentNetworkPolicy(input: {
@@ -1455,6 +1484,66 @@ async function main() {
 
   app.get("/health", (_request, response) => {
     response.json({ ok: true });
+  });
+
+  app.get("/mobile/me", (_request, response) => {
+    const actor = apiAuthActor(response);
+    response.json({
+      authenticated: Boolean(actor),
+      actor: actor ?? null
+    });
+  });
+
+  app.get("/mobile/devices", async (request, response, next) => {
+    try {
+      if (!requireAdminApiAuth(response)) {
+        return;
+      }
+
+      const query = mobileDevicesQuerySchema.parse(request.query);
+      const devices = await listMobileDevices({ includeRevoked: query.includeRevoked });
+      response.json({
+        devices,
+        count: devices.length
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/mobile/devices", async (request, response, next) => {
+    try {
+      if (!requireAdminApiAuth(response)) {
+        return;
+      }
+
+      const input = mobileDeviceSchema.parse(request.body ?? {});
+      const issued = await issueMobileDevice(input);
+      response.status(201).json({
+        device: issued.device,
+        token: issued.token,
+        tokenShownOnce: true
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/mobile/devices/:deviceId/revoke", async (request, response, next) => {
+    try {
+      if (!requireAdminApiAuth(response)) {
+        return;
+      }
+
+      const device = await revokeMobileDevice(request.params.deviceId);
+      if (!device) {
+        response.status(404).json({ error: "mobile_device_not_found" });
+        return;
+      }
+      response.json({ device });
+    } catch (error) {
+      next(error);
+    }
   });
 
   app.post("/panel/agent-prompts/personalize", (request, response, next) => {

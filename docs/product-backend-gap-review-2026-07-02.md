@@ -17,6 +17,11 @@ The most important next backend work is:
 3. Durable artifact delivery: generated files must be recoverable, previewable,
    and downloadable on every client.
 
+Update after first implementation slice:
+- Mobile device token storage, verification, and revocation now exist.
+- Pairing-code UX, per-device scopes, HTTPS production ingress, and short-lived
+  SSE tickets are still pending.
+
 ## Deepening Opportunities
 
 ### 1. Mobile Device Access Module

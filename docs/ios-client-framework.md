@@ -25,7 +25,8 @@ The first iOS scaffold uses Capacitor + React + Vite.
 Implemented in the scaffold:
 
 - backend URL setting,
-- bearer token setting,
+- bearer token setting; this can now be a mobile device token issued by the
+  Honeycomb backend,
 - `/health` check,
 - job creation through `POST /jobs`,
 - recent job list through `GET /jobs`,
@@ -49,7 +50,7 @@ npm run ios:open
 
 ## Backend Work Required Before Real iOS Release
 
-1. Per-device token issuance/revocation.
+1. Pairing-code or QR-code flow on top of the new mobile device token backend.
 2. HTTPS/public ingress deployment path.
 3. Short-lived timeline/SSE tickets.
 4. Artifact proxy/download policy for expired provider URLs.
