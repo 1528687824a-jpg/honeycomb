@@ -49,6 +49,18 @@ execution on the Mac.
    - required ports available.
 5. Add Tauri macOS build notes and later CI build verification.
 
+## Current Backend Slice
+
+The first execution-adapter slice is now in place:
+
+- `OPENCLAW_AGENT_RUNNER=auto` resolves to `wsl` on Windows.
+- `OPENCLAW_AGENT_RUNNER=auto` resolves to `native` on macOS/Linux.
+- `OPENCLAW_AGENT_RUNNER=native` can explicitly force local `openclaw`.
+- `OPENCLAW_AGENT_RUNNER=provider-direct` remains available only as an explicit
+  bypass for provider-direct local trials.
+- The worker builds one host command before execution, so future macOS
+  diagnostics can explain the same runner that the worker will actually use.
+
 ## What Was Rolled Back
 
 The previous mobile/iOS backend-token slice was reverted because it solved the

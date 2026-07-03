@@ -63,6 +63,7 @@ import {
 } from "./agent-runtime";
 import {
   getOpenClawAgentRunner,
+  resolveOpenClawAgentRunner,
   runOpenClawAgent,
   shouldUseProviderDirectRunner,
   type OpenClawRunResult
@@ -245,9 +246,7 @@ async function runOpenClawAgentIdempotent(input: {
       idempotencyKey,
       mode: isOpenClawRealMode() ? "real" : "mock",
       runner: isOpenClawRealMode()
-        ? shouldUseProviderDirectRunner()
-          ? "provider-direct"
-          : getOpenClawAgentRunner()
+        ? resolveOpenClawAgentRunner({ runner: getOpenClawAgentRunner() })
         : "mock",
       route: redactedPrimaryRoute,
       routeCandidates: redactedRouteCandidates
@@ -2313,7 +2312,7 @@ export async function finalizeJob(jobId: string) {
       ? await getArtifactOrNull(`${jobId}-ART-DISCUSSION-SYNTHESIS`)
       : null;
   const executionMode = isOpenClawRealMode()
-    ? `real provider-backed execution (${getOpenClawAgentRunner()})`
+    ? `real provider-backed execution (${resolveOpenClawAgentRunner({ runner: getOpenClawAgentRunner() })})`
     : "mock execution";
   const stageLines = stageSummaries.flatMap(({ stage, summary, artifactPath, generatedArtifacts }) => [
     `- ${stage.stageIndex}. ${stage.name} (${stage.agentId})`,

@@ -145,6 +145,10 @@ import {
   type ToolApprovalRecord
 } from "../../../packages/shared/src/types";
 import { buildPanelAgentPromptFiles } from "../../../packages/shared/src/panel-agent-prompt-designer";
+import {
+  normalizeOpenClawAgentRunner,
+  resolveOpenClawAgentRunner
+} from "../../../packages/shared/src/openclaw-runner";
 import { launchDbos, startJobWorkflow } from "../../dbos-worker/src/dbos-runtime";
 import { ingressAdapters } from "./adapters";
 import { getRuntimeCapabilities } from "./capabilities";
@@ -993,9 +997,8 @@ function buildPanelChatSystemPrompt(input: {
 }) {
   const agentName = input.chat.supervisorName?.trim() || input.agent.displayName || "Panel agent";
   const backendAgentMode = process.env.OPENCLAW_AGENT_MODE === "real" ? "real" : "mock";
-  const configuredRunner = process.env.OPENCLAW_AGENT_RUNNER?.trim() || "auto";
-  const effectiveRunner =
-    configuredRunner === "auto" ? process.platform === "win32" ? "wsl" : "provider-direct" : configuredRunner;
+  const configuredRunner = normalizeOpenClawAgentRunner(process.env.OPENCLAW_AGENT_RUNNER);
+  const effectiveRunner = resolveOpenClawAgentRunner({ runner: configuredRunner });
   const languageInstruction = input.chat.language === "zh"
     ? "Reply in Chinese unless the user explicitly asks for another language."
     : "Reply in the user's language unless they explicitly ask for another language.";

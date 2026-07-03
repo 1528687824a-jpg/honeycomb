@@ -6,13 +6,17 @@ import path from "node:path";
 import { test } from "node:test";
 import {
   buildOpenClawAgentArgs,
+  buildOpenClawHostCommand,
+  buildNativeOpenClawAgentArgs,
   collectMediaCandidates,
   extractOpenClawText,
   extractOpenClawUsage,
   extractProviderDirectChatText,
   persistMediaCandidates,
+  resolveOpenClawAgentRunner,
   runOpenClawAgent,
-  selectProviderDirectKind
+  selectProviderDirectKind,
+  shouldUseProviderDirectRunner
 } from "../apps/dbos-worker/src/adapters/openclaw";
 
 test("extractOpenClawText accepts every recognized output shape", () => {
@@ -107,6 +111,74 @@ test("buildOpenClawAgentArgs wraps the CLI in a Linux-side timeout", () => {
   assert.equal(args[args.indexOf("--session-id") + 1], "job-123-stage-4");
   assert.equal(args[args.indexOf("--timeout") + 1], "600");
   assert.equal(args[args.indexOf("--agent") + 1], "research-agent");
+});
+
+test("resolveOpenClawAgentRunner maps auto to WSL on Windows and native elsewhere", () => {
+  assert.equal(resolveOpenClawAgentRunner({ runner: "auto", platform: "win32" }), "wsl");
+  assert.equal(resolveOpenClawAgentRunner({ runner: "auto", platform: "darwin" }), "native");
+  assert.equal(resolveOpenClawAgentRunner({ runner: "auto", platform: "linux" }), "native");
+  assert.equal(resolveOpenClawAgentRunner({ runner: "provider-direct", platform: "darwin" }), "provider-direct");
+  assert.equal(resolveOpenClawAgentRunner({ runner: "wsl", platform: "darwin" }), "wsl");
+  assert.equal(resolveOpenClawAgentRunner({ runner: "native", platform: "win32" }), "native");
+});
+
+test("buildOpenClawHostCommand uses WSL for Windows and local openclaw for macOS", () => {
+  const previousCli = process.env.OPENCLAW_CLI;
+  try {
+    delete process.env.OPENCLAW_CLI;
+    const windows = buildOpenClawHostCommand({
+      agentId: "research-agent",
+      sessionId: "job:123/stage 4",
+      message: "hello",
+      timeoutSeconds: 600,
+      platform: "win32",
+      runner: "auto"
+    });
+    assert.equal(windows.runner, "wsl");
+    assert.equal(windows.command, "wsl");
+    assert.equal(windows.args[0], "-d");
+    assert.ok(windows.args.includes("/home/administrator/.npm-global/bin/openclaw"));
+
+    const mac = buildOpenClawHostCommand({
+      agentId: "research-agent",
+      sessionId: "job:123/stage 4",
+      message: "hello",
+      timeoutSeconds: 600,
+      platform: "darwin",
+      runner: "auto"
+    });
+    assert.equal(mac.runner, "native");
+    assert.equal(mac.command, "openclaw");
+    assert.deepEqual(mac.args, buildNativeOpenClawAgentArgs({
+      agentId: "research-agent",
+      sessionId: "job:123/stage 4",
+      message: "hello",
+      timeoutSeconds: 600
+    }));
+  } finally {
+    if (previousCli === undefined) {
+      delete process.env.OPENCLAW_CLI;
+    } else {
+      process.env.OPENCLAW_CLI = previousCli;
+    }
+  }
+});
+
+test("shouldUseProviderDirectRunner honors OPENCLAW_AGENT_RUNNER", () => {
+  const previousRunner = process.env.OPENCLAW_AGENT_RUNNER;
+  try {
+    process.env.OPENCLAW_AGENT_RUNNER = "provider-direct";
+    assert.equal(shouldUseProviderDirectRunner(), true);
+
+    process.env.OPENCLAW_AGENT_RUNNER = "native";
+    assert.equal(shouldUseProviderDirectRunner(), false);
+  } finally {
+    if (previousRunner === undefined) {
+      delete process.env.OPENCLAW_AGENT_RUNNER;
+    } else {
+      process.env.OPENCLAW_AGENT_RUNNER = previousRunner;
+    }
+  }
 });
 
 test("selectProviderDirectKind routes specialist agents to media endpoints", () => {

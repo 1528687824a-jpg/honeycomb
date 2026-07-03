@@ -2,6 +2,12 @@ import { execFile } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import {
+  normalizeOpenClawAgentRunner,
+  resolveOpenClawAgentRunner,
+  type OpenClawAgentRunner,
+  type OpenClawEffectiveRunner
+} from "../../../../packages/shared/src/openclaw-runner";
 
 const execFileAsync = promisify(execFile);
 
@@ -67,29 +73,36 @@ function openClawRealMode() {
   return process.env.OPENCLAW_AGENT_MODE === "real";
 }
 
-export type OpenClawAgentRunner = "auto" | "wsl" | "provider-direct";
+export type OpenClawHostCommand = {
+  runner: Exclude<OpenClawEffectiveRunner, "provider-direct">;
+  command: string;
+  args: string[];
+  timeoutMs: number;
+};
 
 export function getOpenClawAgentRunner(): OpenClawAgentRunner {
-  const configured = process.env.OPENCLAW_AGENT_RUNNER?.trim().toLowerCase();
-  if (configured === "wsl" || configured === "provider-direct" || configured === "auto") {
+  return normalizeOpenClawAgentRunner(process.env.OPENCLAW_AGENT_RUNNER);
+}
+
+export function shouldUseProviderDirectRunner(input: {
+  runner?: OpenClawAgentRunner;
+  platform?: NodeJS.Platform;
+} = {}) {
+  return resolveOpenClawAgentRunner({
+    runner: input.runner ?? getOpenClawAgentRunner(),
+    platform: input.platform
+  }) === "provider-direct";
+}
+
+export { resolveOpenClawAgentRunner };
+export type { OpenClawAgentRunner, OpenClawEffectiveRunner };
+
+function getOpenClawCommand(platform: NodeJS.Platform = process.platform) {
+  const configured = process.env.OPENCLAW_CLI?.trim();
+  if (configured) {
     return configured;
   }
-  return "auto";
-}
-
-export function shouldUseProviderDirectRunner() {
-  const runner = getOpenClawAgentRunner();
-  if (runner === "provider-direct") {
-    return true;
-  }
-  if (runner === "wsl") {
-    return false;
-  }
-  return process.platform !== "win32";
-}
-
-function getOpenClawCommand() {
-  return process.env.OPENCLAW_CLI ?? "/home/administrator/.npm-global/bin/openclaw";
+  return platform === "win32" ? "/home/administrator/.npm-global/bin/openclaw" : "openclaw";
 }
 
 function getWslDistro() {
@@ -933,6 +946,56 @@ export function buildOpenClawAgentArgs(input: {
   ];
 }
 
+export function buildNativeOpenClawAgentArgs(input: {
+  agentId: string;
+  sessionId: string;
+  message: string;
+  timeoutSeconds: number;
+}) {
+  return [
+    "agent",
+    "--agent",
+    input.agentId,
+    "--session-id",
+    toOpenClawSessionId(input.sessionId),
+    "--message",
+    input.message,
+    "--json",
+    "--timeout",
+    String(input.timeoutSeconds)
+  ];
+}
+
+export function buildOpenClawHostCommand(input: {
+  agentId: string;
+  sessionId: string;
+  message: string;
+  timeoutSeconds: number;
+  platform?: NodeJS.Platform;
+  runner?: OpenClawAgentRunner;
+}): OpenClawHostCommand {
+  const platform = input.platform ?? process.platform;
+  const runner = resolveOpenClawAgentRunner({ runner: input.runner ?? getOpenClawAgentRunner(), platform });
+  const timeoutMs = input.timeoutSeconds * 1000 + 30_000;
+  if (runner === "provider-direct") {
+    throw new Error("provider-direct does not use an OpenClaw host command.");
+  }
+  if (runner === "wsl") {
+    return {
+      runner,
+      command: "wsl",
+      args: buildOpenClawAgentArgs(input),
+      timeoutMs
+    };
+  }
+  return {
+    runner,
+    command: getOpenClawCommand(platform),
+    args: buildNativeOpenClawAgentArgs(input),
+    timeoutMs
+  };
+}
+
 export async function runOpenClawAgent(input: {
   agentId: string;
   sessionId: string;
@@ -957,20 +1020,20 @@ export async function runOpenClawAgent(input: {
     });
   }
 
-  const args = buildOpenClawAgentArgs({
+  const hostCommand = buildOpenClawHostCommand({
     agentId: input.agentId,
     sessionId: input.sessionId,
     message: input.message,
     timeoutSeconds
   });
 
-  const { stdout } = await execFileAsync("wsl", args, {
+  const { stdout } = await execFileAsync(hostCommand.command, hostCommand.args, {
     env: {
       ...process.env,
       ...buildProviderEnv(input.provider)
     },
     maxBuffer: 20 * 1024 * 1024,
-    timeout: timeoutSeconds * 1000 + 30_000,
+    timeout: hostCommand.timeoutMs,
     windowsHide: true
   });
 

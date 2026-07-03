@@ -12,6 +12,10 @@ import {
   PROVIDER_SECRET_MISSING_ERROR,
   withLiveProviderSecretStatuses
 } from "./provider-secret-status";
+import {
+  normalizeOpenClawAgentRunner,
+  resolveOpenClawAgentRunner
+} from "../../../packages/shared/src/openclaw-runner";
 
 export type RuntimeDiagnosticStatus = "ok" | "warning" | "error" | "unknown";
 
@@ -78,19 +82,11 @@ function agentExecutionMode() {
 }
 
 function agentExecutionRunner() {
-  const configured = process.env.OPENCLAW_AGENT_RUNNER?.trim().toLowerCase();
-  if (configured === "provider-direct" || configured === "wsl" || configured === "auto") {
-    return configured;
-  }
-  return "auto";
+  return normalizeOpenClawAgentRunner(process.env.OPENCLAW_AGENT_RUNNER);
 }
 
 function agentExecutionEffectiveRunner() {
-  const runner = agentExecutionRunner();
-  if (runner === "auto") {
-    return process.platform === "win32" ? "wsl" : "provider-direct";
-  }
-  return runner;
+  return resolveOpenClawAgentRunner({ runner: agentExecutionRunner() });
 }
 
 export async function getRuntimeDiagnostics(input: {
@@ -311,6 +307,7 @@ export async function getRuntimeDiagnostics(input: {
       configuredRunner: executionRunner,
       effectiveRunner,
       providerDirect: effectiveRunner === "provider-direct",
+      nativeOpenClaw: effectiveRunner === "native",
       configuredProviderCount: configuredProviders.length,
       verifiedLiveProviderCount: verifiedLiveProviders.length
     }

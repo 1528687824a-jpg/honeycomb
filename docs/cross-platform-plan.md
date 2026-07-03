@@ -46,8 +46,13 @@ Windows 专属耦合点（跨平台要解决的全部清单）：
 
 - `runOpenClawAgent` 拆出 `buildHostCommand(platform)`：
   win32 返回现有 `wsl -d <distro> -- timeout ...` 包装；
-  linux/darwin 直接返回 `timeout ... openclaw agent ...`。
-- Linux 侧 `timeout --kill-after` 包装两条路径共用，孤儿进程治理不回退。
+  linux/darwin 返回本机 `openclaw agent ...`。
+- `OPENCLAW_AGENT_RUNNER=auto` 的含义：
+  Windows 自动解析为 `wsl`，macOS/Linux 自动解析为 `native`。
+- `provider-direct` 只在明确配置 `OPENCLAW_AGENT_RUNNER=provider-direct`
+  时启用；Docker 本地试用仍可显式保持这个模式。
+- Windows/WSL 路径继续使用 Linux 侧 `timeout --kill-after` 包装，避免
+  只杀掉 Windows 侧 `wsl.exe` 后留下 WSL 内子进程。
 - 既有单测 `buildOpenClawAgentArgs` 扩展平台参数即可回归。
 
 ### 2. 密钥存储适配层
