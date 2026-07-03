@@ -4,7 +4,6 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import {
-  authorizeApiToken,
   bearerToken,
   isPublicRequest,
   requestToken,
@@ -96,37 +95,6 @@ test("api auth token helpers honor public routes and token sources", () => {
     requestToken(mockRequest({ query: { access_token: "query-token" } })),
     "query-token"
   );
-});
-
-test("api auth accepts admin tokens and injected mobile device tokens", async () => {
-  const adminDecision = await authorizeApiToken({
-    actualToken: "admin-token",
-    expectedToken: "admin-token",
-    verifyMobileToken: async () => {
-      throw new Error("admin token should not hit mobile lookup");
-    }
-  });
-  assert.deepEqual(adminDecision, {
-    ok: true,
-    actor: { kind: "admin", tokenSource: "honeycomb_api_token" }
-  });
-
-  const mobileDecision = await authorizeApiToken({
-    actualToken: "mobile-token",
-    expectedToken: "admin-token",
-    verifyMobileToken: async (token) => token === "mobile-token" ? { id: "MD-1" } : null
-  });
-  assert.deepEqual(mobileDecision, {
-    ok: true,
-    actor: { kind: "mobile_device", deviceId: "MD-1" }
-  });
-
-  const rejectedDecision = await authorizeApiToken({
-    actualToken: "revoked-token",
-    expectedToken: "admin-token",
-    verifyMobileToken: async () => null
-  });
-  assert.deepEqual(rejectedDecision, { ok: false, error: "invalid_api_token" });
 });
 
 test("workspace registration target normalizes all accepted target forms", () => {

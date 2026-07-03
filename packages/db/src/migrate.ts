@@ -345,19 +345,6 @@ const statements = [
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now()
   )`,
-  `create table if not exists agent.mobile_devices (
-    id text primary key,
-    display_name text not null,
-    platform text,
-    token_hash text not null unique,
-    token_prefix text not null,
-    status text not null default 'active',
-    metadata jsonb not null default '{}',
-    created_at timestamptz not null default now(),
-    updated_at timestamptz not null default now(),
-    last_seen_at timestamptz,
-    revoked_at timestamptz
-  )`,
   `alter table agent.artifacts
     drop constraint if exists artifacts_stage_id_fkey`,
   `alter table agent.artifacts
@@ -457,12 +444,7 @@ const statements = [
     where provider_id is not null`,
   `create index if not exists scheduled_tasks_agent_config_idx
     on agent.scheduled_tasks(agent_config_id)
-    where agent_config_id is not null`,
-  `create index if not exists mobile_devices_status_updated_idx
-    on agent.mobile_devices(status, updated_at desc)`,
-  `create index if not exists mobile_devices_last_seen_idx
-    on agent.mobile_devices(last_seen_at desc)
-    where last_seen_at is not null`
+    where agent_config_id is not null`
 ];
 
 export async function runMigrations() {
