@@ -98,7 +98,7 @@ const capabilities: RuntimeCapability[] = [
     id: "local_api_security",
     title: "Local API security baseline",
     status: "ready",
-    summary: "Non-health routes require a local Honeycomb bearer token, workspace roots are registered through approval, Windows API keys use DPAPI, approvals expire, and web/network gateways pin DNS targets.",
+    summary: "Non-health routes require a local Honeycomb bearer token, workspace roots are registered through approval, Windows API keys use DPAPI, macOS keys can use Keychain, approvals expire, and web/network gateways pin DNS targets.",
     routes: [
       "GET /health",
       "all non-health API routes"
@@ -114,6 +114,7 @@ const capabilities: RuntimeCapability[] = [
       "Workspace APIs require a registered root",
       "First workspace registration is approval-gated",
       "Windows provider and agent API keys are stored through DPAPI-backed local secret files",
+      "macOS provider and agent API keys have a first Keychain-backed envelope path",
       "Legacy plaintext provider/agent key files migrate on read",
       "Tool approvals get default expiry and approved approvals expire before consumption",
       "API approval decisions record the desktop approval actor instead of trusting client-provided decidedBy",
@@ -121,7 +122,7 @@ const capabilities: RuntimeCapability[] = [
       "Per-agent network policy can allow or deny fetch/search/snapshot by operation, private-network use, protocol, and host allow/block lists"
     ],
     missing: [
-      "macOS/Linux keychain integration before cross-platform release",
+      "Linux/libsecret and real Mac validation before cross-platform release",
       "Signed/attested desktop identity for multi-user or remote approval scenarios"
     ],
     nextActions: [

@@ -5,6 +5,16 @@ import path from "node:path";
 const root = path.join(process.cwd(), ".runtime", `secret-storage-smoke-${randomUUID()}`);
 process.env.HONEYCOMB_SECRET_DIR = root;
 
+function expectedSecretFormat() {
+  if (process.platform === "win32") {
+    return "dpapi-user-v1";
+  }
+  if (process.platform === "darwin") {
+    return "keychain-v1";
+  }
+  return "plaintext-local-v1";
+}
+
 async function main() {
   const { readProviderApiKey, saveProviderApiKey } = await import("../packages/runtime/src/local-secrets");
 
@@ -22,14 +32,15 @@ async function main() {
     throw new Error("secret_storage_contains_plaintext");
   }
 
-  if (process.platform === "win32" && !raw.includes('"format": "dpapi-user-v1"')) {
-    throw new Error("secret_storage_not_dpapi");
+  const expectedFormat = expectedSecretFormat();
+  if (!raw.includes(`"format": "${expectedFormat}"`)) {
+    throw new Error(`secret_storage_not_${expectedFormat}`);
   }
 
   console.log(JSON.stringify({
     ok: true,
     providerId,
-    format: process.platform === "win32" ? "dpapi-user-v1" : "plaintext-local-v1",
+    format: expectedFormat,
     plaintextPresent: false
   }, null, 2));
 }

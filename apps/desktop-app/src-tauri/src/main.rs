@@ -351,13 +351,87 @@ fn dpapi_unprotect_cached(ciphertext: &str) -> Result<String, String> {
     Ok(plaintext)
 }
 
-fn encrypt_provider_api_key(api_key: &str) -> Result<String, String> {
+fn keychain_service() -> &'static str {
+    "io.agentopenclaw.desktop.honeycomb-secrets"
+}
+
+fn keychain_account_for_path(path: &Path) -> String {
+    let mut output = String::from("file:");
+    for value in path.to_string_lossy().chars() {
+        if value.is_ascii_alphanumeric() || value == '-' || value == '_' || value == '.' {
+            output.push(value);
+        } else {
+            output.push('_');
+        }
+    }
+    output
+}
+
+#[cfg(target_os = "macos")]
+fn run_keychain(args: &[&str]) -> Result<String, String> {
+    let output = Command::new("security")
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|error| error.to_string())?;
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn run_keychain(_args: &[&str]) -> Result<String, String> {
+    Err("keychain_unavailable_on_this_platform".to_string())
+}
+
+fn save_keychain_secret(service: &str, account: &str, api_key: &str) -> Result<(), String> {
+    run_keychain(&[
+        "add-generic-password",
+        "-s",
+        service,
+        "-a",
+        account,
+        "-w",
+        api_key,
+        "-U",
+    ])
+    .map(|_| ())
+}
+
+fn load_keychain_secret(service: &str, account: &str) -> Result<String, String> {
+    run_keychain(&[
+        "find-generic-password",
+        "-s",
+        service,
+        "-a",
+        account,
+        "-w",
+    ])
+}
+
+fn encrypt_provider_api_key(path: &Path, api_key: &str) -> Result<String, String> {
     if cfg!(windows) {
         let ciphertext = run_dpapi("protect", api_key)?;
         dpapi_cache_insert(&ciphertext, api_key);
         return serde_json::to_string_pretty(&serde_json::json!({
             "format": "dpapi-user-v1",
             "ciphertext": ciphertext
+        }))
+        .map_err(|error| error.to_string());
+    }
+
+    if cfg!(target_os = "macos") {
+        let service = keychain_service();
+        let account = keychain_account_for_path(path);
+        save_keychain_secret(service, &account, api_key)?;
+        return serde_json::to_string_pretty(&serde_json::json!({
+            "format": "keychain-v1",
+            "service": service,
+            "account": account
         }))
         .map_err(|error| error.to_string());
     }
@@ -371,16 +445,29 @@ fn encrypt_provider_api_key(api_key: &str) -> Result<String, String> {
 
 fn decrypt_provider_api_key(raw: &str) -> Result<Option<String>, String> {
     if let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) {
-        if value.get("format").and_then(|item| item.as_str()) == Some("dpapi-user-v1") {
-            if let Some(ciphertext) = value.get("ciphertext").and_then(|item| item.as_str()) {
-                return dpapi_unprotect_cached(ciphertext).map(Some);
+        match value.get("format").and_then(|item| item.as_str()) {
+            Some("dpapi-user-v1") => {
+                return match value.get("ciphertext").and_then(|item| item.as_str()) {
+                    Some(ciphertext) => dpapi_unprotect_cached(ciphertext).map(Some),
+                    None => Ok(None),
+                };
             }
-        }
-        if value.get("format").and_then(|item| item.as_str()) == Some("plaintext-local-v1") {
-            return Ok(value
-                .get("value")
-                .and_then(|item| item.as_str())
-                .map(|item| item.to_string()));
+            Some("keychain-v1") => {
+                let service = value.get("service").and_then(|item| item.as_str());
+                let account = value.get("account").and_then(|item| item.as_str());
+                return match (service, account) {
+                    (Some(service), Some(account)) => load_keychain_secret(service, account).map(Some),
+                    _ => Ok(None),
+                };
+            }
+            Some("plaintext-local-v1") => {
+                return Ok(value
+                    .get("value")
+                    .and_then(|item| item.as_str())
+                    .map(|item| item.to_string()));
+            }
+            Some(_) => return Ok(None),
+            None => {}
         }
     }
 
@@ -396,7 +483,8 @@ fn save_encrypted_api_key(path: &Path, api_key: &str) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
-    fs::write(path, encrypt_provider_api_key(api_key.trim())?).map_err(|error| error.to_string())
+    fs::write(path, encrypt_provider_api_key(path, api_key.trim())?)
+        .map_err(|error| error.to_string())
 }
 
 fn load_encrypted_api_key(path: &Path) -> Result<Option<String>, String> {
@@ -407,7 +495,7 @@ fn load_encrypted_api_key(path: &Path) -> Result<Option<String>, String> {
     let decrypted = decrypt_provider_api_key(&raw)?;
     if let Some(api_key) = decrypted.as_ref() {
         if !raw.trim_start().starts_with('{') {
-            fs::write(path, encrypt_provider_api_key(api_key)?)
+            fs::write(path, encrypt_provider_api_key(path, api_key)?)
                 .map_err(|error| error.to_string())?;
         }
     }

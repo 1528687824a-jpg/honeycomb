@@ -23,7 +23,8 @@ import { isAgentMcpPolicyAllowed } from "../packages/db/src/tool-registry";
 import {
   clearProviderApiKeyCache,
   readProviderApiKey,
-  saveProviderApiKey
+  saveProviderApiKey,
+  selectSecretBackendFormat
 } from "../packages/runtime/src/local-secrets";
 import type { AgentMcpPolicyRecord } from "../packages/shared/src/types";
 
@@ -129,12 +130,22 @@ test("mcp policy blocks disabled policies and enforces allowed tools", () => {
   assert.equal(isAgentMcpPolicyAllowed(policy({ allowAllTools: true }), { operation: "tools/call" }), true);
 });
 
+test("secret backend selection uses platform defaults and explicit overrides", () => {
+  assert.equal(selectSecretBackendFormat({ platform: "win32" }), "dpapi-user-v1");
+  assert.equal(selectSecretBackendFormat({ platform: "darwin" }), "keychain-v1");
+  assert.equal(selectSecretBackendFormat({ platform: "linux" }), "plaintext-local-v1");
+  assert.equal(selectSecretBackendFormat({ platform: "linux", configured: "keychain" }), "keychain-v1");
+  assert.equal(selectSecretBackendFormat({ platform: "darwin", configured: "plaintext-local" }), "plaintext-local-v1");
+});
+
 test("provider secrets cache read values and never migrate recognized broken envelopes as plaintext", async () => {
   const root = path.join(process.cwd(), ".runtime", `secret-policy-${randomUUID()}`);
   const previousSecretDir = process.env.HONEYCOMB_SECRET_DIR;
   const previousTtl = process.env.HONEYCOMB_SECRET_CACHE_TTL_MS;
+  const previousSecretBackend = process.env.HONEYCOMB_SECRET_BACKEND;
   process.env.HONEYCOMB_SECRET_DIR = root;
   process.env.HONEYCOMB_SECRET_CACHE_TTL_MS = "60000";
+  process.env.HONEYCOMB_SECRET_BACKEND = "plaintext-local-v1";
   clearProviderApiKeyCache();
 
   try {
@@ -152,6 +163,14 @@ test("provider secrets cache read values and never migrate recognized broken env
     );
     assert.equal(await readProviderApiKey("cache-provider"), null);
     assert.match(await fs.readFile(secretPath, "utf8"), /dpapi-user-v1/);
+
+    await fs.writeFile(
+      secretPath,
+      JSON.stringify({ format: "keychain-v1", service: "io.agentopenclaw.desktop.test", account: "missing" }),
+      "utf8"
+    );
+    assert.equal(await readProviderApiKey("cache-provider"), null);
+    assert.match(await fs.readFile(secretPath, "utf8"), /keychain-v1/);
   } finally {
     clearProviderApiKeyCache();
     if (previousSecretDir === undefined) {
@@ -163,6 +182,11 @@ test("provider secrets cache read values and never migrate recognized broken env
       delete process.env.HONEYCOMB_SECRET_CACHE_TTL_MS;
     } else {
       process.env.HONEYCOMB_SECRET_CACHE_TTL_MS = previousTtl;
+    }
+    if (previousSecretBackend === undefined) {
+      delete process.env.HONEYCOMB_SECRET_BACKEND;
+    } else {
+      process.env.HONEYCOMB_SECRET_BACKEND = previousSecretBackend;
     }
   }
 });

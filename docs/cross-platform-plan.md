@@ -59,18 +59,18 @@ Windows 专属耦合点（跨平台要解决的全部清单）：
 
 - `packages/runtime/src/local-secrets.ts` 抽出 SecretBackend 接口：
   `protect(plaintext) / unprotect(envelope)`，envelope 带 format 标记
-  （现有 `dpapi-user-v1` 即第一个实现）。
-- 新增 format：`keychain-v1`（macOS `security` CLI 或 keyring 库）、
-  `libsecret-v1`（Linux 桌面）、`age-passphrase-v1`（headless 回退，
-  启动时口令派生密钥）。
+  （`dpapi-user-v1` 和 `keychain-v1` 已有第一版）。
+- 已新增 format：`keychain-v1`（macOS `security` CLI）。
+- 待新增 format：`libsecret-v1`（Linux 桌面）、`age-passphrase-v1`
+  （headless 回退，启动时口令派生密钥）。
 - 读取按 envelope format 分发，与平台无关；写入按当前平台选最强后端。
 - 现有规则保留：识别出的加密 envelope 解密失败绝不回退明文。
 
 ### 3. 启动器与构建
 
 - PowerShell 脚本逐个补 bash 等价物（start/stop/tryout/smoke）。
-- Tauri 增加 macOS/Linux 构建目标与 CI 矩阵；桌面端 Rust DPAPI 调用
-  走与后端相同的 SecretBackend 策略。
+- Tauri 增加 macOS/Linux 构建目标与 CI 矩阵；桌面端 Rust 密钥逻辑
+  已接入 macOS `keychain-v1`，Linux/libsecret 仍待实现。
 - web 面板：orchestrator-api 静态托管现有 React 构建产物（desktop-app
   的 UI 层本就是 React，把 Tauri invoke 调用面收敛到已有的 API
   fallback 路径即可）。这属于服务器/浏览器模式，不再作为苹果平台主线。
@@ -78,9 +78,9 @@ Windows 专属耦合点（跨平台要解决的全部清单）：
 ## 实施顺序（阶段 E 内部）
 
 1. 进程执行适配层（解锁 Linux 上的真实 OpenClaw 验证）。
-2. 密钥 SecretBackend 抽象 + headless 加密文件回退。
+2. 密钥 SecretBackend 抽象 + macOS Keychain 第一版。
 3. bash 启动器 + docker compose headless 文档。
-4. macOS Keychain / Linux libsecret 实现。
+4. Linux libsecret / headless 加密文件回退实现。
 5. Tauri macOS/Linux 构建与冒烟。
 6. web 面板托管（服务器/浏览器模式，与阶段 D 远程认证合流）。
 7. 跨平台安装器验证 + Alpha 发布。

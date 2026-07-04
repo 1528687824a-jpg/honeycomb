@@ -290,8 +290,8 @@ changes land.
    - S2 registered workspace root whitelist and approval-gated first
      registration are implemented.
    - S4 Windows DPAPI encryption for saved provider/agent API keys is
-     implemented; macOS/Linux keychain support remains a cross-platform release
-     item.
+     implemented; macOS Keychain has a first SecretBackend slice, while
+     Linux/libsecret remains a cross-platform release item.
    - S5 default approval expiry, approved-before-consume expiry checks, and a
      tighter desktop decision actor boundary are implemented.
    - S6 web fetch hostname/IP pinning is implemented for initial requests and
@@ -362,8 +362,9 @@ changes land.
      Postgres ports bind to `127.0.0.1`; registered workspace roots and
      approval-gated workspace registration now exist. Provider/agent API keys
      use DPAPI on Windows, approval expiry is enforced before decisions and
-     consumption, and web fetch pins the resolved connect IP. Cross-platform
-     keychain support is still needed before macOS/Linux release builds.
+     consumption, and web fetch pins the resolved connect IP. macOS Keychain
+     has a first slice; Linux/libsecret and real Mac validation are still needed
+     before cross-platform release builds.
 
 7. Add desktop approval UI.
    - Queue, detail, approve/reject/cancel.

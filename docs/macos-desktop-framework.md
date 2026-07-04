@@ -61,6 +61,18 @@ The first execution-adapter slice is now in place:
 - The worker builds one host command before execution, so future macOS
   diagnostics can explain the same runner that the worker will actually use.
 
+The first SecretBackend slice is also in place:
+
+- the shared Node runtime has a SecretBackend interface,
+- Windows writes `dpapi-user-v1`,
+- macOS writes `keychain-v1` pointers and stores the actual key in Keychain,
+- Linux/headless keeps `plaintext-local-v1` until libsecret or encrypted-file
+  fallback is added,
+- the Tauri shell mirrors the same `keychain-v1` envelope for first-run and
+  agent API keys on macOS,
+- recognized encrypted envelopes still do not fall back to plaintext if
+  decryption fails.
+
 ## What Was Rolled Back
 
 The previous mobile/iOS backend-token slice was reverted because it solved the
