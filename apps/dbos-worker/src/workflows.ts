@@ -58,6 +58,14 @@ const markJobRunning = DBOS.registerStep(activities.markJobRunning, {
   name: "markJobRunning",
   ...retryingStepConfig
 });
+const assertJobExecutionClaim = DBOS.registerStep(activities.assertJobExecutionClaim, {
+  name: "assertJobExecutionClaim",
+  ...retryingStepConfig
+});
+const getJobExecutionWorkflowId = DBOS.registerStep(activities.getJobExecutionWorkflowId, {
+  name: "getJobExecutionWorkflowId",
+  ...retryingStepConfig
+});
 const isJobCancelled = DBOS.registerStep(activities.isJobCancelled, {
   name: "isJobCancelled",
   ...retryingStepConfig
@@ -181,6 +189,13 @@ async function runJobPipelineWorkflow(input: JobWorkflowInput) {
       status: "cancelled"
     };
   }
+  const executionWorkflowId = DBOS.workflowID ??
+    input.workflowId ??
+    await getJobExecutionWorkflowId(input.jobId);
+  await assertJobExecutionClaim({
+    jobId: input.jobId,
+    workflowId: executionWorkflowId
+  });
 
   if (await isArtifactDeliveryReadyForFinalization(input.jobId)) {
     await markJobRunning(input.jobId);
@@ -225,6 +240,7 @@ async function runJobPipelineWorkflow(input: JobWorkflowInput) {
     : 1;
   const status = await executeRoutingMode({
     jobId: input.jobId,
+    executionWorkflowId,
     routingMode,
     stages,
     discussionRounds,
@@ -284,8 +300,14 @@ async function runJobPipelineWorkflow(input: JobWorkflowInput) {
     }
 
     const synthesis = routingMode === "master_slave_discussion"
-      ? await mainAgentSynthesizeDiscussion(input.jobId)
-      : await mainAgentSynthesizeClassic(input.jobId);
+      ? await mainAgentSynthesizeDiscussion({
+          jobId: input.jobId,
+          executionWorkflowId
+        })
+      : await mainAgentSynthesizeClassic({
+          jobId: input.jobId,
+          executionWorkflowId
+        });
     finalQualitySourceArtifactId = synthesis.artifactId;
   }
 
@@ -329,6 +351,7 @@ async function runJobPipelineWorkflow(input: JobWorkflowInput) {
 
     const review = await runFinalTestAgent({
       jobId: input.jobId,
+      executionWorkflowId,
       sourceArtifactId: finalQualitySourceArtifactId,
       routingMode
     });
@@ -352,6 +375,10 @@ async function runJobPipelineWorkflow(input: JobWorkflowInput) {
     };
   }
 
+  await assertJobExecutionClaim({
+    jobId: input.jobId,
+    workflowId: executionWorkflowId
+  });
   const finalized = await finalizeJob(input.jobId);
   if (finalized.status === "waiting_for_human") {
     return {
@@ -377,6 +404,16 @@ async function jobPipelineWorkflow(input: JobWorkflowInput) {
     return await runJobPipelineWorkflow(input);
   } catch (error) {
     const reason = workflowErrorMessage(error);
+    if (
+      reason.includes("job_execution_claim_lost") ||
+      reason.includes("model_call_in_progress")
+    ) {
+      return {
+        jobId: input.jobId,
+        status: "superseded",
+        error: reason
+      };
+    }
     const persistedStatus = await markJobFailed(input.jobId, reason);
     return {
       jobId: input.jobId,

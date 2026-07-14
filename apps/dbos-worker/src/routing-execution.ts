@@ -16,6 +16,7 @@ export type ModelCallActionType =
 
 export type RunStageAgentInput = {
   jobId: string;
+  executionWorkflowId?: string;
   stageId: string;
   attemptNo: number;
   routingMode?: RoutingMode;
@@ -39,6 +40,7 @@ export type RoutingExecutionActions = {
   afterStageAgent(jobId: string, stage: StageRecord, attemptNo: number): void;
   runTestAgent(input: {
     jobId: string;
+    executionWorkflowId?: string;
     stageId: string;
     attemptId: string;
     attemptNo: number;
@@ -80,6 +82,7 @@ export type RoutingExecutionActions = {
 
 async function runSupervisorPipeline(
   jobId: string,
+  executionWorkflowId: string | undefined,
   stages: StageRecord[],
   actions: RoutingExecutionActions
 ): Promise<RoutingExecutionStatus> {
@@ -112,6 +115,7 @@ async function runSupervisorPipeline(
 
       const run = await actions.runStageAgent({
         jobId,
+        executionWorkflowId,
         stageId: stage.id,
         attemptNo,
         routingMode: "supervisor_pipeline",
@@ -141,6 +145,7 @@ async function runSupervisorPipeline(
 
       const review = await actions.runTestAgent({
         jobId,
+        executionWorkflowId,
         stageId: stage.id,
         attemptId: run.attemptId,
         attemptNo,
@@ -190,6 +195,7 @@ async function runSupervisorPipeline(
 
 async function runSequentialPipeline(
   jobId: string,
+  executionWorkflowId: string | undefined,
   stages: StageRecord[],
   actions: RoutingExecutionActions
 ): Promise<RoutingExecutionStatus> {
@@ -216,6 +222,7 @@ async function runSequentialPipeline(
 
     const run = await actions.runStageAgent({
       jobId,
+      executionWorkflowId,
       stageId: stage.id,
       attemptNo: 1,
       routingMode: "pipeline",
@@ -238,6 +245,7 @@ async function runSequentialPipeline(
 
 async function runClassicMasterSlave(
   jobId: string,
+  executionWorkflowId: string | undefined,
   stages: StageRecord[],
   actions: RoutingExecutionActions
 ): Promise<RoutingExecutionStatus> {
@@ -270,6 +278,7 @@ async function runClassicMasterSlave(
     stages.map((stage) =>
       actions.runStageAgent({
         jobId,
+        executionWorkflowId,
         stageId: stage.id,
         attemptNo: 1,
         routingMode: "classic_master_slave",
@@ -314,6 +323,7 @@ async function runClassicMasterSlave(
 
 async function runMasterSlaveDiscussion(
   jobId: string,
+  executionWorkflowId: string | undefined,
   stages: StageRecord[],
   discussionRounds: number,
   actions: RoutingExecutionActions
@@ -347,6 +357,7 @@ async function runMasterSlaveDiscussion(
 
       const run = await actions.runStageAgent({
         jobId,
+        executionWorkflowId,
         stageId: stage.id,
         attemptNo: roundNo,
         routingMode: "master_slave_discussion",
@@ -382,6 +393,7 @@ async function runMasterSlaveDiscussion(
 
 export async function executeRoutingMode(input: {
   jobId: string;
+  executionWorkflowId?: string;
   routingMode: RoutingMode;
   stages: StageRecord[];
   discussionRounds: number;
@@ -389,14 +401,30 @@ export async function executeRoutingMode(input: {
 }): Promise<RoutingExecutionStatus> {
   switch (input.routingMode) {
     case "supervisor_pipeline":
-      return runSupervisorPipeline(input.jobId, input.stages, input.actions);
+      return runSupervisorPipeline(
+        input.jobId,
+        input.executionWorkflowId,
+        input.stages,
+        input.actions
+      );
     case "pipeline":
-      return runSequentialPipeline(input.jobId, input.stages, input.actions);
+      return runSequentialPipeline(
+        input.jobId,
+        input.executionWorkflowId,
+        input.stages,
+        input.actions
+      );
     case "classic_master_slave":
-      return runClassicMasterSlave(input.jobId, input.stages, input.actions);
+      return runClassicMasterSlave(
+        input.jobId,
+        input.executionWorkflowId,
+        input.stages,
+        input.actions
+      );
     case "master_slave_discussion":
       return runMasterSlaveDiscussion(
         input.jobId,
+        input.executionWorkflowId,
         input.stages,
         input.discussionRounds,
         input.actions

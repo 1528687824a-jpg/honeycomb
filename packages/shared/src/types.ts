@@ -632,6 +632,7 @@ export type CreateJobInput = {
 
 export type JobWorkflowInput = {
   jobId: string;
+  workflowId?: string;
 };
 
 export type StageStatus =

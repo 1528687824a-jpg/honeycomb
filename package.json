@@ -44,6 +44,7 @@
     "smoke:model-call-queue": "tsx scripts/smoke-model-call-queue.ts",
     "smoke:model-retry": "tsx scripts/smoke-model-retry.ts",
     "smoke:model-reconciliation": "tsx scripts/smoke-model-reconciliation.ts",
+    "smoke:execution-leases": "tsx scripts/smoke-execution-leases.ts",
     "smoke:model-call-spend": "tsx scripts/smoke-model-call-spend.ts",
     "smoke:artifact-delivery": "tsx scripts/smoke-artifact-delivery.ts",
     "smoke:artifact-destination-authorization": "tsx scripts/smoke-artifact-destination-authorization.ts",

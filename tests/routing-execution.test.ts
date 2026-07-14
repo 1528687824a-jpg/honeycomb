@@ -112,6 +112,32 @@ test("pipeline runs one dependent stage at a time and links every handoff", asyn
   );
 });
 
+test("routing forwards the durable workflow owner to model-calling steps", async () => {
+  const stageOwners: Array<string | undefined> = [];
+  const testOwners: Array<string | undefined> = [];
+  const result = await executeRoutingMode({
+    jobId: "job-routing",
+    executionWorkflowId: "workflow-owner",
+    routingMode: "supervisor_pipeline",
+    stages: [stage(1)],
+    discussionRounds: 1,
+    actions: actions({
+      runStageAgent: async (input) => {
+        stageOwners.push(input.executionWorkflowId);
+        return stageRun(input);
+      },
+      runTestAgent: async (input) => {
+        testOwners.push(input.executionWorkflowId);
+        return testReview(input.stageId, input.attemptNo, "PASS");
+      }
+    })
+  });
+
+  assert.equal(result, "succeeded");
+  assert.deepEqual(stageOwners, ["workflow-owner"]);
+  assert.deepEqual(testOwners, ["workflow-owner"]);
+});
+
 test("supervisor retries a rejected stage before handing off to the next stage", async () => {
   const trace: string[] = [];
   const result = await executeRoutingMode({

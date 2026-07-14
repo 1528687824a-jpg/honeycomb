@@ -1,6 +1,9 @@
 import "dotenv/config";
 import { DBOS } from "@dbos-inc/dbos-sdk";
-import { setJobWorkflowId } from "../../../packages/db/src/jobs";
+import {
+  appendJobEvent,
+  claimJobWorkflowExecution
+} from "../../../packages/db/src/jobs";
 import { JobPipelineWorkflow } from "./workflows";
 
 const DEFAULT_DATABASE_URL = "postgresql://temporal:temporal@localhost:5432/temporal";
@@ -29,17 +32,41 @@ export async function launchDbos() {
   await launchPromise;
 }
 
-export async function startJobWorkflow(jobId: string, workflowIdOverride?: string) {
+export async function startJobWorkflow(
+  jobId: string,
+  workflowIdOverride?: string,
+  options: { resumeExisting?: boolean } = {}
+) {
   await launchDbos();
 
   const workflowId = workflowIdOverride ?? `job-${jobId}`;
-  const handle = await DBOS.startWorkflow(JobPipelineWorkflow, {
-    workflowID: workflowId
-  })({ jobId });
+  const claim = await claimJobWorkflowExecution({ jobId, workflowId });
+  if (!claim.claimed) {
+    throw new Error(`job_execution_claim_rejected:${claim.reason}`);
+  }
 
-  await setJobWorkflowId(jobId, handle.workflowID);
-
-  return handle.workflowID;
+  try {
+    const handle = options.resumeExisting
+      ? await DBOS.resumeWorkflow(workflowId)
+      : await DBOS.startWorkflow(JobPipelineWorkflow, {
+          workflowID: workflowId
+        })({ jobId, workflowId });
+    await appendJobEvent(jobId, options.resumeExisting
+      ? "job.workflow_resumed"
+      : "job.workflow_started", {
+      workflowId: handle.workflowID,
+      claimReused: claim.reused
+    }).catch(() => undefined);
+    return handle.workflowID;
+  } catch (error) {
+    await appendJobEvent(jobId, "job.workflow_start_failed", {
+      workflowId,
+      error: error instanceof Error ? error.message : String(error),
+      claimRetained: true,
+      resumeExisting: options.resumeExisting ?? false
+    }).catch(() => undefined);
+    throw error;
+  }
 }
 
 export async function cancelJobWorkflow(workflowId: string) {

@@ -32,7 +32,7 @@ async function main() {
   smokeJobId = job.id;
   const idempotencyKey = `${job.id}:retry-smoke`;
 
-  await markModelCallStarted({
+  const started = await markModelCallStarted({
     idempotencyKey,
     jobId: job.id,
     attemptNo: 1,
@@ -62,7 +62,8 @@ async function main() {
   await markModelCallRetryWaiting({
     idempotencyKey,
     error: retryState.reason,
-    responsePayload: { retryState, routeAttempts: [] }
+    responsePayload: { retryState, routeAttempts: [] },
+    claimToken: started.claimToken
   });
   await setJobExecutionRetry(job.id, retryState);
   await appendJobEvent(job.id, "model_call.retry_scheduled", {
@@ -90,6 +91,7 @@ async function main() {
   await markModelCallFailedUnknownOutcome({
     idempotencyKey,
     error: "provider_result_unknown",
+    claimToken: resumed.claimToken,
     responsePayload: {
       finalFailure: {
         category: "network_unknown_outcome",

@@ -745,12 +745,19 @@ If recovery reruns a step after an OpenClaw call already succeeded, the step
 reuses the stored model-call result and records `tool.openclaw_agent_reused`
 instead of calling OpenClaw again.
 
-If a prior call is only `started` and has no completed result, the workflow
-throws instead of silently making a second ambiguous external call.
+Every started call also has a database lease. A second owner is rejected while
+the lease is active. After expiry, an ordinary call becomes
+`failed_unknown_outcome` and must be reconciled before retry; Honeycomb does not
+silently repeat an ambiguous paid request. A persisted asynchronous video task
+is the exception: a new owner may continue polling its existing provider task
+ID without issuing another create request.
 
-If an operator confirms that a `started` call has an unknown external outcome,
-mark it explicitly as `failed_unknown_outcome`. That state is allowed to be
-restarted by `markModelCallStarted`, while plain `started` remains blocked.
+Workflow resume ownership and model-call lease details are documented in
+`docs/execution-leases.md`. With PostgreSQL running, verify both race guards:
+
+```powershell
+npm run smoke:execution-leases
+```
 
 Admin API unstick path:
 
@@ -897,6 +904,7 @@ OPENCLAW_AGENT_MODE=real
 OPENCLAW_WSL_DISTRO=Ubuntu-24.04
 OPENCLAW_CLI=/home/administrator/.npm-global/bin/openclaw
 OPENCLAW_AGENT_TIMEOUT_SECONDS=600
+MODEL_CALL_LEASE_SECONDS=900
 ```
 
 Provider-direct video generation is asynchronous. Honeycomb stores the returned

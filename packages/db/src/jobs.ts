@@ -22,6 +22,11 @@ import {
 import { normalizeJobModelCallBudget } from "../../shared/src/routing-budget";
 import { inferJobDisplayTitle } from "../../shared/src/job-title";
 import {
+  resolveJobExecutionClaim,
+  resolveResumeWorkflowId,
+  type JobExecutionClaimDecision
+} from "../../shared/src/execution-lease-policy";
+import {
   buildDeterministicTaskPlan,
   parseStoredTaskOrchestrationPlan
 } from "../../shared/src/orchestration-contract";
@@ -694,6 +699,128 @@ export async function setJobWorkflowId(jobId: string, workflowId: string) {
   await appendJobEvent(jobId, "job.workflow_started", { workflowId }).catch(() => undefined);
 }
 
+export type JobWorkflowExecutionClaimResult = {
+  claimed: boolean;
+  reused: boolean;
+  reason: JobExecutionClaimDecision["reason"] | "job_not_found";
+  job: JobRecord | null;
+};
+
+export async function claimJobWorkflowExecution(input: {
+  jobId: string;
+  workflowId: string;
+}): Promise<JobWorkflowExecutionClaimResult> {
+  const client = await pool.connect();
+  let previousWorkflowId: string | null = null;
+  let previousStatus: JobStatus | null = null;
+  let result: JobWorkflowExecutionClaimResult;
+  try {
+    await client.query("begin");
+    const currentResult = await client.query(
+      `select * from agent.jobs where id = $1 for update`,
+      [input.jobId]
+    );
+    if (!currentResult.rows[0]) {
+      await client.query("commit");
+      return {
+        claimed: false,
+        reused: false,
+        reason: "job_not_found",
+        job: null
+      };
+    }
+
+    const current = toJobRecord(currentResult.rows[0]);
+    previousWorkflowId = current.workflowId;
+    previousStatus = current.status;
+    const decision = resolveJobExecutionClaim({
+      status: current.status,
+      heartbeatStatus: current.heartbeatStatus,
+      currentWorkflowId: current.workflowId,
+      requestedWorkflowId: input.workflowId,
+      archivedAt: current.archivedAt
+    });
+    if (!decision.allowed) {
+      await client.query("commit");
+      return {
+        claimed: false,
+        reused: false,
+        reason: decision.reason,
+        job: current
+      };
+    }
+    if (decision.reused) {
+      await client.query("commit");
+      return {
+        claimed: true,
+        reused: true,
+        reason: decision.reason,
+        job: current
+      };
+    }
+
+    const claimedResult = await client.query(
+      `update agent.jobs
+       set workflow_id = $2,
+           status = 'queued',
+           heartbeat_at = now(),
+           heartbeat_status = 'healthy',
+           heartbeat_source = 'job.execution_claimed',
+           heartbeat_note = null,
+           stalled_at = null,
+           updated_at = now()
+       where id = $1
+       returning *`,
+      [input.jobId, input.workflowId]
+    );
+    result = {
+      claimed: true,
+      reused: false,
+      reason: decision.reason,
+      job: toJobRecord(claimedResult.rows[0])
+    };
+    await client.query("commit");
+  } catch (error) {
+    await client.query("rollback").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  await appendJobEvent(input.jobId, "job.execution_claimed", {
+    workflowId: input.workflowId,
+    previousWorkflowId,
+    previousStatus,
+    reason: result.reason
+  }, {
+    actor: "workflow-runner"
+  }).catch(() => undefined);
+  return result;
+}
+
+export async function assertJobWorkflowExecution(input: {
+  jobId: string;
+  workflowId: string;
+}) {
+  const result = await pool.query(
+    `select workflow_id, status, archived_at
+     from agent.jobs
+     where id = $1`,
+    [input.jobId]
+  );
+  const row = result.rows[0];
+  if (!row) {
+    throw new Error("job_not_found");
+  }
+  if (row.archived_at || row.workflow_id !== input.workflowId) {
+    throw new Error("job_execution_claim_lost");
+  }
+  if (["succeeded", "failed", "cancelled"].includes(row.status)) {
+    throw new Error(`job_execution_terminal:${row.status}`);
+  }
+  return true;
+}
+
 export async function setJobWorkdir(jobId: string, workdir: string) {
   await pool.query(
     `update agent.jobs
@@ -743,6 +870,8 @@ async function cancelStartedModelCallsForJob(jobId: string) {
     `update agent.model_calls
      set status = 'cancelled',
          error = 'job_cancelled',
+         claim_token = null,
+         lease_expires_at = null,
          updated_at = now()
      where job_id = $1
        and status in ('started', 'retry_waiting')`,
@@ -930,6 +1059,7 @@ export async function clearJobExecutionRetry(jobId: string, idempotencyKey: stri
 
 export async function requestJobResume(input: {
   jobId: string;
+  workflowId: string;
   reason?: string;
   requesterId?: string;
   maxModelCalls?: number;
@@ -994,19 +1124,32 @@ export async function requestJobResume(input: {
       : job.spendBudget.blockingReason,
     updatedAt: new Date().toISOString()
   };
+  const workflowId = resolveResumeWorkflowId({
+    resumeReason: eligibility.reason,
+    currentWorkflowId: job.workflowId,
+    requestedWorkflowId: input.workflowId
+  });
+  const resumeExistingWorkflow = eligibility.reason === "stalled" && Boolean(job.workflowId);
 
   const result = await pool.query(
     `update agent.jobs
      set max_model_calls = $2,
          max_cost_usd = $3,
          spend_budget = $4::jsonb,
+         workflow_id = $5,
+         status = 'queued',
+         heartbeat_at = now(),
+         heartbeat_status = 'healthy',
+         heartbeat_source = 'job.resume_claimed',
+         heartbeat_note = null,
+         stalled_at = null,
          updated_at = now()
      where id = $1
        and status not in ('succeeded', 'failed', 'cancelled')
        and archived_at is null
        and (status = 'waiting_for_human' or heartbeat_status = 'stalled')
      returning *`,
-    [input.jobId, nextMaxModelCalls, nextMaxCostUsd, JSON.stringify(nextSpendBudget)]
+    [input.jobId, nextMaxModelCalls, nextMaxCostUsd, JSON.stringify(nextSpendBudget), workflowId]
   );
   if (!result.rows[0]) {
     const latestJob = await getJob(input.jobId);
@@ -1038,6 +1181,8 @@ export async function requestJobResume(input: {
       previousStatus: job.status,
       previousHeartbeatStatus: job.heartbeatStatus,
       previousWorkflowId: job.workflowId,
+      workflowId,
+      resumeExistingWorkflow,
       requestedMaxModelCalls: input.maxModelCalls ?? null,
       previousMaxModelCalls: job.maxModelCalls,
       maxModelCalls: nextMaxModelCalls,
@@ -1057,7 +1202,9 @@ export async function requestJobResume(input: {
     changed: true,
     reason: eligibility.reason,
     maxModelCalls: nextMaxModelCalls,
-    maxCostUsd: nextMaxCostUsd
+    maxCostUsd: nextMaxCostUsd,
+    workflowId,
+    resumeExistingWorkflow
   } as const;
 }
 

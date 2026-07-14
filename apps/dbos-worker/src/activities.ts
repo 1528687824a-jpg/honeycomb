@@ -1,10 +1,11 @@
 import { createReadStream } from "node:fs";
 import { appendFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import {
   appendJobEvent,
   archiveJobSession,
+  assertJobWorkflowExecution,
   clearJobExecutionRetry,
   getJob,
   recordJobHeartbeat,
@@ -39,6 +40,7 @@ import {
   markModelCallRetryWaiting,
   markModelCallStarted,
   markModelCallSucceeded,
+  renewModelCallLease,
   setModelCallRequestReference,
   updateModelCallProviderTaskProgress
 } from "../../../packages/db/src/model-calls";
@@ -166,6 +168,12 @@ type OpenClawActionType =
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function modelCallLeaseSeconds(timeoutSeconds: number) {
+  const configured = Number(process.env.MODEL_CALL_LEASE_SECONDS ?? 900);
+  const configuredSeconds = Number.isFinite(configured) ? configured : 900;
+  return Math.max(configuredSeconds, timeoutSeconds + 120);
 }
 
 async function heartbeat(jobId: string, source: string, note?: string | null, stageId?: string | null) {
@@ -314,6 +322,15 @@ class SpendBudgetExceededAfterSettlementError extends Error {
   }
 }
 
+class ModelCallLeaseInProgressError extends Error {
+  readonly dbosRetryable = false;
+
+  constructor(readonly idempotencyKey: string) {
+    super(`model_call_in_progress: ${idempotencyKey}`);
+    this.name = "ModelCallLeaseInProgressError";
+  }
+}
+
 async function stopIfSettledSpendExceeded(jobId: string) {
   const job = await getJob(jobId);
   if (!job?.spendBudget.blocked || !job.spendBudget.blockingReason?.endsWith("_after_settlement")) {
@@ -334,6 +351,7 @@ async function stopIfSettledSpendExceeded(jobId: string) {
 
 async function runOpenClawAgentIdempotent(input: {
   jobId: string;
+  executionWorkflowId?: string;
   stageId?: string | null;
   stageIndex: number;
   attemptNo: number;
@@ -346,6 +364,7 @@ async function runOpenClawAgentIdempotent(input: {
   timeoutSeconds: number;
 }): Promise<OpenClawRunResult | null> {
   const idempotencyKey = buildModelCallIdempotencyKey(input);
+  const leaseSeconds = modelCallLeaseSeconds(input.timeoutSeconds);
   const currentJob = await getJob(input.jobId);
   if (!currentJob || currentJob.status === "cancelled") {
     throw new JobCancelledError();
@@ -408,12 +427,20 @@ async function runOpenClawAgentIdempotent(input: {
     return getModelCallResult(existing.responsePayload);
   }
 
+  const existingLeaseActive = Boolean(
+    existing?.leaseExpiresAt && Date.parse(existing.leaseExpiresAt) > Date.now()
+  );
+  if (existing?.status === "started" && existingLeaseActive) {
+    throw new ModelCallLeaseInProgressError(idempotencyKey);
+  }
+
   if (existing?.status === "started" && !resumableVideoReference) {
     const message = `model_call_started_outcome_unknown: ${idempotencyKey}`;
     const decision = unknownOutcomeDecision(message);
     await markModelCallFailedUnknownOutcome({
       idempotencyKey,
       error: message,
+      force: true,
       responsePayload: {
         previousPayload: existing.responsePayload,
         finalFailure: { error: message, ...decision }
@@ -495,6 +522,7 @@ async function runOpenClawAgentIdempotent(input: {
     await markModelCallFailedUnknownOutcome({
       idempotencyKey,
       error: message,
+      force: true,
       responsePayload: {
         previousPayload: existing.responsePayload,
         finalFailure: { error: message, ...decision }
@@ -569,8 +597,9 @@ async function runOpenClawAgentIdempotent(input: {
   const retryPolicy = resolveModelRetryPolicy();
   let lastError: string | null = null;
   let lastDecision: ModelCallFailureDecision | null = null;
-  let modelCallStarted = Boolean(resumableVideoReference);
+  let modelCallStarted = false;
   let modelCallRecorded = existing?.status === "retry_waiting" || Boolean(resumableVideoReference);
+  let modelCallClaimToken: string | null = null;
   let cancellationWatcher: Awaited<ReturnType<typeof watchJobCancellation>> | null = null;
   let userActionFailure: {
     decision: ModelCallFailureDecision;
@@ -801,7 +830,8 @@ async function runOpenClawAgentIdempotent(input: {
             input.stageId ?? null
           );
           if (!modelCallStarted) {
-            await markModelCallStarted({
+            const claimToken = randomUUID();
+            const startedCall = await markModelCallStarted({
               idempotencyKey,
               jobId: input.jobId,
               stageId: input.stageId,
@@ -809,10 +839,33 @@ async function runOpenClawAgentIdempotent(input: {
               actionType: input.actionType,
               agentId: primaryRoute.honeycombAgentId,
               agentSessionId: input.sessionId,
-              requestHash: sha256(input.message)
+              requestHash: sha256(input.message),
+              executionWorkflowId: input.executionWorkflowId,
+              claimToken,
+              leaseSeconds,
+              allowExpiredStartedTakeover: Boolean(resumableVideoReference)
             });
+            if (!startedCall.claimAcquired) {
+              if (startedCall.claimReason === "in_progress") {
+                throw new ModelCallLeaseInProgressError(idempotencyKey);
+              }
+              const message = `model_call_lease_reconciliation_required: ${idempotencyKey}`;
+              throw new ModelCallExecutionError(message, unknownOutcomeDecision(message));
+            }
+            modelCallClaimToken = startedCall.claimToken ?? claimToken;
             modelCallStarted = true;
             modelCallRecorded = true;
+          }
+
+          if (modelCallClaimToken) {
+            const renewed = await renewModelCallLease({
+              idempotencyKey,
+              claimToken: modelCallClaimToken,
+              leaseSeconds
+            });
+            if (!renewed) {
+              throw new Error("model_call_lease_lost");
+            }
           }
 
           let requestId: string | null = null;
@@ -846,7 +899,9 @@ async function runOpenClawAgentIdempotent(input: {
               };
               const referencedCall = await setModelCallRequestReference({
                 idempotencyKey,
-                requestReference
+                requestReference,
+                claimToken: modelCallClaimToken,
+                leaseSeconds
               });
               if (!referencedCall) {
                 const latestCall = await getModelCallByKey(idempotencyKey);
@@ -868,7 +923,9 @@ async function runOpenClawAgentIdempotent(input: {
             };
             const referencedCall = await setModelCallRequestReference({
               idempotencyKey,
-              requestReference
+              requestReference,
+              claimToken: modelCallClaimToken,
+              leaseSeconds
             });
             if (!referencedCall) {
               const latestCall = await getModelCallByKey(idempotencyKey);
@@ -889,7 +946,9 @@ async function runOpenClawAgentIdempotent(input: {
             };
             const referencedCall = await setModelCallRequestReference({
               idempotencyKey,
-              requestReference
+              requestReference,
+              claimToken: modelCallClaimToken,
+              leaseSeconds
             });
             if (!referencedCall) {
               const latestCall = await getModelCallByKey(idempotencyKey);
@@ -904,7 +963,9 @@ async function runOpenClawAgentIdempotent(input: {
             latestProviderTaskUpdate = update;
             const updatedCall = await updateModelCallProviderTaskProgress({
               idempotencyKey,
-              providerTask: update
+              providerTask: update,
+              claimToken: modelCallClaimToken,
+              leaseSeconds
             });
             if (!updatedCall) {
               const latestCall = await getModelCallByKey(idempotencyKey);
@@ -1058,7 +1119,8 @@ async function runOpenClawAgentIdempotent(input: {
                 responsePayload: {
                   routeAttempts,
                   retryState
-                }
+                },
+                claimToken: modelCallClaimToken
               });
               if (!waitingCall) {
                 const latestCall = await getModelCallByKey(idempotencyKey);
@@ -1069,6 +1131,7 @@ async function runOpenClawAgentIdempotent(input: {
               }
               modelCallStarted = false;
               modelCallRecorded = true;
+              modelCallClaimToken = null;
               await setJobExecutionRetry(input.jobId, retryState);
             }
             await heartbeat(
@@ -1149,7 +1212,8 @@ async function runOpenClawAgentIdempotent(input: {
                 routeAttempts,
                 routeSelection,
                 ...(latestProviderTaskUpdate ? { providerTask: latestProviderTaskUpdate } : {})
-              }
+              },
+              claimToken: modelCallClaimToken
             });
             const settledSpend = reservationKey
               ? await settleModelCallSpend({
@@ -1260,7 +1324,11 @@ async function runOpenClawAgentIdempotent(input: {
         note: "job_cancelled_after_spend_reservation"
       });
       if (modelCallRecorded) {
-        await markModelCallCancelled({ idempotencyKey, error: safeError });
+        await markModelCallCancelled({
+          idempotencyKey,
+          error: safeError,
+          claimToken: modelCallClaimToken
+        });
       }
       await appendJobEvent(input.jobId, "tool.openclaw_agent_cancelled", {
         stageId: input.stageId,
@@ -1313,13 +1381,15 @@ async function runOpenClawAgentIdempotent(input: {
         await markModelCallFailedUnknownOutcome({
           idempotencyKey,
           error: safeError,
-          responsePayload: failurePayload
+          responsePayload: failurePayload,
+          claimToken: modelCallClaimToken
         });
       } else {
         await markModelCallFailed({
           idempotencyKey,
           error: safeError,
-          responsePayload: failurePayload
+          responsePayload: failurePayload,
+          claimToken: modelCallClaimToken
         });
       }
     }
@@ -1422,6 +1492,22 @@ async function postGroupMessage(input: {
   });
 
   return groupMessage;
+}
+
+export async function assertJobExecutionClaim(input: {
+  jobId: string;
+  workflowId: string;
+}) {
+  await assertJobWorkflowExecution(input);
+  return true;
+}
+
+export async function getJobExecutionWorkflowId(jobId: string) {
+  const job = await getJob(jobId);
+  if (!job?.workflowId) {
+    throw new Error("job_execution_claim_missing");
+  }
+  return job.workflowId;
 }
 
 export async function markJobRunning(jobId: string) {
@@ -2050,6 +2136,7 @@ export async function createPipelinePlan(input: {
 
 export async function runStageAgent(input: {
   jobId: string;
+  executionWorkflowId?: string;
   stageId: string;
   attemptNo: number;
   routingMode?: RoutingMode;
@@ -2057,6 +2144,12 @@ export async function runStageAgent(input: {
   outputMessageType?: GroupMessageType;
   contextArtifactIds?: string[];
 }): Promise<StageRunResult> {
+  if (input.executionWorkflowId) {
+    await assertJobWorkflowExecution({
+      jobId: input.jobId,
+      workflowId: input.executionWorkflowId
+    });
+  }
   const [job, stage] = await Promise.all([getJob(input.jobId), getStage(input.stageId)]);
   if (!job) {
     throw new Error(`Job not found: ${input.jobId}`);
@@ -2228,6 +2321,7 @@ export async function runStageAgent(input: {
 
   const openClawResult = await runOpenClawAgentIdempotent({
     jobId: input.jobId,
+    executionWorkflowId: input.executionWorkflowId,
     stageId: stage.id,
     stageIndex: stage.stageIndex,
     attemptNo: input.attemptNo,
@@ -2447,11 +2541,18 @@ export async function runStageAgent(input: {
 
 export async function runTestAgent(input: {
   jobId: string;
+  executionWorkflowId?: string;
   stageId: string;
   attemptId: string;
   attemptNo: number;
   outputArtifactId: string;
 }): Promise<TestReviewResult> {
+  if (input.executionWorkflowId) {
+    await assertJobWorkflowExecution({
+      jobId: input.jobId,
+      workflowId: input.executionWorkflowId
+    });
+  }
   const [job, stage, outputArtifact] = await Promise.all([
     getJob(input.jobId),
     getStage(input.stageId),
@@ -2498,6 +2599,7 @@ export async function runTestAgent(input: {
 
   const openClawTestResult = await runOpenClawAgentIdempotent({
     jobId: input.jobId,
+    executionWorkflowId: input.executionWorkflowId,
     stageId: stage.id,
     stageIndex: stage.stageIndex,
     attemptNo: input.attemptNo,
@@ -2674,9 +2776,16 @@ export async function runTestAgent(input: {
 
 export async function runFinalTestAgent(input: {
   jobId: string;
+  executionWorkflowId?: string;
   sourceArtifactId: string;
   routingMode: RoutingMode;
 }): Promise<FinalQualityGateResult> {
+  if (input.executionWorkflowId) {
+    await assertJobWorkflowExecution({
+      jobId: input.jobId,
+      workflowId: input.executionWorkflowId
+    });
+  }
   const [job, sourceArtifact] = await Promise.all([
     getJob(input.jobId),
     getArtifact(input.sourceArtifactId)
@@ -2715,6 +2824,7 @@ export async function runFinalTestAgent(input: {
 
   const openClawTestResult = await runOpenClawAgentIdempotent({
     jobId: input.jobId,
+    executionWorkflowId: input.executionWorkflowId,
     stageId: null,
     stageIndex: 0,
     attemptNo: 1,
@@ -3314,8 +3424,12 @@ async function getRoutingOutputRows(
 
 async function mainAgentSynthesizeRoutingOutputs(
   jobId: string,
-  routingMode: SynthesisRoutingMode
+  routingMode: SynthesisRoutingMode,
+  executionWorkflowId?: string
 ) {
+  if (executionWorkflowId) {
+    await assertJobWorkflowExecution({ jobId, workflowId: executionWorkflowId });
+  }
   const job = await getJob(jobId);
   if (!job) {
     throw new Error(`Job not found: ${jobId}`);
@@ -3379,6 +3493,7 @@ async function mainAgentSynthesizeRoutingOutputs(
     : `${job.sessionId}:main-agent:classic-synthesis`;
   const openClawResult = await runOpenClawAgentIdempotent({
     jobId,
+    executionWorkflowId,
     stageId: null,
     stageIndex: 0,
     attemptNo: 1,
@@ -3458,12 +3573,31 @@ async function mainAgentSynthesizeRoutingOutputs(
   };
 }
 
-export async function mainAgentSynthesizeDiscussion(jobId: string) {
-  return mainAgentSynthesizeRoutingOutputs(jobId, "master_slave_discussion");
+type MainAgentSynthesisInput = string | {
+  jobId: string;
+  executionWorkflowId?: string;
+};
+
+function normalizeMainAgentSynthesisInput(input: MainAgentSynthesisInput) {
+  return typeof input === "string" ? { jobId: input, executionWorkflowId: undefined } : input;
 }
 
-export async function mainAgentSynthesizeClassic(jobId: string) {
-  return mainAgentSynthesizeRoutingOutputs(jobId, "classic_master_slave");
+export async function mainAgentSynthesizeDiscussion(input: MainAgentSynthesisInput) {
+  const normalized = normalizeMainAgentSynthesisInput(input);
+  return mainAgentSynthesizeRoutingOutputs(
+    normalized.jobId,
+    "master_slave_discussion",
+    normalized.executionWorkflowId
+  );
+}
+
+export async function mainAgentSynthesizeClassic(input: MainAgentSynthesisInput) {
+  const normalized = normalizeMainAgentSynthesisInput(input);
+  return mainAgentSynthesizeRoutingOutputs(
+    normalized.jobId,
+    "classic_master_slave",
+    normalized.executionWorkflowId
+  );
 }
 
 export async function requestStageFix(input: {

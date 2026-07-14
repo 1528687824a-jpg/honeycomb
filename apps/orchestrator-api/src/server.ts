@@ -2486,6 +2486,7 @@ async function main() {
 
       const modelCall = await markModelCallFailedUnknownOutcome({
         idempotencyKey: input.idempotencyKey,
+        force: true,
         error: input.reason
           ? `failed_unknown_outcome: ${input.reason}`
           : "failed_unknown_outcome: manually marked by admin"
@@ -5882,6 +5883,7 @@ async function main() {
       }
       const resume = await requestJobResume({
         jobId: request.params.jobId,
+        workflowId: `job-${request.params.jobId}-resume-${randomUUID().slice(0, 12)}`,
         reason: input.reason,
         requesterId: input.requesterId,
         maxModelCalls: input.maxModelCalls,
@@ -5920,8 +5922,11 @@ async function main() {
         return;
       }
 
-      const stamp = new Date().toISOString().replace(/[^0-9]/g, "").slice(0, 14);
-      const workflowId = await startJobWorkflow(request.params.jobId, `job-${request.params.jobId}-resume-${stamp}`);
+      const workflowId = await startJobWorkflow(
+        request.params.jobId,
+        resume.workflowId,
+        { resumeExisting: resume.resumeExistingWorkflow }
+      );
       const job = await getJob(request.params.jobId);
 
       response.json({

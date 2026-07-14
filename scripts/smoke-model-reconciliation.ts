@@ -74,10 +74,15 @@ async function main() {
     routeAttemptNo: 1,
     preparedAt: new Date().toISOString()
   };
-  await setModelCallRequestReference({ idempotencyKey, requestReference });
+  await setModelCallRequestReference({
+    idempotencyKey,
+    requestReference,
+    claimToken: started.claimToken
+  });
   await markModelCallFailedUnknownOutcome({
     idempotencyKey,
-    error: "provider_result_unknown"
+    error: "provider_result_unknown",
+    claimToken: started.claimToken
   });
   await setJobStatus(job.id, "waiting_for_human", {
     reason: "model_call_reconciliation_required"
@@ -131,10 +136,15 @@ async function main() {
   assert.equal(restarted.requestReference, null);
   assert.equal(restarted.reconciliation, null);
 
-  await setModelCallRequestReference({ idempotencyKey, requestReference });
+  await setModelCallRequestReference({
+    idempotencyKey,
+    requestReference,
+    claimToken: restarted.claimToken
+  });
   await markModelCallFailedUnknownOutcome({
     idempotencyKey,
-    error: "provider_result_unknown_after_restart"
+    error: "provider_result_unknown_after_restart",
+    claimToken: restarted.claimToken
   });
   const succeeded = reconciliationState("confirmed_succeeded", true);
   await reconcileModelCallAsSucceeded({
