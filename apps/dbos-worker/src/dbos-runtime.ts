@@ -41,3 +41,8 @@ export async function startJobWorkflow(jobId: string, workflowIdOverride?: strin
 
   return handle.workflowID;
 }
+
+export async function cancelJobWorkflow(workflowId: string) {
+  await launchDbos();
+  await DBOS.cancelWorkflow(workflowId);
+}

@@ -185,7 +185,11 @@ import {
   normalizeOpenClawAgentRunner,
   resolveOpenClawAgentRunner
 } from "../../../packages/shared/src/openclaw-runner";
-import { launchDbos, startJobWorkflow } from "../../dbos-worker/src/dbos-runtime";
+import {
+  cancelJobWorkflow,
+  launchDbos,
+  startJobWorkflow
+} from "../../dbos-worker/src/dbos-runtime";
 import { ingressAdapters } from "./adapters";
 import { getRuntimeCapabilities } from "./capabilities";
 import { discoverOpenClawRuntime } from "./openclaw-runtime";
@@ -4601,12 +4605,42 @@ async function main() {
         return;
       }
 
+      let workflowCancellation: "requested" | "not_available" | "failed" = "not_available";
+      if (result.job.workflowId) {
+        try {
+          await cancelJobWorkflow(result.job.workflowId);
+          workflowCancellation = "requested";
+          if (result.changed) {
+            await appendJobEvent(
+              result.job.id,
+              "job.workflow_cancel_requested",
+              { workflowId: result.job.workflowId },
+              { actor: "system" }
+            );
+          }
+        } catch (error) {
+          workflowCancellation = "failed";
+          if (result.changed) {
+            await appendJobEvent(
+              result.job.id,
+              "job.workflow_cancel_failed",
+              {
+                workflowId: result.job.workflowId,
+                error: error instanceof Error ? error.message : String(error)
+              },
+              { actor: "system" }
+            ).catch(() => undefined);
+          }
+        }
+      }
+
       response.json({
         ok: true,
         changed: result.changed,
         reason: result.reason,
         jobId: result.job.id,
-        status: result.job.status
+        status: result.job.status,
+        workflowCancellation
       });
     } catch (error) {
       next(error);

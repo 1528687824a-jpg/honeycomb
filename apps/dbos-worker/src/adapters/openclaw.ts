@@ -12,6 +12,10 @@ import {
   isLikelyImageGenerationModel,
   isLikelyVideoGenerationModel
 } from "../../../../packages/shared/src/model-capabilities";
+import {
+  JobCancelledError,
+  isJobCancellationError
+} from "../job-cancellation";
 
 const execFileAsync = promisify(execFile);
 
@@ -285,6 +289,41 @@ function providerTimeoutMs(timeoutSeconds: number) {
   return Math.max(1, timeoutSeconds) * 1000;
 }
 
+function throwIfJobCancelled(signal?: AbortSignal) {
+  if (signal?.aborted) {
+    throw new JobCancelledError();
+  }
+}
+
+function createTimedAbortSignal(input: {
+  signal?: AbortSignal;
+  timeoutMs: number;
+  timeoutReason: string;
+}) {
+  throwIfJobCancelled(input.signal);
+  const controller = new AbortController();
+  let timedOut = false;
+  const abortFromJob = () => controller.abort(new JobCancelledError());
+  input.signal?.addEventListener("abort", abortFromJob, { once: true });
+  if (input.signal?.aborted) {
+    abortFromJob();
+  }
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort(new Error(input.timeoutReason));
+  }, input.timeoutMs);
+  timeout.unref?.();
+
+  return {
+    signal: controller.signal,
+    timedOut: () => timedOut,
+    dispose() {
+      clearTimeout(timeout);
+      input.signal?.removeEventListener("abort", abortFromJob);
+    }
+  };
+}
+
 async function providerResponseErrorMessage(response: Response) {
   let message = `${response.status} ${response.statusText}`.trim();
   try {
@@ -313,9 +352,13 @@ async function fetchProviderJson(input: {
   apiKey: string;
   body: Record<string, unknown>;
   timeoutMs: number;
+  signal?: AbortSignal;
 }) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), input.timeoutMs);
+  const abort = createTimedAbortSignal({
+    signal: input.signal,
+    timeoutMs: input.timeoutMs,
+    timeoutReason: "provider_direct_timeout"
+  });
   try {
     const response = await fetch(input.url, {
       method: "POST",
@@ -324,7 +367,7 @@ async function fetchProviderJson(input: {
         authorization: `Bearer ${input.apiKey}`
       },
       body: JSON.stringify(input.body),
-      signal: controller.signal
+      signal: abort.signal
     });
 
     if (!response.ok) {
@@ -338,15 +381,22 @@ async function fetchProviderJson(input: {
       return responseText;
     }
   } catch (error) {
+    if (input.signal?.aborted || isJobCancellationError(error) || isJobCancellationError(abort.signal.reason)) {
+      throw new JobCancelledError();
+    }
     if (error instanceof ProviderDirectResponseError) {
       throw error;
     }
     throw new ProviderDirectResponseError(
-      error instanceof Error ? error.message.slice(0, 500) : "provider_direct_request_failed",
+      abort.timedOut()
+        ? "provider_direct_timeout"
+        : error instanceof Error
+          ? error.message.slice(0, 500)
+          : "provider_direct_request_failed",
       null
     );
   } finally {
-    clearTimeout(timeout);
+    abort.dispose();
   }
 }
 
@@ -565,14 +615,18 @@ async function downloadMediaUrl(input: {
   sessionId: string;
   index: number;
   fallbackMimeType: string | null;
+  signal?: AbortSignal;
 }) {
   const maxBytes = mediaDownloadMaxBytes(input.kind);
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), mediaDownloadTimeoutMs());
+  const abort = createTimedAbortSignal({
+    signal: input.signal,
+    timeoutMs: mediaDownloadTimeoutMs(),
+    timeoutReason: "media_download_timeout"
+  });
   try {
     const response = await fetch(input.url, {
       method: "GET",
-      signal: controller.signal
+      signal: abort.signal
     });
     if (!response.ok) {
       throw new Error(`media_download_http_${response.status}`);
@@ -617,14 +671,22 @@ async function downloadMediaUrl(input: {
       input.outputDir,
       `${toOpenClawSessionId(input.sessionId)}-${input.kind}-${input.index + 1}.${extension}`
     );
-    await writeFile(filePath, Buffer.concat(chunks, totalBytes));
+    await writeFile(filePath, Buffer.concat(chunks, totalBytes), { signal: abort.signal });
     return {
       filePath,
       mimeType: contentType ?? input.fallbackMimeType,
       sizeBytes: totalBytes
     };
+  } catch (error) {
+    if (input.signal?.aborted || isJobCancellationError(error) || isJobCancellationError(abort.signal.reason)) {
+      throw new JobCancelledError();
+    }
+    if (abort.timedOut()) {
+      throw new Error("media_download_timeout");
+    }
+    throw error;
   } finally {
-    clearTimeout(timeout);
+    abort.dispose();
   }
 }
 
@@ -632,7 +694,9 @@ export async function persistMediaCandidates(input: {
   candidates: MediaCandidate[];
   outputDir?: string | null;
   sessionId: string;
+  signal?: AbortSignal;
 }) {
+  throwIfJobCancelled(input.signal);
   if (!input.outputDir) {
     return input.candidates.map((candidate) => ({
       kind: candidate.kind,
@@ -647,8 +711,10 @@ export async function persistMediaCandidates(input: {
   }
 
   await mkdir(input.outputDir, { recursive: true });
+  throwIfJobCancelled(input.signal);
   const artifacts: OpenClawGeneratedArtifact[] = [];
   for (let index = 0; index < input.candidates.length; index++) {
+    throwIfJobCancelled(input.signal);
     const candidate = input.candidates[index];
     let filePath: string | null = null;
     if (candidate.b64Json) {
@@ -658,7 +724,14 @@ export async function persistMediaCandidates(input: {
         `${toOpenClawSessionId(input.sessionId)}-${candidate.kind}-${index + 1}.${extension}`
       );
       const buffer = Buffer.from(candidate.b64Json, "base64");
-      await writeFile(filePath, buffer);
+      try {
+        await writeFile(filePath, buffer, { signal: input.signal });
+      } catch (error) {
+        if (input.signal?.aborted || isJobCancellationError(error)) {
+          throw new JobCancelledError();
+        }
+        throw error;
+      }
       artifacts.push({
         kind: candidate.kind,
         url: candidate.url,
@@ -684,12 +757,16 @@ export async function persistMediaCandidates(input: {
           outputDir: input.outputDir,
           sessionId: input.sessionId,
           index,
-          fallbackMimeType: candidate.mimeType
+          fallbackMimeType: candidate.mimeType,
+          signal: input.signal
         });
         filePath = downloaded.filePath;
         mimeType = downloaded.mimeType;
         sizeBytes = downloaded.sizeBytes;
       } catch (error) {
+        if (input.signal?.aborted || isJobCancellationError(error)) {
+          throw new JobCancelledError();
+        }
         downloadError = error instanceof Error ? error.message.slice(0, 300) : "media_download_failed";
         note = appendArtifactNote(note, `Media download failed: ${downloadError}`);
       }
@@ -753,12 +830,14 @@ async function runProviderDirectChat(input: {
   message: string;
   provider: OpenClawProviderRuntime & { baseUrl: string; model: string; apiKey: string };
   timeoutSeconds: number;
+  signal?: AbortSignal;
 }): Promise<OpenClawRunResult> {
   const maxTokens = numberValue(process.env.OPENCLAW_PROVIDER_DIRECT_MAX_TOKENS) ?? 1200;
   const raw = await fetchProviderJson({
     url: chatCompletionsUrl(input.provider.baseUrl),
     apiKey: input.provider.apiKey,
     timeoutMs: providerTimeoutMs(input.timeoutSeconds),
+    signal: input.signal,
     body: {
       model: input.provider.model,
       messages: [
@@ -801,6 +880,7 @@ async function runProviderDirectImage(input: {
   outputDir?: string | null;
   provider: OpenClawProviderRuntime & { baseUrl: string; model: string; apiKey: string };
   timeoutSeconds: number;
+  signal?: AbortSignal;
 }): Promise<OpenClawRunResult> {
   const body: Record<string, unknown> = {
     model: input.provider.model,
@@ -819,12 +899,14 @@ async function runProviderDirectImage(input: {
     url: imageGenerationsUrl(input.provider.baseUrl),
     apiKey: input.provider.apiKey,
     timeoutMs: providerTimeoutMs(input.timeoutSeconds),
+    signal: input.signal,
     body
   });
   const artifacts = await persistMediaCandidates({
     candidates: collectMediaCandidates(raw, "image"),
     outputDir: input.outputDir,
-    sessionId: input.sessionId
+    sessionId: input.sessionId,
+    signal: input.signal
   });
   const text = providerDirectText({ kind: "image", raw, artifacts });
   if (!text.trim()) {
@@ -850,11 +932,13 @@ async function runProviderDirectVideo(input: {
   outputDir?: string | null;
   provider: OpenClawProviderRuntime & { baseUrl: string; model: string; apiKey: string };
   timeoutSeconds: number;
+  signal?: AbortSignal;
 }): Promise<OpenClawRunResult> {
   const raw = await fetchProviderJson({
     url: videoTasksUrl(input.provider.baseUrl),
     apiKey: input.provider.apiKey,
     timeoutMs: providerTimeoutMs(input.timeoutSeconds),
+    signal: input.signal,
     body: {
       model: input.provider.model,
       content: [
@@ -868,7 +952,8 @@ async function runProviderDirectVideo(input: {
   const artifacts = await persistMediaCandidates({
     candidates: collectMediaCandidates(raw, "video"),
     outputDir: input.outputDir,
-    sessionId: input.sessionId
+    sessionId: input.sessionId,
+    signal: input.signal
   });
   const taskId =
     stringValue(recordValue(raw)?.id) ??
@@ -896,6 +981,7 @@ async function runProviderDirectAgent(input: {
   provider?: OpenClawProviderRuntime | null;
   outputDir?: string | null;
   timeoutSeconds: number;
+  signal?: AbortSignal;
 }) {
   const provider = sanitizeProviderForDirectRun(input.provider);
   const kind = selectProviderDirectKind(provider);
@@ -936,6 +1022,35 @@ export function buildOpenClawAgentArgs(input: {
     "--timeout",
     String(input.timeoutSeconds)
   ];
+}
+
+export function buildOpenClawCancelArgs(sessionId: string) {
+  const normalizedSessionId = toOpenClawSessionId(sessionId);
+  if (!normalizedSessionId) {
+    throw new Error("openclaw_session_id_missing");
+  }
+  const escapedSessionId = normalizedSessionId.replace(/[\\.^$|?*+()[{]/g, "\\$&");
+  return [
+    "-d",
+    getWslDistro(),
+    "--",
+    "pkill",
+    "-TERM",
+    "-f",
+    "--",
+    `--session-id ${escapedSessionId}( |$)`
+  ];
+}
+
+async function cancelWslOpenClawSession(sessionId: string) {
+  try {
+    await execFileAsync("wsl", buildOpenClawCancelArgs(sessionId), {
+      timeout: 10_000,
+      windowsHide: true
+    });
+  } catch {
+    // The process may already have exited, or WSL may be unavailable during shutdown.
+  }
 }
 
 export function buildNativeOpenClawAgentArgs(input: {
@@ -996,7 +1111,9 @@ export async function runOpenClawAgent(input: {
   provider?: OpenClawProviderRuntime | null;
   outputDir?: string | null;
   timeoutSeconds?: number;
+  signal?: AbortSignal;
 }): Promise<OpenClawRunResult | null> {
+  throwIfJobCancelled(input.signal);
   if (!openClawRealMode()) {
     return null;
   }
@@ -1008,7 +1125,8 @@ export async function runOpenClawAgent(input: {
       message: input.providerDirectMessage ?? input.message,
       provider: input.provider,
       outputDir: input.outputDir,
-      timeoutSeconds
+      timeoutSeconds,
+      signal: input.signal
     });
   }
 
@@ -1019,15 +1137,28 @@ export async function runOpenClawAgent(input: {
     timeoutSeconds
   });
 
-  const { stdout } = await execFileAsync(hostCommand.command, hostCommand.args, {
-    env: {
-      ...process.env,
-      ...buildProviderEnv(input.provider)
-    },
-    maxBuffer: 20 * 1024 * 1024,
-    timeout: hostCommand.timeoutMs,
-    windowsHide: true
-  });
+  let stdout: string;
+  try {
+    const result = await execFileAsync(hostCommand.command, hostCommand.args, {
+      env: {
+        ...process.env,
+        ...buildProviderEnv(input.provider)
+      },
+      maxBuffer: 20 * 1024 * 1024,
+      timeout: hostCommand.timeoutMs,
+      windowsHide: true,
+      signal: input.signal
+    });
+    stdout = result.stdout;
+  } catch (error) {
+    if (input.signal?.aborted || isJobCancellationError(error)) {
+      if (hostCommand.runner === "wsl") {
+        await cancelWslOpenClawSession(input.sessionId);
+      }
+      throw new JobCancelledError();
+    }
+    throw error;
+  }
 
   const trimmed = stdout.trim();
   let raw: unknown = trimmed;

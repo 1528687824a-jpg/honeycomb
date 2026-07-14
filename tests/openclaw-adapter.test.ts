@@ -6,6 +6,7 @@ import path from "node:path";
 import { test } from "node:test";
 import {
   buildOpenClawAgentArgs,
+  buildOpenClawCancelArgs,
   buildOpenClawHostCommand,
   buildNativeOpenClawAgentArgs,
   collectMediaCandidates,
@@ -111,6 +112,24 @@ test("buildOpenClawAgentArgs wraps the CLI in a Linux-side timeout", () => {
   assert.equal(args[args.indexOf("--session-id") + 1], "job-123-stage-4");
   assert.equal(args[args.indexOf("--timeout") + 1], "600");
   assert.equal(args[args.indexOf("--agent") + 1], "research-agent");
+});
+
+test("buildOpenClawCancelArgs targets only the normalized WSL session", () => {
+  const args = buildOpenClawCancelArgs("job:123/stage 4");
+  assert.deepEqual(args.slice(0, 7), [
+    "-d",
+    process.env.OPENCLAW_WSL_DISTRO ?? "Ubuntu-24.04",
+    "--",
+    "pkill",
+    "-TERM",
+    "-f",
+    "--"
+  ]);
+  assert.equal(args[7], "--session-id job-123-stage-4( |$)");
+  assert.equal(
+    buildOpenClawCancelArgs("job.123/stage")[7],
+    "--session-id job\\.123-stage( |$)"
+  );
 });
 
 test("resolveOpenClawAgentRunner maps auto to WSL on Windows and native elsewhere", () => {
@@ -250,6 +269,58 @@ test("provider-direct video requests use Volcengine content payloads", async () 
   }
 });
 
+test("provider-direct requests stop when the job cancellation signal aborts", async () => {
+  let responseTimer: NodeJS.Timeout | null = null;
+  const server = http.createServer((_request, response) => {
+    responseTimer = setTimeout(() => {
+      if (!response.destroyed) {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ choices: [{ message: { content: "too late" } }] }));
+      }
+    }, 1_000);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+  const previousMode = process.env.OPENCLAW_AGENT_MODE;
+  const previousRunner = process.env.OPENCLAW_AGENT_RUNNER;
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    process.env.OPENCLAW_AGENT_MODE = "real";
+    process.env.OPENCLAW_AGENT_RUNNER = "provider-direct";
+    const controller = new AbortController();
+    const pending = runOpenClawAgent({
+      agentId: "research-agent",
+      sessionId: "job:cancel/stage",
+      message: "Wait for the provider.",
+      provider: {
+        providerId: "test-provider",
+        baseUrl: `http://127.0.0.1:${address.port}`,
+        model: "test-chat-model",
+        apiKey: "test-key",
+        agentRole: "research"
+      },
+      timeoutSeconds: 5,
+      signal: controller.signal
+    });
+    setTimeout(() => controller.abort(), 50);
+    await assert.rejects(pending, { message: "job_cancelled" });
+  } finally {
+    if (responseTimer) clearTimeout(responseTimer);
+    if (previousMode === undefined) {
+      delete process.env.OPENCLAW_AGENT_MODE;
+    } else {
+      process.env.OPENCLAW_AGENT_MODE = previousMode;
+    }
+    if (previousRunner === undefined) {
+      delete process.env.OPENCLAW_AGENT_RUNNER;
+    } else {
+      process.env.OPENCLAW_AGENT_RUNNER = previousRunner;
+    }
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
 test("extractProviderDirectChatText reads OpenAI-compatible choices", () => {
   assert.equal(
     extractProviderDirectChatText({
@@ -345,6 +416,35 @@ test("persistMediaCandidates downloads URL media into the output directory", asy
     assert.match(artifacts[0].filePath ?? "", /\.jpg$/);
     assert.deepEqual(await readFile(artifacts[0].filePath ?? ""), body);
   } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("persistMediaCandidates does not swallow job cancellation during download", async () => {
+  const server = http.createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "image/jpeg" });
+    response.write(Buffer.from("partial-image"));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "honeycomb-media-cancel-"));
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    const controller = new AbortController();
+    const pending = persistMediaCandidates({
+      candidates: collectMediaCandidates({
+        data: [{ url: `http://127.0.0.1:${address.port}/poster.jpg` }]
+      }, "image"),
+      outputDir: tempDir,
+      sessionId: "job:cancel/image",
+      signal: controller.signal
+    });
+    setTimeout(() => controller.abort(), 50);
+    await assert.rejects(pending, { message: "job_cancelled" });
+  } finally {
+    server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await rm(tempDir, { recursive: true, force: true });
   }

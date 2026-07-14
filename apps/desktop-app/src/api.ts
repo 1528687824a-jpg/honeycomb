@@ -341,6 +341,7 @@ export type RuntimeUsageResponse = {
       succeeded: number;
       failed: number;
       failedUnknownOutcome: number;
+      cancelled: number;
     };
     tokens?: {
       promptTokens: number;

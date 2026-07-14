@@ -47,7 +47,7 @@ The structured conversation-to-task contract is implemented:
 
 ### Windows Stage 2 Progress (2026-07-14)
 
-The first two execution-control slices are implemented:
+The first three execution-control slices are implemented:
 
 - Every new or resumed job runs a shared execution preflight before DBOS starts.
 - Preflight checks every production agent, the test agent, and the discussion
@@ -81,12 +81,27 @@ The first two execution-control slices are implemented:
 - `GET /runtime/model-call-queue` exposes the active global queue, and
   `npm run smoke:model-call-queue` covers migration-backed acquisition,
   blocking, independent-provider parallelism, release, and promotion.
-- `npm run check` and all 100 unit tests pass.
+- A persisted cancellation watcher now aborts active provider HTTP requests,
+  generated-media downloads, file writes, and native OpenClaw processes. WSL
+  runs receive an additional session-targeted Linux process termination.
+- Cancellation is a distinct model-call state. It never triggers provider
+  failover, is visible in runtime usage, and emits a dedicated task timeline
+  event instead of being reported as a provider failure.
+- The cancel API also requests native DBOS workflow cancellation. Honeycomb's
+  persisted job status remains authoritative if that secondary request fails,
+  and the failure is recorded for diagnosis instead of undoing user intent.
+- Database guards reject model-call starts after a job is cancelled and resolve
+  stale cancel-versus-success reads with row locks. The cancel API also marks
+  every already-started call immediately, so a worker crash cannot leave a
+  false active call behind.
+- `npm run smoke:cancel-job` now verifies active-call cancellation, rejection
+  of new calls after cancellation, runtime cancellation counts, and timeline
+  metadata.
+- `npm run check`, the desktop production build, and all 106 unit tests pass.
 
 Runtime database acceptance is pending while PostgreSQL and Docker Desktop are
-stopped. The next active Stage 2 slice is cancellation propagation into live
-HTTP requests and OpenClaw child processes, followed by typed retry/backoff,
-unknown-outcome repair, and hard spend limits.
+stopped. The next active Stage 2 slice is typed retry/backoff with `Retry-After`
+support, followed by unknown-outcome repair and hard spend limits.
 
 ## Current Backend Status
 

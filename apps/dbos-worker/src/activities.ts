@@ -30,6 +30,7 @@ import {
 import {
   countModelCallsForJob,
   getModelCallByKey,
+  markModelCallCancelled,
   markModelCallFailed,
   markModelCallStarted,
   markModelCallSucceeded
@@ -77,6 +78,11 @@ import {
   releaseModelCallSlot,
   type ModelCallSlotLease
 } from "./model-call-queue";
+import {
+  JobCancelledError,
+  isJobCancellationError,
+  watchJobCancellation
+} from "./job-cancellation";
 import { maybeCrashOnce } from "./test-crash";
 
 type OpenClawActionType =
@@ -181,7 +187,14 @@ async function runOpenClawAgentIdempotent(input: {
     input.attemptNo,
     input.actionType
   ].join(":");
+  const currentJob = await getJob(input.jobId);
+  if (!currentJob || currentJob.status === "cancelled") {
+    throw new JobCancelledError();
+  }
   const existing = await getModelCallByKey(idempotencyKey);
+  if (existing?.status === "cancelled") {
+    throw new JobCancelledError();
+  }
   const routes = await resolveAgentRuntimeCandidates({ requestedAgentId: input.agentId });
   const primaryRoute = routes[0];
   const redactedPrimaryRoute = redactAgentRuntime(primaryRoute);
@@ -263,6 +276,7 @@ async function runOpenClawAgentIdempotent(input: {
       const startedAt = Date.now();
       let slotLease: ModelCallSlotLease | null = null;
       let slotReleaseReason: string | null = null;
+      let cancellationWatcher: Awaited<ReturnType<typeof watchJobCancellation>> | null = null;
       try {
         const readinessError = routeReadinessError(route);
         if (readinessError) {
@@ -278,6 +292,7 @@ async function runOpenClawAgentIdempotent(input: {
           timeoutSeconds: input.timeoutSeconds,
           actionType: input.actionType
         });
+        cancellationWatcher = await watchJobCancellation({ jobId: input.jobId });
         if (!modelCallStarted) {
           await markModelCallStarted({
             idempotencyKey,
@@ -311,8 +326,16 @@ async function runOpenClawAgentIdempotent(input: {
             agentRole: route.agentRole
           },
           outputDir: input.outputDir,
-          timeoutSeconds: input.timeoutSeconds
+          timeoutSeconds: input.timeoutSeconds,
+          signal: cancellationWatcher.signal
         });
+        if (cancellationWatcher.signal.aborted) {
+          throw new JobCancelledError();
+        }
+        const latestJob = await getJob(input.jobId);
+        if (!latestJob || latestJob.status === "cancelled") {
+          throw new JobCancelledError();
+        }
         const successAttempt = routeAttemptPayload({
           route: redactedRoute,
           ok: true,
@@ -376,10 +399,11 @@ async function runOpenClawAgentIdempotent(input: {
 
         return result;
       } catch (error) {
-        lastError = toSafeErrorMessage(error);
+        const cancelled = isJobCancellationError(error) || toSafeErrorMessage(error) === "job_cancelled";
+        lastError = cancelled ? "job_cancelled" : toSafeErrorMessage(error);
         slotReleaseReason = lastError;
-        if (lastError === "job_cancelled") {
-          throw error;
+        if (cancelled) {
+          throw new JobCancelledError();
         }
         const failedAttempt = routeAttemptPayload({
           route: redactedRoute,
@@ -415,6 +439,7 @@ async function runOpenClawAgentIdempotent(input: {
           }
         );
       } finally {
+        cancellationWatcher?.dispose();
         await releaseModelCallSlot({
           jobId: input.jobId,
           stageId: input.stageId,
@@ -430,19 +455,49 @@ async function runOpenClawAgentIdempotent(input: {
       `All OpenClaw route attempts failed for ${idempotencyKey}: ${lastError ?? "unknown_error"}`
     );
   } catch (error) {
+    const cancelled = isJobCancellationError(error) || toSafeErrorMessage(error) === "job_cancelled";
+    const safeError = cancelled ? "job_cancelled" : toSafeErrorMessage(error);
     if (modelCallStarted) {
-      await markModelCallFailed({
-        idempotencyKey,
-        error: toSafeErrorMessage(error)
-      });
+      if (cancelled) {
+        await markModelCallCancelled({ idempotencyKey, error: safeError });
+      } else {
+        await markModelCallFailed({ idempotencyKey, error: safeError });
+      }
+    }
+    if (cancelled) {
+      await appendJobEvent(
+        input.jobId,
+        "tool.openclaw_agent_cancelled",
+        {
+          stageId: input.stageId,
+          agentId: primaryRoute.honeycombAgentId,
+          requestedAgentId: input.agentId,
+          openclawAgentId: primaryRoute.openclawAgentId,
+          attemptNo: input.attemptNo,
+          actionType: input.actionType,
+          idempotencyKey,
+          routeAttempts
+        },
+        {
+          actor: "tool-gateway",
+          stageId: input.stageId ?? null
+        }
+      );
+      await heartbeat(
+        input.jobId,
+        `openclaw.${input.actionType}.cancelled`,
+        safeError,
+        input.stageId ?? null
+      );
+      throw new JobCancelledError();
     }
     await heartbeat(
       input.jobId,
       `openclaw.${input.actionType}.failed`,
-      toSafeErrorMessage(error),
+      safeError,
       input.stageId ?? null
     );
-    throw new Error(toSafeErrorMessage(error));
+    throw new Error(safeError);
   }
 }
 

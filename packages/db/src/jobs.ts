@@ -693,6 +693,19 @@ export async function setJobFinalOutput(jobId: string, finalOutput: string) {
   return true;
 }
 
+async function cancelStartedModelCallsForJob(jobId: string) {
+  const result = await pool.query(
+    `update agent.model_calls
+     set status = 'cancelled',
+         error = 'job_cancelled',
+         updated_at = now()
+     where job_id = $1
+       and status = 'started'`,
+    [jobId]
+  );
+  return result.rowCount ?? 0;
+}
+
 export async function cancelJob(input: {
   jobId: string;
   reason?: string;
@@ -716,6 +729,7 @@ export async function cancelJob(input: {
   }
 
   if (job.status === "cancelled") {
+    await cancelStartedModelCallsForJob(input.jobId);
     const archivedJob = job.archivedAt
       ? job
       : await archiveJobSession({
@@ -748,11 +762,14 @@ export async function cancelJob(input: {
 
   if (!result.rows[0]) {
     const latest = await getJob(input.jobId);
-    if (latest?.status === "cancelled" && !latest.archivedAt) {
-      const archivedJob = await archiveJobSession({
-        jobId: input.jobId,
-        reason: "job_cancelled"
-      });
+    if (latest?.status === "cancelled") {
+      await cancelStartedModelCallsForJob(input.jobId);
+      const archivedJob = latest.archivedAt
+        ? latest
+        : await archiveJobSession({
+            jobId: input.jobId,
+            reason: "job_cancelled"
+          });
 
       return {
         job: archivedJob,
@@ -768,13 +785,15 @@ export async function cancelJob(input: {
     } as const;
   }
 
+  const cancelledModelCallCount = await cancelStartedModelCallsForJob(input.jobId);
   await appendJobEvent(
     input.jobId,
     "job.cancelled",
     {
       reason: input.reason ?? null,
       requesterId: input.requesterId ?? null,
-      previousStatus: job.status
+      previousStatus: job.status,
+      cancelledModelCallCount
     },
     {
       actor: "user"

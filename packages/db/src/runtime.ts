@@ -53,6 +53,7 @@ export type RuntimeUsageResponse = {
       succeeded: number;
       failed: number;
       failedUnknownOutcome: number;
+      cancelled: number;
     };
     tokens: {
       promptTokens: number;
@@ -458,7 +459,8 @@ export async function getRuntimeUsage(input: {
          count(*) filter (where status = 'started')::int as started,
          count(*) filter (where status = 'succeeded')::int as succeeded,
          count(*) filter (where status = 'failed')::int as failed,
-         count(*) filter (where status = 'failed_unknown_outcome')::int as failed_unknown_outcome
+         count(*) filter (where status = 'failed_unknown_outcome')::int as failed_unknown_outcome,
+         count(*) filter (where status = 'cancelled')::int as cancelled
        from agent.model_calls
        ${whereSql}`,
       values
@@ -659,7 +661,8 @@ export async function getRuntimeUsage(input: {
         started: Number(modelRow.started ?? 0),
         succeeded: Number(modelRow.succeeded ?? 0),
         failed: Number(modelRow.failed ?? 0),
-        failedUnknownOutcome: Number(modelRow.failed_unknown_outcome ?? 0)
+        failedUnknownOutcome: Number(modelRow.failed_unknown_outcome ?? 0),
+        cancelled: Number(modelRow.cancelled ?? 0)
       },
       tokens: {
         promptTokens: Number(tokens.rows[0]?.prompt_tokens ?? 0),
