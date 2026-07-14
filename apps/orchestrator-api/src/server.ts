@@ -121,9 +121,17 @@ import {
   upsertModelProvider
 } from "../../../packages/db/src/config-registry";
 import {
+  getArtifactDestinationGrant,
+  listArtifactDestinationGrants,
+  revokeArtifactDestinationGrant,
+  upsertArtifactDestinationGrant
+} from "../../../packages/db/src/artifact-destination-grants";
+import {
+  getRegisteredWorkspace,
   getRegisteredWorkspaceByRootKey,
   listRegisteredWorkspaces,
   markRegisteredWorkspaceUsed,
+  revokeRegisteredWorkspace,
   upsertRegisteredWorkspace
 } from "../../../packages/db/src/workspace-registry";
 import {
@@ -177,6 +185,13 @@ import {
   runWebSearch,
   WebFetchError
 } from "./web-tools";
+import {
+  ArtifactDestinationPathError,
+  artifactDestinationApprovalTarget,
+  artifactDestinationRootKey,
+  normalizeArtifactDestinationApprovalTarget,
+  normalizeArtifactDestinationRootPath
+} from "../../../packages/shared/src/artifact-destination-policy";
 import {
   EXPERIENCE_STATUSES,
   INGRESS_ORIGINS,
@@ -845,6 +860,24 @@ const workspaceRegisterSchema = z.object({
   metadata: z.record(z.unknown()).optional()
 });
 
+const artifactDestinationGrantListSchema = z.object({
+  enabled: z.coerce.boolean().optional()
+});
+
+const artifactDestinationGrantSchema = z.object({
+  rootPath: z.string().trim().min(1).max(2000),
+  displayName: z.string().trim().min(1).max(200).nullable().optional(),
+  approvalId: z.string().trim().min(1).max(200),
+  grantedBy: z.string().trim().min(1).max(200).optional(),
+  expiresAt: z.string().datetime({ offset: true }).nullable().optional(),
+  metadata: z.record(z.unknown()).optional()
+});
+
+const destinationAuthorizationRevokeSchema = z.object({
+  revokedBy: z.string().trim().min(1).max(200).optional(),
+  reason: z.string().trim().max(1000).nullable().optional()
+});
+
 const workspaceFilesQuerySchema = workspaceRootQuerySchema.extend({
   subpath: z.string().trim().max(2000).optional(),
   depth: z.coerce.number().int().min(0).max(8).optional(),
@@ -944,6 +977,14 @@ const WORKSPACE_WRITE_TOOL_NAMES = new Set(["workspace.writeFile", "workspace.wr
 const WORKSPACE_WRITE_ACTION_TYPES = new Set(["file_write", "workspace_file_write"]);
 const WORKSPACE_REGISTER_TOOL_NAMES = new Set(["workspace.register", "workspace.addRoot"]);
 const WORKSPACE_REGISTER_ACTION_TYPES = new Set(["workspace_register", "workspace_root_register"]);
+const ARTIFACT_DESTINATION_GRANT_TOOL_NAMES = new Set([
+  "artifact.delivery.grantDestination",
+  "artifact.destination.grant"
+]);
+const ARTIFACT_DESTINATION_GRANT_ACTION_TYPES = new Set([
+  "artifact_destination_grant",
+  "artifact_delivery_destination_grant"
+]);
 const WORKSPACE_COMMAND_TOOL_NAMES = new Set([
   "workspace.runCommand",
   "workspace.command",
@@ -2019,11 +2060,36 @@ function canonicalArtifactFileView(jobId: string, file: ArtifactFileRecord) {
 function artifactDeliveryView(
   jobId: string,
   delivery: ArtifactDeliveryRecord,
-  file: ArtifactFileRecord | null
+  file: ArtifactFileRecord | null,
+  options: { includeDestination?: boolean } = {}
 ) {
+  const {
+    claimToken: _claimToken,
+    authorizedRootPath,
+    destinationRelativePath,
+    destinationPath,
+    ...publicDelivery
+  } = delivery;
+  const destination = options.includeDestination && delivery.authorizationStatus === "authorized"
+    ? delivery.authorizationKind === "desktop"
+      ? {
+          kind: "desktop" as const,
+          rootPath: null,
+          relativeDirectory: null,
+          directoryPath: null
+        }
+      : delivery.authorizationKind === "registered_workspace" || delivery.authorizationKind === "custom_grant"
+        ? {
+            kind: delivery.target as "workspace" | "custom",
+            rootPath: authorizedRootPath,
+            relativeDirectory: destinationRelativePath,
+            directoryPath: destinationPath
+          }
+        : null
+    : null;
   return {
-    ...delivery,
-    claimToken: undefined,
+    ...publicDelivery,
+    destination,
     artifactFile: file ? canonicalArtifactFileView(jobId, file) : null
   };
 }
@@ -4012,6 +4078,125 @@ async function main() {
     }
   });
 
+  app.get("/artifact-destination-grants", async (request, response, next) => {
+    try {
+      const query = artifactDestinationGrantListSchema.parse(request.query);
+      response.json({ grants: await listArtifactDestinationGrants(query) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/artifact-destination-grants", async (request, response, next) => {
+    try {
+      const input = artifactDestinationGrantSchema.parse(request.body ?? {});
+      const rootPath = normalizeArtifactDestinationRootPath(input.rootPath);
+      const rootPathKey = artifactDestinationRootKey(rootPath);
+      const expectedTarget = artifactDestinationApprovalTarget(rootPathKey);
+      const approval = await getToolApproval(input.approvalId);
+      if (!approval) {
+        response.status(404).json({ error: "approval_not_found" });
+        return;
+      }
+      if (approval.status !== "approved") {
+        response.status(409).json({ error: "approval_not_approved", approval });
+        return;
+      }
+      if (
+        !ARTIFACT_DESTINATION_GRANT_TOOL_NAMES.has(approval.toolName) ||
+        !ARTIFACT_DESTINATION_GRANT_ACTION_TYPES.has(approval.actionType)
+      ) {
+        response.status(409).json({ error: "approval_not_for_artifact_destination", approval });
+        return;
+      }
+      if (normalizeArtifactDestinationApprovalTarget(approval.target) !== rootPathKey) {
+        response.status(409).json({
+          error: "approval_target_mismatch",
+          expected: expectedTarget,
+          actual: approval.target,
+          approval
+        });
+        return;
+      }
+      const expectedCommand = `Grant artifact delivery to ${rootPath}`;
+      const approvalCommand = normalizeApprovalCommand(approval.command);
+      if (approvalCommand && approvalCommand !== expectedCommand) {
+        response.status(409).json({
+          error: "approval_command_mismatch",
+          expected: expectedCommand,
+          actual: approvalCommand,
+          approval
+        });
+        return;
+      }
+      const consumed = await consumeToolApproval({
+        approvalId: approval.id,
+        consumedBy: "artifact.destination.grant"
+      });
+      if (!consumed.changed || !consumed.approval) {
+        response.status(409).json({
+          error: "approval_not_consumable",
+          reason: consumed.reason,
+          approval: consumed.approval
+        });
+        return;
+      }
+      const grant = await upsertArtifactDestinationGrant({
+        rootPath,
+        rootPathKey,
+        displayName: input.displayName,
+        approvalId: approval.id,
+        grantedBy: input.grantedBy ?? approval.decidedBy ?? null,
+        expiresAt: input.expiresAt,
+        metadata: input.metadata
+      });
+      await appendJobEvent(
+        approval.jobId,
+        "artifact.destination_granted",
+        {
+          approvalId: approval.id,
+          grantId: grant.id,
+          rootPath: grant.rootPath,
+          expiresAt: grant.expiresAt
+        },
+        { actor: "artifact.destination.grant", stageId: approval.stageId }
+      );
+      response.status(201).json({ approval: consumed.approval, grant });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/artifact-destination-grants/:grantId/revoke", async (request, response, next) => {
+    try {
+      const input = destinationAuthorizationRevokeSchema.parse(request.body ?? {});
+      const current = await getArtifactDestinationGrant(request.params.grantId);
+      if (!current) {
+        response.status(404).json({ error: "artifact_destination_grant_not_found" });
+        return;
+      }
+      const result = await revokeArtifactDestinationGrant(current.id);
+      const approval = await getToolApproval(current.approvalId);
+      if (approval) {
+        await appendJobEvent(
+          approval.jobId,
+          "artifact.destination_revoked",
+          {
+            grantId: current.id,
+            rootPath: current.rootPath,
+            changed: result.changed,
+            revokedBy: input.revokedBy ?? "desktop-app",
+            reason: input.reason ?? null
+          },
+          { actor: input.revokedBy ?? "desktop-app", stageId: approval.stageId }
+        );
+      }
+      response.json({ ok: true, changed: result.changed, grant: result.grant });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.get("/workspaces", async (request, response, next) => {
     try {
       const query = listRegisteredWorkspacesQuerySchema.parse(request.query);
@@ -4120,6 +4305,36 @@ async function main() {
         approval: consumed.approval,
         workspace
       });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/workspaces/:workspaceId/revoke", async (request, response, next) => {
+    try {
+      const input = destinationAuthorizationRevokeSchema.parse(request.body ?? {});
+      const current = await getRegisteredWorkspace(request.params.workspaceId);
+      if (!current) {
+        response.status(404).json({ error: "workspace_not_found" });
+        return;
+      }
+      const result = await revokeRegisteredWorkspace(current.id);
+      const approval = current.approvalId ? await getToolApproval(current.approvalId) : null;
+      if (approval) {
+        await appendJobEvent(
+          approval.jobId,
+          "tool.workspace_revoked",
+          {
+            workspaceId: current.id,
+            rootPath: current.rootPath,
+            changed: result.changed,
+            revokedBy: input.revokedBy ?? "desktop-app",
+            reason: input.reason ?? null
+          },
+          { actor: input.revokedBy ?? "desktop-app", stageId: approval.stageId }
+        );
+      }
+      response.json({ ok: true, changed: result.changed, workspace: result.workspace });
     } catch (error) {
       next(error);
     }
@@ -5398,7 +5613,10 @@ async function main() {
       if (!result.claimed || !result.claimToken) {
         response.status(409).json({
           error: "artifact_delivery_not_claimable",
+          reason: result.reason,
           status: result.delivery.status,
+          authorizationStatus: result.delivery.authorizationStatus,
+          authorizationError: result.delivery.authorizationError,
           leaseExpiresAt: result.delivery.leaseExpiresAt
         });
         return;
@@ -5417,7 +5635,7 @@ async function main() {
       response.json({
         ok: true,
         claimToken: result.claimToken,
-        delivery: artifactDeliveryView(request.params.jobId, result.delivery, file)
+        delivery: artifactDeliveryView(request.params.jobId, result.delivery, file, { includeDestination: true })
       });
     } catch (error) {
       next(error);
@@ -5440,6 +5658,7 @@ async function main() {
         response.status(409).json({
           error: "artifact_delivery_completion_rejected",
           status: result.delivery.status,
+          reason: result.rejectionReason,
           expectedSizeBytes: result.delivery.expectedSizeBytes,
           expectedChecksumSha256: result.delivery.expectedChecksumSha256
         });
@@ -5746,6 +5965,11 @@ async function main() {
 
     if (error instanceof WorkspacePathError) {
       response.status(400).json({ error: error.message });
+      return;
+    }
+
+    if (error instanceof ArtifactDestinationPathError) {
+      response.status(400).json({ error: error.code });
       return;
     }
 

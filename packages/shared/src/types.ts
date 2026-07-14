@@ -765,6 +765,24 @@ export const ARTIFACT_DELIVERY_STATUSES = [
 ] as const;
 export type ArtifactDeliveryStatus = (typeof ARTIFACT_DELIVERY_STATUSES)[number];
 
+export const ARTIFACT_DELIVERY_AUTHORIZATION_STATUSES = [
+  "authorized",
+  "required",
+  "revoked",
+  "invalid"
+] as const;
+export type ArtifactDeliveryAuthorizationStatus =
+  (typeof ARTIFACT_DELIVERY_AUTHORIZATION_STATUSES)[number];
+
+export const ARTIFACT_DELIVERY_AUTHORIZATION_KINDS = [
+  "conversation",
+  "desktop",
+  "registered_workspace",
+  "custom_grant"
+] as const;
+export type ArtifactDeliveryAuthorizationKind =
+  (typeof ARTIFACT_DELIVERY_AUTHORIZATION_KINDS)[number];
+
 export type ArtifactDeliveryRecord = {
   id: string;
   jobId: string;
@@ -774,6 +792,13 @@ export type ArtifactDeliveryRecord = {
   target: TaskDeliveryTarget;
   targetPath: string | null;
   requestedFileName: string;
+  authorizationStatus: ArtifactDeliveryAuthorizationStatus;
+  authorizationKind: ArtifactDeliveryAuthorizationKind | null;
+  authorizationId: string | null;
+  authorizedRootPath: string | null;
+  destinationRelativePath: string | null;
+  destinationPath: string | null;
+  authorizationError: string | null;
   status: ArtifactDeliveryStatus;
   attemptCount: number;
   claimToken: string | null;
@@ -923,6 +948,22 @@ export type WorkspaceRegistrationRecord = {
   enabled: boolean;
   approvalId: string | null;
   registeredBy: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+  lastUsedAt: string | null;
+};
+
+export type ArtifactDestinationGrantRecord = {
+  id: string;
+  rootPath: string;
+  rootPathKey: string;
+  displayName: string | null;
+  enabled: boolean;
+  approvalId: string;
+  grantedBy: string | null;
+  expiresAt: string | null;
+  revokedAt: string | null;
   metadata: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;

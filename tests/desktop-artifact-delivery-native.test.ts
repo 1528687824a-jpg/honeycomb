@@ -15,4 +15,9 @@ test("native desktop delivery uses verified atomic file replacement", async () =
   assert.match(source, /download_size_mismatch/);
   assert.match(source, /fs::remove_file\(&temporary\)/);
   assert.match(source, /cleanup_stale_delivery_parts/);
+  assert.match(source, /download_url_to_destination/);
+  assert.match(source, /authorized_delivery_directory/);
+  assert.match(source, /fs::canonicalize\(&root\)/);
+  assert.match(source, /delivery_destination_symlink_escape/);
+  assert.match(source, /destination_relative_path_invalid/);
 });

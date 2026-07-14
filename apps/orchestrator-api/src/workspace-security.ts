@@ -1,12 +1,14 @@
-import path from "node:path";
+import {
+  artifactDestinationRootKey,
+  normalizeArtifactDestinationRootPath
+} from "../../../packages/shared/src/artifact-destination-policy";
 
 export function normalizeWorkspaceRootPath(rootPath: string) {
-  return path.resolve(rootPath);
+  return normalizeArtifactDestinationRootPath(rootPath);
 }
 
 export function workspaceRootKey(rootPath: string) {
-  const resolved = normalizeWorkspaceRootPath(rootPath);
-  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  return artifactDestinationRootKey(rootPath);
 }
 
 export function workspaceApprovalTarget(rootPathKey: string) {

@@ -247,13 +247,31 @@ The media success gate and durable Windows desktop delivery loop are implemented
   into the job workspace. The final media gate reads ISO BMFF/MP4 track metadata
   directly to verify the real container format and display dimensions, including
   rotated tracks.
-- All 151 unit tests, TypeScript build/check, Compose configuration validation,
+- Workspace delivery now binds to the job's exact registered and enabled
+  workspace root. A model-provided relative path can narrow the destination but
+  cannot authorize the root.
+- Custom delivery now requires a separately approved, persisted destination
+  grant. Grants may expire or be revoked; an unclaimed delivery cannot proceed
+  after revocation.
+- Every authorized delivery snapshots the authority ID, approved root, relative
+  directory, and resolved destination. Retries reuse that destination, while
+  completion receipts outside it are rejected.
+- Windows network/device paths, traversal, reserved device names, invalid path
+  components, and unapproved absolute workspace paths are rejected. The native
+  Tauri writer canonicalizes the root and destination again before writing so a
+  directory link cannot escape the approved root.
+- Destination list/create/revoke APIs and workspace revoke are available. The
+  claim response is the only delivery response that includes the approved root
+  descriptor used by the local writer.
+- `npm run smoke:artifact-destination-authorization` covers registration/grant
+  requirements, authorization refresh, receipt boundaries, revocation, and the
+  defined behavior for a delivery that already owns a short lease.
+- All 158 unit tests, TypeScript build/check, Compose configuration validation,
   package-layout check, no-secrets check, and diff whitespace check pass.
 
-Stage 3 still needs workspace/custom target authorization, image
-conversion/resizing, and document artifact normalization. PostgreSQL and Docker
-Desktop remained stopped, so the migration-backed smoke scripts have not yet
-been executed.
+Stage 3 still needs image conversion/resizing and document artifact
+normalization. PostgreSQL and Docker Desktop remained stopped, so the
+migration-backed smoke scripts have not yet been executed.
 
 ## Current Backend Status
 

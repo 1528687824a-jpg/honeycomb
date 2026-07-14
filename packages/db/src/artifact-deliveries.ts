@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type {
+  ArtifactDeliveryAuthorizationKind,
+  ArtifactDeliveryAuthorizationStatus,
   ArtifactDeliveryRecord,
   ArtifactDeliveryStatus,
   ArtifactFileRecord,
@@ -8,8 +10,25 @@ import type {
   TaskDeliveryTarget
 } from "../../shared/src/types";
 import { summarizeArtifactDeliveryRecords } from "../../shared/src/artifact-delivery-state";
+import {
+  ArtifactDestinationPathError,
+  artifactDestinationRootKey,
+  normalizeArtifactDestinationRootPath,
+  resolveArtifactCustomDestination,
+  resolveArtifactWorkspaceDestination,
+  sanitizeArtifactDeliveryFileName,
+  validateArtifactDeliveryPath
+} from "../../shared/src/artifact-destination-policy";
+import {
+  findActiveArtifactDestinationGrant,
+  markArtifactDestinationGrantUsed
+} from "./artifact-destination-grants";
 import { appendJobEvent } from "./jobs";
 import { pool } from "./pool";
+import {
+  getRegisteredWorkspaceByRootKey,
+  markRegisteredWorkspaceUsed
+} from "./workspace-registry";
 
 function iso(value: Date | string | null | undefined) {
   if (!value) return null;
@@ -20,6 +39,105 @@ function optionalInteger(value: unknown) {
   if (value === null || value === undefined) return null;
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
+}
+
+type ArtifactDeliveryAuthorizationSnapshot = {
+  authorizationStatus: ArtifactDeliveryAuthorizationStatus;
+  authorizationKind: ArtifactDeliveryAuthorizationKind | null;
+  authorizationId: string | null;
+  authorizedRootPath: string | null;
+  destinationRelativePath: string | null;
+  destinationPath: string | null;
+  authorizationError: string | null;
+};
+
+function implicitAuthorization(
+  kind: Extract<ArtifactDeliveryAuthorizationKind, "conversation" | "desktop">
+): ArtifactDeliveryAuthorizationSnapshot {
+  return {
+    authorizationStatus: "authorized",
+    authorizationKind: kind,
+    authorizationId: null,
+    authorizedRootPath: null,
+    destinationRelativePath: null,
+    destinationPath: null,
+    authorizationError: null
+  };
+}
+
+function unavailableAuthorization(
+  authorizationStatus: Extract<ArtifactDeliveryAuthorizationStatus, "required" | "revoked" | "invalid">,
+  authorizationError: string
+): ArtifactDeliveryAuthorizationSnapshot {
+  return {
+    authorizationStatus,
+    authorizationKind: null,
+    authorizationId: null,
+    authorizedRootPath: null,
+    destinationRelativePath: null,
+    destinationPath: null,
+    authorizationError
+  };
+}
+
+async function resolveArtifactDeliveryAuthorization(input: {
+  jobId: string;
+  target: TaskDeliveryTarget;
+  targetPath: string | null;
+  previousStatus?: ArtifactDeliveryAuthorizationStatus | null;
+}): Promise<ArtifactDeliveryAuthorizationSnapshot> {
+  if (input.target === "conversation") return implicitAuthorization("conversation");
+  if (input.target === "desktop") return implicitAuthorization("desktop");
+
+  const unavailableStatus = input.previousStatus === "authorized" ? "revoked" : "required";
+  try {
+    if (input.target === "workspace") {
+      const jobResult = await pool.query(`select workdir from agent.jobs where id = $1`, [input.jobId]);
+      const workdir = jobResult.rows[0]?.workdir?.trim();
+      if (!workdir) {
+        return unavailableAuthorization(unavailableStatus, "workspace_destination_missing");
+      }
+      const normalizedRoot = normalizeArtifactDestinationRootPath(workdir);
+      const workspace = await getRegisteredWorkspaceByRootKey(artifactDestinationRootKey(normalizedRoot));
+      if (!workspace?.enabled) {
+        return unavailableAuthorization(unavailableStatus, "workspace_destination_not_registered");
+      }
+      const destination = resolveArtifactWorkspaceDestination(normalizedRoot, input.targetPath);
+      return {
+        authorizationStatus: "authorized",
+        authorizationKind: "registered_workspace",
+        authorizationId: workspace.id,
+        authorizedRootPath: destination.rootPath,
+        destinationRelativePath: destination.relativeDirectory,
+        destinationPath: destination.directoryPath,
+        authorizationError: null
+      };
+    }
+
+    if (!input.targetPath?.trim()) {
+      return unavailableAuthorization(unavailableStatus, "custom_destination_path_missing");
+    }
+    const requestedDirectory = normalizeArtifactDestinationRootPath(input.targetPath);
+    const grant = await findActiveArtifactDestinationGrant(requestedDirectory);
+    if (!grant) {
+      return unavailableAuthorization(unavailableStatus, "custom_destination_not_granted");
+    }
+    const destination = resolveArtifactCustomDestination(grant.rootPath, requestedDirectory);
+    return {
+      authorizationStatus: "authorized",
+      authorizationKind: "custom_grant",
+      authorizationId: grant.id,
+      authorizedRootPath: destination.rootPath,
+      destinationRelativePath: destination.relativeDirectory,
+      destinationPath: destination.directoryPath,
+      authorizationError: null
+    };
+  } catch (error) {
+    return unavailableAuthorization(
+      "invalid",
+      error instanceof ArtifactDestinationPathError ? error.code : "artifact_destination_path_invalid"
+    );
+  }
 }
 
 function toArtifactFileRecord(row: any): ArtifactFileRecord {
@@ -57,6 +175,13 @@ function toArtifactDeliveryRecord(row: any): ArtifactDeliveryRecord {
     target: row.target,
     targetPath: row.target_path ?? null,
     requestedFileName: row.requested_file_name,
+    authorizationStatus: row.authorization_status ?? "required",
+    authorizationKind: row.authorization_kind ?? null,
+    authorizationId: row.authorization_id ?? null,
+    authorizedRootPath: row.authorized_root_path ?? null,
+    destinationRelativePath: row.destination_relative_path ?? null,
+    destinationPath: row.destination_path ?? null,
+    authorizationError: row.authorization_error ?? null,
     status: row.status,
     attemptCount: Number(row.attempt_count),
     claimToken: row.claim_token ?? null,
@@ -197,18 +322,26 @@ export async function ensureArtifactDelivery(input: {
   metadata?: Record<string, unknown>;
 }) {
   const status = input.initialStatus ?? "pending";
+  const requestedFileName = sanitizeArtifactDeliveryFileName(input.requestedFileName);
+  const authorization = await resolveArtifactDeliveryAuthorization({
+    jobId: input.jobId,
+    target: input.target,
+    targetPath: input.targetPath ?? null
+  });
   const result = await pool.query(
     `insert into agent.artifact_deliveries (
        id, job_id, artifact_file_id, deliverable_index, required, target,
        target_path, requested_file_name, status, expected_size_bytes,
        expected_checksum_sha256, delivered_path, delivered_size_bytes,
-       delivered_checksum_sha256, completed_at, metadata
+       delivered_checksum_sha256, completed_at, metadata, authorization_status,
+       authorization_kind, authorization_id, authorized_root_path,
+       destination_relative_path, destination_path, authorization_error
      ) values (
        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
        case when $9 = 'succeeded' then $10 else null end,
        case when $9 = 'succeeded' then $11 else null end,
        case when $9 = 'succeeded' then now() else null end,
-       $13::jsonb
+       $13::jsonb, $14, $15, $16, $17, $18, $19, $20
      )
      on conflict (job_id, deliverable_index) do update
        set artifact_file_id = excluded.artifact_file_id,
@@ -218,6 +351,13 @@ export async function ensureArtifactDelivery(input: {
            requested_file_name = excluded.requested_file_name,
            expected_size_bytes = excluded.expected_size_bytes,
            expected_checksum_sha256 = excluded.expected_checksum_sha256,
+           authorization_status = excluded.authorization_status,
+           authorization_kind = excluded.authorization_kind,
+           authorization_id = excluded.authorization_id,
+           authorized_root_path = excluded.authorized_root_path,
+           destination_relative_path = excluded.destination_relative_path,
+           destination_path = excluded.destination_path,
+           authorization_error = excluded.authorization_error,
            status = case
              when agent.artifact_deliveries.status = 'succeeded'
               and agent.artifact_deliveries.artifact_file_id = excluded.artifact_file_id
@@ -291,12 +431,19 @@ export async function ensureArtifactDelivery(input: {
       input.required,
       input.target,
       input.targetPath ?? null,
-      input.requestedFileName,
+      requestedFileName,
       status,
       input.expectedSizeBytes ?? null,
       input.expectedChecksumSha256 ?? null,
       input.deliveredPath ?? null,
-      JSON.stringify(input.metadata ?? {})
+      JSON.stringify(input.metadata ?? {}),
+      authorization.authorizationStatus,
+      authorization.authorizationKind,
+      authorization.authorizationId,
+      authorization.authorizedRootPath,
+      authorization.destinationRelativePath,
+      authorization.destinationPath,
+      authorization.authorizationError
     ]
   );
   const delivery = toArtifactDeliveryRecord(result.rows[0]);
@@ -310,7 +457,11 @@ export async function ensureArtifactDelivery(input: {
       target: delivery.target,
       targetPath: delivery.targetPath,
       status: delivery.status,
-      requestedFileName: delivery.requestedFileName
+      requestedFileName: delivery.requestedFileName,
+      authorizationStatus: delivery.authorizationStatus,
+      authorizationKind: delivery.authorizationKind,
+      authorizationId: delivery.authorizationId,
+      authorizationError: delivery.authorizationError
     },
     { actor: "artifact-delivery" }
   );
@@ -333,6 +484,69 @@ export async function getArtifactDeliveryForJob(jobId: string, deliveryId: strin
   return result.rows[0] ? toArtifactDeliveryRecord(result.rows[0]) : null;
 }
 
+export async function refreshArtifactDeliveryAuthorization(jobId: string, deliveryId: string) {
+  const current = await getArtifactDeliveryForJob(jobId, deliveryId);
+  if (!current) return null;
+  const authorization = await resolveArtifactDeliveryAuthorization({
+    jobId,
+    target: current.target,
+    targetPath: current.targetPath,
+    previousStatus: current.authorizationStatus
+  });
+  const changed =
+    current.authorizationStatus !== authorization.authorizationStatus ||
+    current.authorizationKind !== authorization.authorizationKind ||
+    current.authorizationId !== authorization.authorizationId ||
+    current.authorizedRootPath !== authorization.authorizedRootPath ||
+    current.destinationRelativePath !== authorization.destinationRelativePath ||
+    current.destinationPath !== authorization.destinationPath ||
+    current.authorizationError !== authorization.authorizationError;
+  if (!changed) return current;
+
+  const result = await pool.query(
+    `update agent.artifact_deliveries
+     set authorization_status = $3,
+         authorization_kind = $4,
+         authorization_id = $5,
+         authorized_root_path = $6,
+         destination_relative_path = $7,
+         destination_path = $8,
+         authorization_error = $9,
+         updated_at = now()
+     where job_id = $1
+       and id = $2
+     returning *`,
+    [
+      jobId,
+      deliveryId,
+      authorization.authorizationStatus,
+      authorization.authorizationKind,
+      authorization.authorizationId,
+      authorization.authorizedRootPath,
+      authorization.destinationRelativePath,
+      authorization.destinationPath,
+      authorization.authorizationError
+    ]
+  );
+  if (!result.rows[0]) return null;
+  const delivery = toArtifactDeliveryRecord(result.rows[0]);
+  await appendJobEvent(
+    jobId,
+    "artifact.delivery_authorization_changed",
+    {
+      deliveryId,
+      target: delivery.target,
+      previousStatus: current.authorizationStatus,
+      authorizationStatus: delivery.authorizationStatus,
+      authorizationKind: delivery.authorizationKind,
+      authorizationId: delivery.authorizationId,
+      authorizationError: delivery.authorizationError
+    },
+    { actor: "artifact-delivery" }
+  );
+  return delivery;
+}
+
 export async function getArtifactDeliverySummary(jobId: string) {
   const deliveries = await listArtifactDeliveriesForJob(jobId);
   return {
@@ -347,6 +561,15 @@ export async function claimArtifactDelivery(input: {
   leaseSeconds?: number;
   retryDelaySeconds?: number;
 }) {
+  const authorized = await refreshArtifactDeliveryAuthorization(input.jobId, input.deliveryId);
+  if (!authorized || authorized.authorizationStatus !== "authorized") {
+    return {
+      claimed: false as const,
+      claimToken: null,
+      delivery: authorized,
+      reason: authorized?.authorizationError ?? "artifact_delivery_not_found"
+    };
+  }
   const claimToken = randomUUID();
   const leaseSeconds = Math.max(30, Math.min(1_800, Math.floor(input.leaseSeconds ?? 300)));
   const retryDelaySeconds = Math.max(0, Math.min(300, Math.floor(input.retryDelaySeconds ?? 15)));
@@ -361,6 +584,7 @@ export async function claimArtifactDelivery(input: {
      where d.job_id = $1
        and d.id = $2
        and d.required
+       and d.authorization_status = 'authorized'
        and (
          d.status = 'pending'
          or (d.status = 'failed' and d.updated_at <= now() - ($5 * interval '1 second'))
@@ -377,10 +601,16 @@ export async function claimArtifactDelivery(input: {
     return {
       claimed: false as const,
       claimToken: null,
-      delivery: await getArtifactDeliveryForJob(input.jobId, input.deliveryId)
+      delivery: await getArtifactDeliveryForJob(input.jobId, input.deliveryId),
+      reason: "artifact_delivery_not_claimable"
     };
   }
   const delivery = toArtifactDeliveryRecord(result.rows[0]);
+  if (delivery.authorizationKind === "registered_workspace" && delivery.authorizedRootPath) {
+    await markRegisteredWorkspaceUsed(artifactDestinationRootKey(delivery.authorizedRootPath)).catch(() => undefined);
+  } else if (delivery.authorizationKind === "custom_grant" && delivery.authorizationId) {
+    await markArtifactDestinationGrantUsed(delivery.authorizationId).catch(() => undefined);
+  }
   await appendJobEvent(
     input.jobId,
     "artifact.delivery_claimed",
@@ -388,11 +618,14 @@ export async function claimArtifactDelivery(input: {
       deliveryId: delivery.id,
       artifactFileId: delivery.artifactFileId,
       attemptCount: delivery.attemptCount,
-      leaseExpiresAt: delivery.leaseExpiresAt
+      leaseExpiresAt: delivery.leaseExpiresAt,
+      authorizationKind: delivery.authorizationKind,
+      authorizationId: delivery.authorizationId,
+      destinationRelativePath: delivery.destinationRelativePath
     },
     { actor: "desktop-delivery" }
   );
-  return { claimed: true as const, claimToken, delivery };
+  return { claimed: true as const, claimToken, delivery, reason: null };
 }
 
 export async function completeArtifactDelivery(input: {
@@ -403,6 +636,38 @@ export async function completeArtifactDelivery(input: {
   deliveredSizeBytes: number;
   deliveredChecksumSha256?: string | null;
 }) {
+  const current = await getArtifactDeliveryForJob(input.jobId, input.deliveryId);
+  if (!current) {
+    return {
+      completed: false as const,
+      delivery: null,
+      rejectionReason: "artifact_delivery_not_found"
+    };
+  }
+  if (current.target === "workspace" || current.target === "custom") {
+    const pathValidation = validateArtifactDeliveryPath({
+      destinationPath: current.destinationPath,
+      requestedFileName: current.requestedFileName,
+      deliveredPath: input.deliveredPath
+    });
+    if (!pathValidation.valid) {
+      await appendJobEvent(
+        input.jobId,
+        "artifact.delivery_receipt_rejected",
+        {
+          deliveryId: current.id,
+          target: current.target,
+          reason: pathValidation.reason
+        },
+        { actor: "desktop-delivery" }
+      ).catch(() => undefined);
+      return {
+        completed: false as const,
+        delivery: current,
+        rejectionReason: pathValidation.reason
+      };
+    }
+  }
   const result = await pool.query(
     `update agent.artifact_deliveries
      set status = 'succeeded',
@@ -435,7 +700,11 @@ export async function completeArtifactDelivery(input: {
     ]
   );
   if (!result.rows[0]) {
-    return { completed: false as const, delivery: await getArtifactDeliveryForJob(input.jobId, input.deliveryId) };
+    return {
+      completed: false as const,
+      delivery: await getArtifactDeliveryForJob(input.jobId, input.deliveryId),
+      rejectionReason: "artifact_delivery_receipt_or_lease_mismatch"
+    };
   }
   const delivery = toArtifactDeliveryRecord(result.rows[0]);
   await appendJobEvent(
@@ -452,7 +721,7 @@ export async function completeArtifactDelivery(input: {
     },
     { actor: "desktop-delivery" }
   );
-  return { completed: true as const, delivery };
+  return { completed: true as const, delivery, rejectionReason: null };
 }
 
 export async function failArtifactDelivery(input: {
@@ -506,6 +775,7 @@ export async function claimJobArtifactDeliveryFinalization(jobId: string) {
        and j.status = 'waiting_for_human'
        and j.heartbeat_note in (
          'artifact_delivery_pending',
+         'artifact_delivery_authorization_required',
          'artifact_delivery_failed',
          'artifact_delivery_resume_failed'
        )

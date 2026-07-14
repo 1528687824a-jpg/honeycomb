@@ -9,7 +9,7 @@ use std::io::Write;
 use std::net::{TcpListener, TcpStream};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
@@ -55,17 +55,20 @@ struct ProviderConnectionResult {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct DownloadToDesktopPayload {
+struct DownloadToDestinationPayload {
     url: String,
     file_name: String,
     authorization: Option<String>,
     expected_size_bytes: Option<u64>,
     expected_checksum_sha256: Option<String>,
+    destination_kind: Option<String>,
+    authorized_root_path: Option<String>,
+    destination_relative_path: Option<String>,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DownloadToDesktopResult {
+struct DownloadToDestinationResult {
     path: String,
     bytes: u64,
     checksum_sha256: String,
@@ -279,9 +282,9 @@ fn safe_desktop_file_name(input: &str) -> String {
     format!("{}{}", stem.chars().take(stem_limit).collect::<String>(), extension)
 }
 
-fn unique_desktop_file_path(desktop_dir: &Path, file_name: &str) -> PathBuf {
+fn unique_delivery_file_path(destination_dir: &Path, file_name: &str) -> PathBuf {
     let safe_name = safe_desktop_file_name(file_name);
-    let path = desktop_dir.join(&safe_name);
+    let path = destination_dir.join(&safe_name);
     if !path.exists() {
         return path;
     }
@@ -298,13 +301,122 @@ fn unique_desktop_file_path(desktop_dir: &Path, file_name: &str) -> PathBuf {
         .unwrap_or_default();
 
     for index in 2..1000 {
-        let candidate = desktop_dir.join(format!("{stem}-{index}{extension}"));
+        let candidate = destination_dir.join(format!("{stem}-{index}{extension}"));
         if !candidate.exists() {
             return candidate;
         }
     }
 
-    desktop_dir.join(format!("{stem}-{}{}", timestamp_string(), extension))
+    destination_dir.join(format!("{stem}-{}{}", timestamp_string(), extension))
+}
+
+fn normalized_path_key(path: &Path) -> String {
+    let value = path.to_string_lossy().replace('/', "\\");
+    #[cfg(windows)]
+    {
+        value
+            .strip_prefix("\\\\?\\")
+            .unwrap_or(&value)
+            .trim_end_matches('\\')
+            .to_ascii_lowercase()
+    }
+    #[cfg(not(windows))]
+    {
+        value.trim_end_matches('\\').to_string()
+    }
+}
+
+fn canonical_path_is_inside(root: &Path, candidate: &Path) -> bool {
+    let root_key = normalized_path_key(root);
+    let candidate_key = normalized_path_key(candidate);
+    candidate_key == root_key || candidate_key.starts_with(&format!("{root_key}\\"))
+}
+
+#[cfg(windows)]
+fn windows_delivery_component_is_invalid(value: &str) -> bool {
+    if value.is_empty()
+        || value.ends_with('.')
+        || value.ends_with(' ')
+        || value
+            .chars()
+            .any(|character| character.is_control() || matches!(character, '<' | '>' | ':' | '"' | '|' | '?' | '*'))
+    {
+        return true;
+    }
+    let stem = value.split('.').next().unwrap_or("").to_ascii_uppercase();
+    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (stem.starts_with("COM") || stem.starts_with("LPT"))
+            && stem
+                .get(3..)
+                .and_then(|suffix| suffix.parse::<u8>().ok())
+                .is_some_and(|number| (1..=9).contains(&number))
+}
+
+fn validated_delivery_relative_path(input: Option<&str>) -> Result<PathBuf, String> {
+    let raw = input.unwrap_or("").trim();
+    if raw.is_empty() {
+        return Ok(PathBuf::new());
+    }
+    #[cfg(windows)]
+    let relative = PathBuf::from(raw.replace('/', "\\"));
+    #[cfg(not(windows))]
+    let relative = PathBuf::from(raw.replace('\\', "/"));
+    for component in relative.components() {
+        match component {
+            Component::Normal(value) => {
+                #[cfg(windows)]
+                if windows_delivery_component_is_invalid(&value.to_string_lossy()) {
+                    return Err("delivery_destination_relative_path_invalid".to_string());
+                }
+            }
+            _ => return Err("delivery_destination_relative_path_invalid".to_string()),
+        }
+    }
+    Ok(relative)
+}
+
+fn authorized_delivery_directory(
+    app: &AppHandle,
+    payload: &DownloadToDestinationPayload,
+) -> Result<PathBuf, String> {
+    let kind = payload.destination_kind.as_deref().unwrap_or("desktop");
+    if kind == "desktop" {
+        return app.path().desktop_dir().map_err(|error| error.to_string());
+    }
+    if kind != "workspace" && kind != "custom" {
+        return Err("delivery_destination_kind_invalid".to_string());
+    }
+
+    let root_value = payload
+        .authorized_root_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "delivery_authorized_root_missing".to_string())?;
+    if root_value.starts_with(r"\\") || root_value.starts_with("//") {
+        return Err("delivery_network_path_blocked".to_string());
+    }
+    let root = PathBuf::from(root_value);
+    if !root.is_absolute() {
+        return Err("delivery_authorized_root_not_absolute".to_string());
+    }
+    let relative = validated_delivery_relative_path(payload.destination_relative_path.as_deref())?;
+    let destination = root.join(relative);
+    let canonical_root = fs::canonicalize(&root).map_err(|_| "delivery_authorized_root_unavailable".to_string())?;
+    let canonical_destination = fs::canonicalize(&destination)
+        .map_err(|_| "delivery_destination_directory_unavailable".to_string())?;
+    if !canonical_root.is_dir() || !canonical_destination.is_dir() {
+        return Err("delivery_destination_not_directory".to_string());
+    }
+    if !canonical_path_is_inside(&canonical_root, &canonical_destination) {
+        return Err("delivery_destination_symlink_escape".to_string());
+    }
+    let canonical_destination_recheck = fs::canonicalize(&destination)
+        .map_err(|_| "delivery_destination_directory_unavailable".to_string())?;
+    if normalized_path_key(&canonical_destination_recheck) != normalized_path_key(&canonical_destination) {
+        return Err("delivery_destination_changed".to_string());
+    }
+    Ok(destination)
 }
 
 fn cleanup_stale_delivery_parts(directory: &Path, target_name: &str) {
@@ -997,17 +1109,17 @@ fn pick_files() -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-async fn download_url_to_desktop(
+async fn download_url_to_destination(
     app: AppHandle,
-    payload: DownloadToDesktopPayload,
-) -> Result<DownloadToDesktopResult, String> {
+    payload: DownloadToDestinationPayload,
+) -> Result<DownloadToDestinationResult, String> {
     let url = payload.url.trim();
     if url.is_empty() || !(url.starts_with("https://") || url.starts_with("http://")) {
         return Err("download_url_invalid".to_string());
     }
 
-    let desktop_dir = app.path().desktop_dir().map_err(|error| error.to_string())?;
-    let target = unique_desktop_file_path(&desktop_dir, &payload.file_name);
+    let destination_dir = authorized_delivery_directory(&app, &payload)?;
+    let target = unique_delivery_file_path(&destination_dir, &payload.file_name);
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(120))
         .build()
@@ -1044,7 +1156,7 @@ async fn download_url_to_desktop(
         .file_name()
         .and_then(|value| value.to_str())
         .unwrap_or("honeycomb-artifact");
-    cleanup_stale_delivery_parts(&desktop_dir, target_name);
+    cleanup_stale_delivery_parts(&destination_dir, target_name);
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -1102,7 +1214,7 @@ async fn download_url_to_desktop(
         let _ = fs::remove_file(&temporary);
         return Err(error.to_string());
     }
-    Ok(DownloadToDesktopResult {
+    Ok(DownloadToDestinationResult {
         path: target.to_string_lossy().to_string(),
         bytes: received,
         checksum_sha256,
@@ -1255,7 +1367,7 @@ fn main() {
             save_provider_api_key,
             load_provider_api_key,
             load_api_auth_token,
-            download_url_to_desktop,
+            download_url_to_destination,
             open_in_file_explorer,
             pick_directory,
             pick_files

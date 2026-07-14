@@ -104,6 +104,8 @@ npm run smoke:http-only
 npm run smoke:m3-config
 npm run smoke:m3-real-planner
 npm run smoke:cancel-job
+npm run smoke:artifact-delivery
+npm run smoke:artifact-destination-authorization
 npm run smoke:timeline-since
 npm run smoke:list-jobs
 npm run smoke:experience-memory

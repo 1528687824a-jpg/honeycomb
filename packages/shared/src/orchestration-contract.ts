@@ -508,6 +508,8 @@ export function panelOrchestrationJsonInstruction() {
     "Choose the minimum production-agent set. test-agent belongs in qualityGate, not selectedAgents.",
     "A still poster with no text normally selects image-agent only. Never select video-agent for a still-image task.",
     "A video may select writer-agent for script/captions and image-agent for cover/storyboard/keyframes only when needed.",
-    "Use research-agent only for fresh facts or sources. Use discussion mode only when multiple viewpoints materially help."
+    "Use research-agent only for fresh facts or sources. Use discussion mode only when multiple viewpoints materially help.",
+    "Delivery path rules: conversation and desktop use targetPath=null; workspace uses only a relative destination directory inside the selected project; custom uses only an absolute destination directory explicitly supplied by the user.",
+    "Never invent a targetPath and never treat a path in your plan as user authorization. Honeycomb independently verifies registered workspaces and custom destination grants before writing."
   ].join("\n");
 }

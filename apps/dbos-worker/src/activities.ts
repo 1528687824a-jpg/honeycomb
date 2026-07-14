@@ -3511,9 +3511,18 @@ export async function finalizeJob(jobId: string) {
   if (mediaAssessment.matches.length > 0) {
     const deliverySummary = await getArtifactDeliverySummary(jobId);
     if (!deliverySummary.readyToFinalize) {
+      const authorizationBlocked = deliverySummary.deliveries.some(
+        (delivery) =>
+          delivery.required &&
+          delivery.status !== "succeeded" &&
+          delivery.status !== "cancelled" &&
+          delivery.authorizationStatus !== "authorized"
+      );
       const reason = deliverySummary.failedCount > 0
         ? "artifact_delivery_failed"
-        : "artifact_delivery_pending";
+        : authorizationBlocked
+          ? "artifact_delivery_authorization_required"
+          : "artifact_delivery_pending";
       await setJobStatus(jobId, "waiting_for_human", {
         reason,
         requiredCount: deliverySummary.requiredCount,
@@ -3530,6 +3539,9 @@ export async function finalizeJob(jobId: string) {
           target: delivery.target,
           targetPath: delivery.targetPath,
           status: delivery.status,
+          authorizationStatus: delivery.authorizationStatus,
+          authorizationKind: delivery.authorizationKind,
+          authorizationError: delivery.authorizationError,
           attemptCount: delivery.attemptCount,
           lastError: delivery.lastError
         }))

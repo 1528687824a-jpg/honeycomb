@@ -169,6 +169,15 @@ const statements = [
     target text not null check (target in ('conversation', 'desktop', 'workspace', 'custom')),
     target_path text,
     requested_file_name text not null,
+    authorization_status text not null default 'required'
+      check (authorization_status in ('authorized', 'required', 'revoked', 'invalid')),
+    authorization_kind text
+      check (authorization_kind is null or authorization_kind in ('conversation', 'desktop', 'registered_workspace', 'custom_grant')),
+    authorization_id text,
+    authorized_root_path text,
+    destination_relative_path text,
+    destination_path text,
+    authorization_error text,
     status text not null default 'pending' check (status in ('pending', 'delivering', 'succeeded', 'failed', 'cancelled')),
     attempt_count int not null default 0 check (attempt_count >= 0),
     claim_token text,
@@ -381,6 +390,21 @@ const statements = [
     updated_at timestamptz not null default now(),
     last_used_at timestamptz
   )`,
+  `create table if not exists agent.artifact_destination_grants (
+    id text primary key,
+    root_path text not null,
+    root_path_key text not null unique,
+    display_name text,
+    enabled boolean not null default true,
+    approval_id text not null references agent.tool_approval_requests(id),
+    granted_by text,
+    expires_at timestamptz,
+    revoked_at timestamptz,
+    metadata jsonb not null default '{}',
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    last_used_at timestamptz
+  )`,
   `create table if not exists agent.conversation_projects (
     id text primary key,
     name text not null,
@@ -587,11 +611,45 @@ const statements = [
     on agent.artifact_files(job_id, created_at)`,
   `create index if not exists artifact_files_artifact_id_idx
     on agent.artifact_files(artifact_id, created_at)`,
+  `alter table agent.artifact_deliveries
+    add column if not exists authorization_status text not null default 'required'`,
+  `alter table agent.artifact_deliveries
+    add column if not exists authorization_kind text`,
+  `alter table agent.artifact_deliveries
+    add column if not exists authorization_id text`,
+  `alter table agent.artifact_deliveries
+    add column if not exists authorized_root_path text`,
+  `alter table agent.artifact_deliveries
+    add column if not exists destination_relative_path text`,
+  `alter table agent.artifact_deliveries
+    add column if not exists destination_path text`,
+  `alter table agent.artifact_deliveries
+    add column if not exists authorization_error text`,
+  `update agent.artifact_deliveries
+   set authorization_status = 'authorized',
+       authorization_kind = target,
+       authorization_error = null
+   where target in ('conversation', 'desktop')
+     and authorization_kind is null`,
+  `do $$ begin
+     alter table agent.artifact_deliveries
+       add constraint artifact_deliveries_authorization_status_check
+       check (authorization_status in ('authorized', 'required', 'revoked', 'invalid'));
+   exception when duplicate_object then null;
+   end $$`,
+  `do $$ begin
+     alter table agent.artifact_deliveries
+       add constraint artifact_deliveries_authorization_kind_check
+       check (authorization_kind is null or authorization_kind in ('conversation', 'desktop', 'registered_workspace', 'custom_grant'));
+   exception when duplicate_object then null;
+   end $$`,
   `create index if not exists artifact_deliveries_job_status_idx
     on agent.artifact_deliveries(job_id, status, created_at)`,
   `create index if not exists artifact_deliveries_lease_idx
     on agent.artifact_deliveries(status, lease_expires_at)
     where status = 'delivering'`,
+  `create index if not exists artifact_deliveries_authorization_idx
+    on agent.artifact_deliveries(authorization_status, target, updated_at)`,
   `create index if not exists job_stages_job_id_stage_index_idx
     on agent.job_stages(job_id, stage_index)`,
   `create index if not exists stage_attempts_stage_id_attempt_no_idx
@@ -669,6 +727,8 @@ const statements = [
     on agent.agent_mcp_policies(mcp_server_id, enabled, updated_at desc)`,
   `create index if not exists registered_workspaces_enabled_idx
     on agent.registered_workspaces(enabled, updated_at desc)`,
+  `create index if not exists artifact_destination_grants_active_idx
+    on agent.artifact_destination_grants(enabled, expires_at, updated_at desc)`,
   `create index if not exists conversation_projects_active_updated_idx
     on agent.conversation_projects(archived_at, pinned desc, updated_at desc)
     where deleted_at is null`,

@@ -49,6 +49,14 @@ export async function getRegisteredWorkspaceByRootKey(rootPathKey: string) {
   return result.rows[0] ? toWorkspaceRegistrationRecord(result.rows[0]) : null;
 }
 
+export async function getRegisteredWorkspace(workspaceId: string) {
+  const result = await pool.query(
+    `select * from agent.registered_workspaces where id = $1`,
+    [workspaceId]
+  );
+  return result.rows[0] ? toWorkspaceRegistrationRecord(result.rows[0]) : null;
+}
+
 export async function upsertRegisteredWorkspace(input: {
   id?: string;
   rootPath: string;
@@ -105,4 +113,27 @@ export async function markRegisteredWorkspaceUsed(rootPathKey: string) {
     [rootPathKey]
   );
   return result.rows[0] ? toWorkspaceRegistrationRecord(result.rows[0]) : null;
+}
+
+export async function revokeRegisteredWorkspace(workspaceId: string) {
+  const result = await pool.query(
+    `update agent.registered_workspaces
+     set enabled = false,
+         updated_at = now()
+     where id = $1
+       and enabled = true
+     returning *`,
+    [workspaceId]
+  );
+  if (result.rows[0]) {
+    return { changed: true as const, workspace: toWorkspaceRegistrationRecord(result.rows[0]) };
+  }
+  const current = await pool.query(
+    `select * from agent.registered_workspaces where id = $1`,
+    [workspaceId]
+  );
+  return {
+    changed: false as const,
+    workspace: current.rows[0] ? toWorkspaceRegistrationRecord(current.rows[0]) : null
+  };
 }

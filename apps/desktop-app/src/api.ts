@@ -931,6 +931,31 @@ export type RegisterWorkspaceResponse = {
   workspace: WorkspaceRegistrationRecord;
 };
 
+export type ArtifactDestinationGrantRecord = {
+  id: string;
+  rootPath: string;
+  rootPathKey: string;
+  displayName: string | null;
+  enabled: boolean;
+  approvalId: string;
+  grantedBy: string | null;
+  expiresAt: string | null;
+  revokedAt: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+  lastUsedAt: string | null;
+};
+
+export type ArtifactDestinationGrantInput = {
+  rootPath: string;
+  displayName?: string | null;
+  approvalId: string;
+  grantedBy?: string;
+  expiresAt?: string | null;
+  metadata?: Record<string, unknown>;
+};
+
 export type WorkspaceInspectResponse = {
   rootPath: string;
   exists: boolean;
@@ -1393,6 +1418,10 @@ export type ArtifactDelivery = {
   target: "conversation" | "desktop" | "workspace" | "custom";
   targetPath: string | null;
   requestedFileName: string;
+  authorizationStatus: "authorized" | "required" | "revoked" | "invalid";
+  authorizationKind: "conversation" | "desktop" | "registered_workspace" | "custom_grant" | null;
+  authorizationId: string | null;
+  authorizationError: string | null;
   status: "pending" | "delivering" | "succeeded" | "failed" | "cancelled";
   attemptCount: number;
   leaseExpiresAt: string | null;
@@ -1406,6 +1435,12 @@ export type ArtifactDelivery = {
   createdAt: string;
   updatedAt: string;
   completedAt: string | null;
+  destination: {
+    kind: "desktop" | "workspace" | "custom";
+    rootPath: string | null;
+    relativeDirectory: string | null;
+    directoryPath: string | null;
+  } | null;
   artifactFile: CanonicalArtifactFile | null;
 };
 
@@ -2240,6 +2275,41 @@ export async function registerWorkspace(input: RegisterWorkspaceInput) {
     method: "POST",
     body: JSON.stringify(input)
   });
+}
+
+export async function revokeWorkspace(workspaceId: string, reason?: string) {
+  return request<{ ok: boolean; changed: boolean; workspace: WorkspaceRegistrationRecord | null }>(
+    `/workspaces/${encodeURIComponent(workspaceId)}/revoke`,
+    {
+      method: "POST",
+      body: JSON.stringify({ revokedBy: "desktop-app", reason: reason ?? null })
+    }
+  );
+}
+
+export async function listArtifactDestinationGrants(enabled?: boolean) {
+  const params = new URLSearchParams();
+  if (enabled !== undefined) params.set("enabled", String(enabled));
+  return request<{ grants: ArtifactDestinationGrantRecord[] }>(
+    `/artifact-destination-grants?${params.toString()}`
+  );
+}
+
+export async function grantArtifactDestination(input: ArtifactDestinationGrantInput) {
+  return request<{ approval: ToolApprovalRecord; grant: ArtifactDestinationGrantRecord }>(
+    "/artifact-destination-grants",
+    { method: "POST", body: JSON.stringify(input) }
+  );
+}
+
+export async function revokeArtifactDestinationGrant(grantId: string, reason?: string) {
+  return request<{ ok: boolean; changed: boolean; grant: ArtifactDestinationGrantRecord | null }>(
+    `/artifact-destination-grants/${encodeURIComponent(grantId)}/revoke`,
+    {
+      method: "POST",
+      body: JSON.stringify({ revokedBy: "desktop-app", reason: reason ?? null })
+    }
+  );
 }
 
 export async function inspectWorkspace(rootPath: string) {

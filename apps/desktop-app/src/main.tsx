@@ -2649,7 +2649,12 @@ function App() {
     for (const job of response.jobs) {
       if (
         job.status === "waiting_for_human" &&
-        ["artifact_delivery_pending", "artifact_delivery_failed", "artifact_delivery_resume_failed"]
+        [
+          "artifact_delivery_pending",
+          "artifact_delivery_authorization_required",
+          "artifact_delivery_failed",
+          "artifact_delivery_resume_failed"
+        ]
           .includes(job.heartbeatNote ?? "")
       ) {
         void maybeExportGeneratedMediaToDesktop(job);
@@ -2694,6 +2699,7 @@ function App() {
   async function maybeExportGeneratedMediaToDesktop(job: JobRecord) {
     const durableDeliveryPending = job.status === "waiting_for_human" && [
       "artifact_delivery_pending",
+      "artifact_delivery_authorization_required",
       "artifact_delivery_failed",
       "artifact_delivery_resume_failed"
     ].includes(job.heartbeatNote ?? "");
@@ -2704,13 +2710,13 @@ function App() {
       deliveryProcessingJobIds.current.add(job.id);
       try {
         const summary = await getJobDeliveries(job.id);
-        const desktopDeliveries = summary.deliveries.filter(
+        const localDeliveries = summary.deliveries.filter(
           (delivery) => delivery.required &&
-            delivery.target === "desktop" &&
+            ["desktop", "workspace", "custom"].includes(delivery.target) &&
             delivery.status !== "succeeded" &&
             delivery.status !== "cancelled"
         );
-        for (const delivery of desktopDeliveries) {
+        for (const delivery of localDeliveries) {
           let claim: Awaited<ReturnType<typeof claimArtifactDelivery>>;
           try {
             claim = await claimArtifactDelivery(job.id, delivery.id);
@@ -2727,13 +2733,20 @@ function App() {
             if (!download) {
               throw new Error("artifact_download_url_missing");
             }
-            const result = await invokeDesktopCommand<DesktopDownloadResult>("download_url_to_desktop", {
+            const destination = claim.delivery.destination;
+            if (!destination) {
+              throw new Error(claim.delivery.authorizationError ?? "artifact_destination_authorization_missing");
+            }
+            const result = await invokeDesktopCommand<DesktopDownloadResult>("download_url_to_destination", {
               payload: {
                 url: download.url,
                 fileName: claim.delivery.requestedFileName,
                 authorization: download.authorization,
                 expectedSizeBytes: claim.delivery.expectedSizeBytes,
-                expectedChecksumSha256: claim.delivery.expectedChecksumSha256
+                expectedChecksumSha256: claim.delivery.expectedChecksumSha256,
+                destinationKind: destination.kind,
+                authorizedRootPath: destination.rootPath,
+                destinationRelativePath: destination.relativeDirectory
               }
             });
             if (result.error || !result.available || !result.value) {
@@ -2809,13 +2822,14 @@ function App() {
         const suffix = mediaFiles.length > 1 ? `-${index + 1}` : "";
         const fallbackExtension = (file.kind ?? "").toLowerCase() === "video" ? ".mp4" : ".png";
         const fileName = `${title}${suffix}${extensionFromFileName(file.fileName, fallbackExtension)}`;
-        const result = await invokeDesktopCommand<DesktopDownloadResult>("download_url_to_desktop", {
+        const result = await invokeDesktopCommand<DesktopDownloadResult>("download_url_to_destination", {
           payload: {
             url: download.url,
             fileName,
             authorization: download.authorization,
             expectedSizeBytes: file.sizeBytes,
-            expectedChecksumSha256: null
+            expectedChecksumSha256: null,
+            destinationKind: "desktop"
           }
         });
         if (result.error || !result.available) {
