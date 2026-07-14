@@ -2180,6 +2180,63 @@ select {
   color: #acc5d7;
 }
 
+.jobQueueNotice {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  padding: 13px 16px;
+  border-bottom: 1px solid #284c45;
+  background: #121d1b;
+  color: #71d0b7;
+}
+
+.jobQueueNotice.queued {
+  border-bottom-color: #4e4326;
+  background: #1a1812;
+  color: #dfbd64;
+}
+
+.jobQueueNotice h3,
+.jobQueueNotice p {
+  margin: 0;
+}
+
+.jobQueueNotice h3 {
+  color: #e1fff6;
+  font-size: 14px;
+}
+
+.jobQueueNotice.queued h3 {
+  color: #fff0bd;
+}
+
+.jobQueueNotice p {
+  margin-top: 4px;
+  color: #a9c9c0;
+  font-size: 12px;
+}
+
+.jobQueueMetrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.jobQueueMetrics span {
+  padding: 3px 6px;
+  border: 1px solid #31534c;
+  border-radius: 4px;
+  color: #bfe8dc;
+  font-size: 11px;
+}
+
+.jobQueueNotice.queued .jobQueueMetrics span {
+  border-color: #5e512e;
+  color: #ead38d;
+}
+
 .timelineHeader {
   display: flex;
   justify-content: space-between;
@@ -4592,6 +4649,7 @@ select {
   .customTimeFilters,
   .stats,
   .jobPreflightNotice,
+  .jobQueueNotice,
   .timelineItem,
   .firstRunHero,
   .firstRunGrid,

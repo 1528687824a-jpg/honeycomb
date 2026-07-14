@@ -5094,7 +5094,11 @@ function App() {
                       <strong>{jobDisplayTitle(job)}</strong>
                       <span>{routingLabel(job.routingMode)}</span>
                     </span>
-                    <span className="jobStatus">{copy.statuses[job.status]}</span>
+                    <span className="jobStatus">
+                      {job.executionQueue?.status === "queued"
+                        ? language === "zh" ? "\u6392\u961f" : "Queued"
+                        : copy.statuses[job.status]}
+                    </span>
                     <span className="jobTime">{formatTime(job.createdAt, language)}</span>
                   </button>
                 </li>
@@ -5198,6 +5202,40 @@ function App() {
                   <Settings size={14} aria-hidden="true" />
                   {language === "zh" ? "\u68c0\u67e5 Agent" : "Check agents"}
                 </button>
+              </section>
+            ) : null}
+
+            {selectedFromList?.executionQueue ? (
+              <section className={`jobQueueNotice ${selectedFromList.executionQueue.status}`} role="status">
+                <Gauge size={18} aria-hidden="true" />
+                <div>
+                  <h3>
+                    {selectedFromList.executionQueue.status === "queued"
+                      ? language === "zh" ? "\u6b63\u5728\u7b49\u5f85\u6a21\u578b\u6267\u884c\u540d\u989d" : "Waiting for a model slot"
+                      : language === "zh" ? "\u5b50 Agent \u6b63\u5728\u8c03\u7528\u6a21\u578b" : "Child agent is calling its model"}
+                  </h3>
+                  <p>
+                    {selectedFromList.executionQueue.agentId} / {selectedFromList.executionQueue.providerId}
+                  </p>
+                  <div className="jobQueueMetrics">
+                    {selectedFromList.executionQueue.status === "queued" ? (
+                      <span>
+                        {language === "zh" ? "\u670d\u52a1\u5546\u961f\u5217" : "Provider queue"}
+                        {` ${selectedFromList.executionQueue.providerPosition}`}
+                      </span>
+                    ) : null}
+                    <span>
+                      {language === "zh" ? "\u5168\u5c40" : "Global"}
+                      {` ${selectedFromList.executionQueue.active.global}/${selectedFromList.executionQueue.limits.global}`}
+                    </span>
+                    <span>
+                      Provider {`${selectedFromList.executionQueue.active.provider}/${selectedFromList.executionQueue.limits.provider}`}
+                    </span>
+                    <span>
+                      Agent {`${selectedFromList.executionQueue.active.agent}/${selectedFromList.executionQueue.limits.agent}`}
+                    </span>
+                  </div>
+                </div>
               </section>
             ) : null}
 

@@ -5,6 +5,7 @@ import type {
   ConversationWorkspaceSnapshot,
   OrchestrationPlanSource,
   PanelMessageIntent,
+  TaskExecutionQueueState,
   TaskExecutionPreflight,
   TaskOrchestrationPlan
 } from "../../../packages/shared/src/types";
@@ -1222,6 +1223,7 @@ export type JobRecord = {
   orchestrationPlan: TaskOrchestrationPlan | null;
   orchestrationSource: OrchestrationPlanSource | null;
   executionPreflight: TaskExecutionPreflight | null;
+  executionQueue: TaskExecutionQueueState | null;
   routingMode: RoutingMode;
   maxModelCalls: number;
   classicFinalGateEnabled: boolean;

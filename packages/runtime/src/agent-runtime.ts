@@ -5,6 +5,7 @@ import {
 } from "../../db/src/config-registry";
 import { readProviderApiKey } from "./local-secrets";
 import type { AgentConfigRecord, ModelProviderRecord } from "../../shared/src/types";
+import { metadataConcurrencyLimit } from "../../shared/src/model-concurrency";
 
 export type AgentRuntimeRoute = {
   requestedAgentId: string;
@@ -19,6 +20,8 @@ export type AgentRuntimeRoute = {
   providerBaseUrl: string | null;
   providerVerificationStatus: string | null;
   verificationKind: string | null;
+  providerConcurrencyLimit: number | null;
+  agentConcurrencyLimit: number | null;
   model: string | null;
   apiKeyConfigured: boolean;
   apiKeyFingerprint: string | null;
@@ -209,6 +212,8 @@ async function buildRoute(input: {
       input.source,
       providerVerificationMatchesModel
     ),
+    providerConcurrencyLimit: metadataConcurrencyLimit(provider?.metadata),
+    agentConcurrencyLimit: metadataConcurrencyLimit(input.agent?.metadata),
     model,
     apiKeyConfigured: Boolean(apiKey),
     apiKeyFingerprint: apiKey ? provider?.apiKeyFingerprint ?? null : null,

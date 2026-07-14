@@ -47,7 +47,7 @@ The structured conversation-to-task contract is implemented:
 
 ### Windows Stage 2 Progress (2026-07-14)
 
-The first execution-control slice is implemented:
+The first two execution-control slices are implemented:
 
 - Every new or resumed job runs a shared execution preflight before DBOS starts.
 - Preflight checks every production agent, the test agent, and the discussion
@@ -66,12 +66,27 @@ The first execution-control slice is implemented:
 - Opaque media endpoint names use the verified API kind instead of unreliable
   model-name guessing.
 - API startup ensures the built-in agent catalog exists in a fresh database.
-- `npm run check`, the desktop production build, and all 96 unit tests pass.
+- Real model calls now acquire PostgreSQL-backed global, provider, and agent
+  concurrency leases before the request is marked started or sent.
+- Queue acquisition is serialized with a transaction advisory lock. Default
+  limits are global 4, provider 2, and agent 1, with environment and registry
+  metadata overrides.
+- Queued and acquired records both have renewable expirations. A worker crash
+  therefore releases capacity and queue fairness automatically instead of
+  leaving a permanent blocker.
+- Route completion, failure, and provider failover release only leases owned by
+  that caller. Lost ownership cannot clear another caller's live queue state.
+- Jobs persist their latest queue state; the desktop task list/details show
+  queue status, provider/agent, position, limits, and active usage.
+- `GET /runtime/model-call-queue` exposes the active global queue, and
+  `npm run smoke:model-call-queue` covers migration-backed acquisition,
+  blocking, independent-provider parallelism, release, and promotion.
+- `npm run check` and all 100 unit tests pass.
 
 Runtime database acceptance is pending while PostgreSQL and Docker Desktop are
-stopped. The next active Stage 2 slice is bounded global/provider/agent
-concurrency and visible queue state, followed by cancellation propagation,
-typed retry/backoff, unknown-outcome repair, and hard spend limits.
+stopped. The next active Stage 2 slice is cancellation propagation into live
+HTTP requests and OpenClaw child processes, followed by typed retry/backoff,
+unknown-outcome repair, and hard spend limits.
 
 ## Current Backend Status
 

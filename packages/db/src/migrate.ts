@@ -21,6 +21,7 @@ const statements = [
   `alter table agent.jobs add column if not exists orchestration_plan jsonb not null default '{}'`,
   `alter table agent.jobs add column if not exists orchestration_source text`,
   `alter table agent.jobs add column if not exists execution_preflight jsonb not null default '{}'`,
+  `alter table agent.jobs add column if not exists execution_queue jsonb not null default '{}'`,
   `alter table agent.jobs add column if not exists routing_mode text not null default 'supervisor_pipeline'`,
   `alter table agent.jobs add column if not exists max_model_calls int not null default 20`,
   `alter table agent.jobs add column if not exists classic_final_gate_enabled boolean not null default false`,
@@ -341,6 +342,28 @@ const statements = [
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now()
   )`,
+  `create table if not exists agent.model_call_queue (
+    id text primary key,
+    request_key text not null unique,
+    idempotency_key text not null,
+    job_id text not null references agent.jobs(id) on delete cascade,
+    stage_id text references agent.job_stages(id) on delete cascade,
+    route_index int not null,
+    agent_id text not null,
+    provider_id text not null,
+    status text not null,
+    lease_owner_id text,
+    queued_at timestamptz not null default now(),
+    acquired_at timestamptz,
+    released_at timestamptz,
+    expires_at timestamptz,
+    global_limit int not null,
+    provider_limit int not null,
+    agent_limit int not null,
+    last_error text,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now()
+  )`,
   `create table if not exists agent.conversations (
     id text primary key,
     project_id text not null references agent.conversation_projects(id) on delete cascade,
@@ -443,6 +466,14 @@ const statements = [
     on agent.model_calls(job_id, created_at)`,
   `create index if not exists model_calls_stage_attempt_idx
     on agent.model_calls(stage_id, attempt_no, action_type)`,
+  `create index if not exists model_call_queue_active_idx
+    on agent.model_call_queue(status, expires_at)`,
+  `create index if not exists model_call_queue_provider_idx
+    on agent.model_call_queue(provider_id, status, queued_at)`,
+  `create index if not exists model_call_queue_agent_idx
+    on agent.model_call_queue(agent_id, status, queued_at)`,
+  `create index if not exists model_call_queue_job_idx
+    on agent.model_call_queue(job_id, status, queued_at)`,
   `create index if not exists experience_candidates_status_updated_at_idx
     on agent.experience_candidates(status, updated_at desc)`,
   `create index if not exists experience_candidates_scope_idx

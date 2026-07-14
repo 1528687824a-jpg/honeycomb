@@ -14,6 +14,7 @@ import {
   type JobRecord,
   type OrchestrationPlanSource,
   type RoutingMode,
+  type TaskExecutionQueueState,
   type TaskExecutionPreflight,
   type JobStatus
 } from "../../shared/src/types";
@@ -24,6 +25,7 @@ import {
   parseStoredTaskOrchestrationPlan
 } from "../../shared/src/orchestration-contract";
 import { parseTaskExecutionPreflight } from "../../shared/src/task-preflight-contract";
+import { parseTaskExecutionQueueState } from "../../shared/src/task-queue-contract";
 import { pool } from "./pool";
 import { appendAgentEvent } from "./session";
 
@@ -217,6 +219,17 @@ function decodeJobListCursor(value: string): JobListCursor {
   };
 }
 
+function currentExecutionQueue(value: unknown) {
+  const queue = parseTaskExecutionQueueState(value);
+  if (
+    queue?.leaseExpiresAt &&
+    Date.parse(queue.leaseExpiresAt) <= Date.now()
+  ) {
+    return null;
+  }
+  return queue;
+}
+
 function toJobRecord(row: any): JobRecord {
   const orchestrationPlan = parseStoredTaskOrchestrationPlan(row.orchestration_plan);
   return {
@@ -234,6 +247,7 @@ function toJobRecord(row: any): JobRecord {
     orchestrationSource:
       normalizeOrchestrationSource(row.orchestration_source) ?? orchestrationPlan?.source ?? null,
     executionPreflight: parseTaskExecutionPreflight(row.execution_preflight),
+    executionQueue: currentExecutionQueue(row.execution_queue),
     routingMode: normalizeRoutingMode(row.routing_mode),
     maxModelCalls: row.max_model_calls ?? DEFAULT_MAX_MODEL_CALLS,
     classicFinalGateEnabled: row.classic_final_gate_enabled ?? false,
@@ -794,6 +808,31 @@ export async function setJobExecutionPreflight(jobId: string, preflight: TaskExe
      where id = $1
      returning *`,
     [jobId, JSON.stringify(preflight)]
+  );
+  return result.rows[0] ? toJobRecord(result.rows[0]) : null;
+}
+
+export async function setJobExecutionQueue(jobId: string, queue: TaskExecutionQueueState) {
+  const result = await pool.query(
+    `update agent.jobs
+     set execution_queue = $2::jsonb,
+         updated_at = now()
+     where id = $1
+     returning *`,
+    [jobId, JSON.stringify(queue)]
+  );
+  return result.rows[0] ? toJobRecord(result.rows[0]) : null;
+}
+
+export async function clearJobExecutionQueue(jobId: string, requestKey: string) {
+  const result = await pool.query(
+    `update agent.jobs
+     set execution_queue = '{}'::jsonb,
+         updated_at = now()
+     where id = $1
+       and execution_queue ->> 'requestKey' = $2
+     returning *`,
+    [jobId, requestKey]
   );
   return result.rows[0] ? toJobRecord(result.rows[0]) : null;
 }

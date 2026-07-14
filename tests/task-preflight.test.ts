@@ -35,6 +35,8 @@ function route(
       : agentId === "video-agent"
         ? "video_generation"
         : "chat",
+    providerConcurrencyLimit: null,
+    agentConcurrencyLimit: null,
     model: agentId === "image-agent" ? "gpt-image-1" : "chat-model",
     apiKeyConfigured: true,
     apiKeyFingerprint: "test-fingerprint",

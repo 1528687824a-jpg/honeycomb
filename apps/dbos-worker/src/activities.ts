@@ -72,6 +72,11 @@ import {
 } from "./adapters/openclaw";
 import { loadClusterConfig, type LoadedClusterConfig } from "./config/cluster";
 import { deliverOutboundMessage } from "./egress/dispatcher";
+import {
+  acquireModelCallSlot,
+  releaseModelCallSlot,
+  type ModelCallSlotLease
+} from "./model-call-queue";
 import { maybeCrashOnce } from "./test-crash";
 
 type OpenClawActionType =
@@ -224,17 +229,6 @@ async function runOpenClawAgentIdempotent(input: {
     input.agentId,
     input.stageId ?? null
   );
-  await markModelCallStarted({
-    idempotencyKey,
-    jobId: input.jobId,
-    stageId: input.stageId,
-    attemptNo: input.attemptNo,
-    actionType: input.actionType,
-    agentId: primaryRoute.honeycombAgentId,
-    agentSessionId: input.sessionId,
-    requestHash: sha256(input.message)
-  });
-
   await appendJobEvent(
     input.jobId,
     "tool.openclaw_agent_requested",
@@ -261,15 +255,41 @@ async function runOpenClawAgentIdempotent(input: {
 
   const routeAttempts: ReturnType<typeof routeAttemptPayload>[] = [];
   let lastError: string | null = null;
+  let modelCallStarted = false;
   try {
     for (let routeIndex = 0; routeIndex < routes.length; routeIndex++) {
       const route = routes[routeIndex];
       const redactedRoute = redactAgentRuntime(route);
       const startedAt = Date.now();
+      let slotLease: ModelCallSlotLease | null = null;
+      let slotReleaseReason: string | null = null;
       try {
         const readinessError = routeReadinessError(route);
         if (readinessError) {
           throw new Error(readinessError);
+        }
+
+        slotLease = await acquireModelCallSlot({
+          idempotencyKey,
+          jobId: input.jobId,
+          stageId: input.stageId,
+          routeIndex,
+          route,
+          timeoutSeconds: input.timeoutSeconds,
+          actionType: input.actionType
+        });
+        if (!modelCallStarted) {
+          await markModelCallStarted({
+            idempotencyKey,
+            jobId: input.jobId,
+            stageId: input.stageId,
+            attemptNo: input.attemptNo,
+            actionType: input.actionType,
+            agentId: primaryRoute.honeycombAgentId,
+            agentSessionId: input.sessionId,
+            requestHash: sha256(input.message)
+          });
+          modelCallStarted = true;
         }
 
         await heartbeat(
@@ -357,6 +377,10 @@ async function runOpenClawAgentIdempotent(input: {
         return result;
       } catch (error) {
         lastError = toSafeErrorMessage(error);
+        slotReleaseReason = lastError;
+        if (lastError === "job_cancelled") {
+          throw error;
+        }
         const failedAttempt = routeAttemptPayload({
           route: redactedRoute,
           ok: false,
@@ -390,6 +414,15 @@ async function runOpenClawAgentIdempotent(input: {
             stageId: input.stageId ?? null
           }
         );
+      } finally {
+        await releaseModelCallSlot({
+          jobId: input.jobId,
+          stageId: input.stageId,
+          actionType: input.actionType,
+          route,
+          lease: slotLease,
+          reason: slotReleaseReason
+        });
       }
     }
 
@@ -397,10 +430,12 @@ async function runOpenClawAgentIdempotent(input: {
       `All OpenClaw route attempts failed for ${idempotencyKey}: ${lastError ?? "unknown_error"}`
     );
   } catch (error) {
-    await markModelCallFailed({
-      idempotencyKey,
-      error: toSafeErrorMessage(error)
-    });
+    if (modelCallStarted) {
+      await markModelCallFailed({
+        idempotencyKey,
+        error: toSafeErrorMessage(error)
+      });
+    }
     await heartbeat(
       input.jobId,
       `openclaw.${input.actionType}.failed`,

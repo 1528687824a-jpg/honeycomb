@@ -232,6 +232,50 @@ export type TaskExecutionPreflight = {
   warnings: TaskPreflightIssue[];
 };
 
+export const MODEL_CALL_QUEUE_STATUSES = ["queued", "acquired"] as const;
+export type ModelCallQueueStatus = (typeof MODEL_CALL_QUEUE_STATUSES)[number];
+
+export const MODEL_CALL_QUEUE_BLOCKING_SCOPES = [
+  "global",
+  "provider",
+  "agent",
+  "earlier_request",
+  "request_lease"
+] as const;
+export type ModelCallQueueBlockingScope = (typeof MODEL_CALL_QUEUE_BLOCKING_SCOPES)[number];
+
+export type ModelCallConcurrencyLimits = {
+  global: number;
+  provider: number;
+  agent: number;
+};
+
+export type ModelCallConcurrencyUsage = {
+  global: number;
+  provider: number;
+  agent: number;
+};
+
+export type TaskExecutionQueueState = {
+  version: "honeycomb.model-call-queue.v1";
+  status: ModelCallQueueStatus;
+  requestKey: string;
+  idempotencyKey: string;
+  routeIndex: number;
+  agentId: string;
+  providerId: string;
+  queuedAt: string;
+  acquiredAt: string | null;
+  leaseExpiresAt: string | null;
+  globalPosition: number;
+  providerPosition: number;
+  agentPosition: number;
+  limits: ModelCallConcurrencyLimits;
+  active: ModelCallConcurrencyUsage;
+  blockingScopes: ModelCallQueueBlockingScope[];
+  retryAfterMs: number;
+};
+
 export const INGRESS_ORIGINS = ["http", "feishu", "slack", "cli"] as const;
 
 export type IngressOrigin = (typeof INGRESS_ORIGINS)[number];
@@ -247,6 +291,7 @@ export type JobRecord = {
   orchestrationPlan: TaskOrchestrationPlan | null;
   orchestrationSource: OrchestrationPlanSource | null;
   executionPreflight: TaskExecutionPreflight | null;
+  executionQueue: TaskExecutionQueueState | null;
   routingMode: RoutingMode;
   maxModelCalls: number;
   classicFinalGateEnabled: boolean;

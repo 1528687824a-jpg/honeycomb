@@ -50,6 +50,7 @@ import {
   listToolApprovals
 } from "../../../packages/db/src/approvals";
 import { markModelCallFailedUnknownOutcome } from "../../../packages/db/src/model-calls";
+import { getModelCallQueueOverview } from "../../../packages/db/src/model-call-queue";
 import {
   listExperiences,
   recordExperienceRecall,
@@ -395,6 +396,10 @@ const panelChatSchema = z.object({
   maxModelCalls: z.number().int().min(1).max(100).optional(),
   outputStyle: z.enum(["concise", "detailed", "warm", "formal"]).optional(),
   language: z.enum(["en", "zh"]).optional()
+});
+
+const modelCallQueueQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(500).optional()
 });
 
 const conversationIdSchema = z.string().trim().min(1).max(200);
@@ -1971,6 +1976,15 @@ async function main() {
     try {
       const query = runtimeUsageQuerySchema.parse(request.query);
       response.json(await getRuntimeUsage(query));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/runtime/model-call-queue", async (request, response, next) => {
+    try {
+      const query = modelCallQueueQuerySchema.parse(request.query);
+      response.json(await getModelCallQueueOverview(query.limit));
     } catch (error) {
       next(error);
     }
