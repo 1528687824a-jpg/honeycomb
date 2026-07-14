@@ -432,8 +432,9 @@ slice is Stage 4: real behavioral regression for all four routing modes.
    - Desktop launcher generates a per-machine random token under the local app
      data directory and passes it to Docker/API and the UI.
    - Desktop API calls send `Authorization: Bearer <token>`.
-   - SSE uses the same local token via `access_token` query because browser
-     `EventSource` cannot set custom headers.
+   - Desktop SSE fetches use the bearer header. Native browser `EventSource`
+     obtains a short-lived signed ticket restricted to one exact stream path;
+     the long-lived machine token is never placed in the URL.
    - Docker API and Postgres ports are published only on `127.0.0.1`.
    - Source/dev and Docker smoke tests assert that unauthenticated business API
      requests are rejected.
@@ -667,11 +668,12 @@ slice is Stage 4: real behavioral regression for all four routing modes.
 6. Security baseline before broader tool exposure.
    - Enforce local API auth and avoid LAN-exposed development services.
    - Status: done for the current Windows-local baseline. Non-health API routes now require a bearer token,
-     desktop/dev launchers generate and inject that token, and Docker API /
-     Postgres ports bind to `127.0.0.1`; registered workspace roots and
-     approval-gated workspace registration now exist. Provider/agent API keys
-     use DPAPI on Windows, approval expiry is enforced before decisions and
-     consumption, and web fetch pins the resolved connect IP. macOS Keychain
+      desktop/dev launchers generate and inject that token, and Docker API /
+      Postgres ports bind to `127.0.0.1`; registered workspace roots and
+      approval-gated workspace registration now exist. Provider/agent API keys
+      use DPAPI on Windows, approval expiry is enforced before decisions and
+      consumption, SSE EventSource URLs use short-lived signed exact-path
+      tickets instead of the machine token, and web fetch pins the resolved connect IP. macOS Keychain
      has a first slice; Linux/libsecret and real Mac validation are still needed
      before cross-platform release builds.
 
@@ -749,6 +751,13 @@ slice is Stage 4: real behavioral regression for all four routing modes.
       Paginated task lists can include the same state as compact batch
       summaries, and revision-based refresh returns only changed tasks without
       relying on timestamp cursors or one request per task.
+      A durable task-update SSE stream now reads a transaction-ordered global
+      job-event stream ID as its disconnect cursor and sends only coalesced
+      changed task IDs. Initial
+      connections resync from the summary endpoint; reconnects replay events
+      after `Last-Event-ID`. Desktop fetch streaming keeps the bearer token in
+      an authorization header, while native EventSource uses a 60-second signed,
+      path-bound ticket instead of a long-lived URL token.
       Runtime maintenance is also automatic: API and worker processes compete
       for one PostgreSQL advisory lock, honor a persisted next-run time, scan
       expired model-call leases before stale heartbeats, and persist health,

@@ -23,6 +23,12 @@ import type {
   RuntimeMaintenanceAttempt,
   RuntimeMaintenanceOverview
 } from "../../../packages/shared/src/runtime-maintenance";
+import {
+  JOB_EXECUTION_UPDATE_STREAM_VERSION,
+  isJobExecutionUpdateCursor,
+  type JobExecutionUpdateStreamEvent
+} from "../../../packages/shared/src/job-execution-updates";
+import { consumeServerSentEvents } from "./sse";
 
 export type { JobExecutionState } from "../../../packages/shared/src/job-execution-state";
 export type {
@@ -33,6 +39,12 @@ export type {
   RuntimeMaintenanceAttempt,
   RuntimeMaintenanceOverview
 } from "../../../packages/shared/src/runtime-maintenance";
+export type {
+  JobExecutionUpdateNotice,
+  JobExecutionUpdateReady,
+  JobExecutionUpdateStreamError,
+  JobExecutionUpdateStreamEvent
+} from "../../../packages/shared/src/job-execution-updates";
 
 const viteEnv = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env ?? {};
 const API_BASE = viteEnv.VITE_ORCHESTRATOR_URL ?? "http://127.0.0.1:3000";
@@ -1234,6 +1246,21 @@ export type SessionEventsStreamInput = {
   heartbeatMs?: number;
 };
 
+export type StreamTicketResponse = {
+  ticket: string | null;
+  path: string;
+  expiresAt: string | null;
+  insecure: boolean;
+};
+
+export type JobExecutionUpdateStreamInput = {
+  afterEventId?: string;
+  limit?: number;
+  pollMs?: number;
+  heartbeatMs?: number;
+  signal?: AbortSignal;
+};
+
 export type SessionArchiveInput = {
   retentionDays?: number;
   reason?: string;
@@ -1860,6 +1887,82 @@ export async function queryJobExecutionSummaries(input: {
     method: "POST",
     body: JSON.stringify(input)
   });
+}
+
+export async function consumeJobExecutionUpdates(
+  input: JobExecutionUpdateStreamInput,
+  onEvent: (event: JobExecutionUpdateStreamEvent) => void | Promise<void>
+) {
+  if (input.afterEventId && !isJobExecutionUpdateCursor(input.afterEventId)) {
+    throw new Error("invalid_job_execution_update_cursor");
+  }
+  const params = new URLSearchParams();
+  appendSearchParams(params, input, { skip: ["afterEventId", "signal"] });
+  const headers = new Headers({ accept: "text/event-stream" });
+  if (input.afterEventId) headers.set("last-event-id", input.afterEventId);
+  const query = params.toString();
+  const response = await fetchWithAuthRetry(
+    `/jobs/execution-updates/stream${query ? `?${query}` : ""}`,
+    { method: "GET", headers, signal: input.signal }
+  );
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(body || `${response.status} ${response.statusText}`);
+  }
+  if (!response.headers.get("content-type")?.includes("text/event-stream")) {
+    throw new Error("invalid_job_execution_update_stream_content_type");
+  }
+
+  const result = await consumeServerSentEvents(response, async (event) => {
+    if (!["ready", "jobs_changed", "stream_error"].includes(event.event)) return;
+    let data: any;
+    try {
+      data = JSON.parse(event.data);
+    } catch {
+      throw new Error("invalid_job_execution_update_stream_json");
+    }
+    if (
+      !data ||
+      data.version !== JOB_EXECUTION_UPDATE_STREAM_VERSION ||
+      typeof data.cursor !== "string" ||
+      !isJobExecutionUpdateCursor(data.cursor) ||
+      (event.id !== null && event.id !== data.cursor)
+    ) {
+      throw new Error("invalid_job_execution_update_stream_event");
+    }
+
+    if (event.event === "ready") {
+      if (
+        typeof data.resyncRequired !== "boolean" ||
+        ![null, "initial_snapshot_required", "cursor_ahead"].includes(data.reason) ||
+        !Number.isInteger(data.pollMs) ||
+        !Number.isInteger(data.heartbeatMs) ||
+        !Number.isInteger(data.batchLimit)
+      ) throw new Error("invalid_job_execution_update_ready_event");
+      await onEvent({ type: "ready", data });
+      return;
+    }
+    if (event.event === "jobs_changed") {
+      if (
+        !Array.isArray(data.jobIds) ||
+        data.jobIds.length > 500 ||
+        data.jobIds.some((jobId: unknown) => typeof jobId !== "string" || !jobId) ||
+        !Number.isInteger(data.eventCount) ||
+        data.eventCount < 1 ||
+        typeof data.occurredAt !== "string" ||
+        Number.isNaN(Date.parse(data.occurredAt)) ||
+        typeof data.hasMore !== "boolean"
+      ) throw new Error("invalid_job_execution_update_notice");
+      await onEvent({ type: "jobs_changed", data });
+      return;
+    }
+    if (data.code !== "job_execution_update_poll_failed" || data.retryable !== true) {
+      throw new Error("invalid_job_execution_update_error_event");
+    }
+    await onEvent({ type: "stream_error", data });
+  });
+
+  return { cursor: result.lastEventId ?? input.afterEventId ?? null };
 }
 
 export async function sendPanelChat(input: PanelChatInput) {
@@ -2554,16 +2657,24 @@ export async function getSessionEvents(sessionId: string, limit = 500) {
   return request<SessionEventsResponse>(`/sessions/${encodeURIComponent(sessionId)}/events?${params.toString()}`);
 }
 
+export async function createStreamTicket(input:
+  | { scope: "session_events"; sessionId: string; ttlSeconds?: number }
+  | { scope: "job_execution_updates"; ttlSeconds?: number }
+) {
+  return request<StreamTicketResponse>("/auth/stream-ticket", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
 export async function createSessionEventsSource(
   sessionId: string,
   input: SessionEventsStreamInput = {}
 ) {
   const params = new URLSearchParams();
   appendSearchParams(params, input);
-  const token = await getApiAuthToken();
-  if (token) {
-    params.set("access_token", token);
-  }
+  const grant = await createStreamTicket({ scope: "session_events", sessionId });
+  if (grant.ticket) params.set("stream_ticket", grant.ticket);
   const query = params.toString();
   const suffix = query ? `?${query}` : "";
   return new EventSource(

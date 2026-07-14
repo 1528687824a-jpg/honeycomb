@@ -33,6 +33,7 @@ const capabilities: RuntimeCapability[] = [
       "POST /jobs",
       "GET /jobs",
       "POST /jobs/execution-summaries/query",
+      "GET /jobs/execution-updates/stream",
       "GET /jobs/:jobId",
       "GET /jobs/:jobId/execution-state",
       "GET /jobs/:jobId/artifacts",
@@ -63,6 +64,7 @@ const capabilities: RuntimeCapability[] = [
       "Task artifact listing",
       "Unified task progress, agent state, runtime blocker, and recommended-action projection",
       "Batch task-list execution summaries with content-revision incremental refresh",
+      "Durable task-list invalidation stream with disconnect cursor replay",
       "Safe local artifact file download",
       "Required media file, format, and image-dimension completion gate",
       "Deterministic image conversion, EXIF orientation, bounded exact resizing, and retry-safe derived files",
@@ -102,6 +104,7 @@ const capabilities: RuntimeCapability[] = [
       "POST /runtime/maintenance/run",
       "GET /sessions/:sessionId/events",
       "GET /sessions/:sessionId/events/stream",
+      "GET /jobs/execution-updates/stream",
       "GET /runtime/capabilities",
       "GET /runtime/diagnostics"
     ],
@@ -119,6 +122,7 @@ const capabilities: RuntimeCapability[] = [
       "Persisted maintenance health, last result, and manual run endpoint",
       "Job heartbeat diagnostics",
       "Session event stream",
+      "Safe coalesced task execution update stream",
       "Machine-readable capability inventory",
       "Runtime diagnostics aggregate"
     ],
@@ -136,11 +140,13 @@ const capabilities: RuntimeCapability[] = [
     summary: "Non-health routes require a local Honeycomb bearer token, workspace roots are registered through approval, Windows API keys use DPAPI, macOS keys can use Keychain, approvals expire, and web/network gateways pin DNS targets.",
     routes: [
       "GET /health",
+      "POST /auth/stream-ticket",
       "all non-health API routes"
     ],
     implemented: [
       "Bearer-token middleware for non-health API routes",
-      "Authorization, x-honeycomb-token, and SSE access_token support",
+      "Authorization and x-honeycomb-token support without long-lived URL tokens",
+      "Short-lived signed exact-path tickets for native EventSource streams",
       "Desktop launcher generates a per-machine local token",
       "Desktop API client injects the token automatically",
       "Docker API port binds to 127.0.0.1:3000",

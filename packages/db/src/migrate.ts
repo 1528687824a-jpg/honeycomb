@@ -67,6 +67,47 @@ const statements = [
     payload jsonb not null default '{}',
     created_at timestamptz not null default now()
   )`,
+  `lock table agent.job_events in access exclusive mode;
+   create sequence if not exists agent.job_event_stream_id_seq;
+   alter table agent.job_events add column if not exists stream_id bigint;
+   update agent.job_events set stream_id = id where stream_id is null;
+   select setval(
+     'agent.job_event_stream_id_seq',
+     greatest(
+       coalesce((select max(stream_id) from agent.job_events), 0),
+       (select last_value from agent.job_event_stream_id_seq),
+       1
+     ),
+     true
+   );
+   create or replace function agent.assign_job_event_stream_id()
+   returns trigger
+   language plpgsql
+   as $function$
+   begin
+     perform pg_advisory_xact_lock(hashtextextended('agent.job_event_stream_commit_order_v1', 0));
+     new.stream_id := nextval('agent.job_event_stream_id_seq');
+     return new;
+   end
+   $function$;
+   do $block$
+   begin
+     if not exists (
+       select 1
+       from pg_trigger
+       where tgrelid = 'agent.job_events'::regclass
+         and tgname = 'job_events_assign_stream_id'
+         and not tgisinternal
+     ) then
+       create trigger job_events_assign_stream_id
+       before insert on agent.job_events
+       for each row execute function agent.assign_job_event_stream_id();
+     end if;
+   end
+   $block$;
+   alter table agent.job_events alter column stream_id set not null;
+   create unique index if not exists job_events_stream_id_idx
+     on agent.job_events(stream_id)`,
   `create table if not exists agent.agent_events (
     id bigserial primary key,
     session_id text not null,

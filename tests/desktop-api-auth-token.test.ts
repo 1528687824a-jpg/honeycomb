@@ -3,6 +3,8 @@ import { afterEach, test } from "node:test";
 import {
   __apiAuthTokenTestInternals,
   completeArtifactDelivery,
+  consumeJobExecutionUpdates,
+  createSessionEventsSource,
   listJobs,
   queryJobExecutionSummaries,
   resolveArtifactDownloadRequest
@@ -26,6 +28,7 @@ class MemoryStorage {
 
 const originalWindow = (globalThis as { window?: unknown }).window;
 const originalFetch = globalThis.fetch;
+const originalEventSource = globalThis.EventSource;
 
 function installWindow(storage: MemoryStorage) {
   (globalThis as { window?: unknown }).window = {
@@ -50,6 +53,7 @@ function listJobsResponse() {
 afterEach(() => {
   (globalThis as { window?: unknown }).window = originalWindow;
   globalThis.fetch = originalFetch;
+  globalThis.EventSource = originalEventSource;
   __apiAuthTokenTestInternals.resetRuntimeTokenLoaderForTests();
   __apiAuthTokenTestInternals.setStaticTokenForTests(null);
   __apiAuthTokenTestInternals.resetTokenCacheForTests();
@@ -153,6 +157,94 @@ test("desktop task list sends authenticated incremental summary queries", async 
     jobIds: ["JOB-1"],
     knownRevisions: { "JOB-1": "a".repeat(64) }
   });
+});
+
+test("desktop job updates use an authenticated resumable stream without URL tokens", async () => {
+  const storage = new MemoryStorage();
+  installWindow(storage);
+  __apiAuthTokenTestInternals.setRuntimeTokenLoaderForTests(async () => "runtime-stream-token");
+  let seenUrl = "";
+  let seenAuthorization = "";
+  let seenLastEventId = "";
+  globalThis.fetch = async (url, init) => {
+    seenUrl = String(url);
+    const headers = new Headers(init?.headers);
+    seenAuthorization = headers.get("authorization") ?? "";
+    seenLastEventId = headers.get("last-event-id") ?? "";
+    return new Response([
+      "id: 42",
+      "event: ready",
+      `data: ${JSON.stringify({
+        version: "honeycomb.job-execution-update-stream.v1",
+        cursor: "42",
+        resyncRequired: false,
+        reason: null,
+        pollMs: 1000,
+        heartbeatMs: 15000,
+        batchLimit: 100
+      })}`,
+      "",
+      "id: 43",
+      "event: jobs_changed",
+      `data: ${JSON.stringify({
+        version: "honeycomb.job-execution-update-stream.v1",
+        cursor: "43",
+        jobIds: ["JOB-1"],
+        eventCount: 2,
+        occurredAt: "2026-07-14T12:00:01.000Z",
+        hasMore: false
+      })}`,
+      ""
+    ].join("\n"), {
+      status: 200,
+      headers: { "content-type": "text/event-stream; charset=utf-8" }
+    });
+  };
+  const events: unknown[] = [];
+
+  const result = await consumeJobExecutionUpdates(
+    { afterEventId: "41" },
+    (event) => events.push(event)
+  );
+
+  assert.equal(seenUrl, "http://127.0.0.1:3000/jobs/execution-updates/stream");
+  assert.equal(seenUrl.includes("runtime-stream-token"), false);
+  assert.equal(seenAuthorization, "Bearer runtime-stream-token");
+  assert.equal(seenLastEventId, "41");
+  assert.deepEqual(events.map((event: any) => event.type), ["ready", "jobs_changed"]);
+  assert.equal(result.cursor, "43");
+});
+
+test("desktop session SSE uses a short ticket instead of the machine token in the URL", async () => {
+  const storage = new MemoryStorage();
+  installWindow(storage);
+  __apiAuthTokenTestInternals.setRuntimeTokenLoaderForTests(async () => "runtime-machine-token");
+  let ticketRequestAuthorization = "";
+  let eventSourceUrl = "";
+  globalThis.fetch = async (_url, init) => {
+    ticketRequestAuthorization = new Headers(init?.headers).get("authorization") ?? "";
+    return new Response(JSON.stringify({
+      ticket: "short-lived-ticket",
+      path: "/sessions/SESSION-1/events/stream",
+      expiresAt: "2026-07-14T12:01:00.000Z",
+      insecure: false
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    });
+  };
+  globalThis.EventSource = class {
+    constructor(url: string | URL) {
+      eventSourceUrl = String(url);
+    }
+  } as typeof EventSource;
+
+  await createSessionEventsSource("SESSION-1", { afterSeq: 5 });
+
+  assert.equal(ticketRequestAuthorization, "Bearer runtime-machine-token");
+  assert.equal(eventSourceUrl.includes("stream_ticket=short-lived-ticket"), true);
+  assert.equal(eventSourceUrl.includes("access_token"), false);
+  assert.equal(eventSourceUrl.includes("runtime-machine-token"), false);
 });
 
 test("desktop artifact delivery prefers the authenticated Honeycomb file endpoint", async () => {

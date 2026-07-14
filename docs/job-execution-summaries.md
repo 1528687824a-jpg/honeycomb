@@ -48,6 +48,8 @@ The API accepts up to 100 task IDs. It returns changed summaries only, plus:
 
 Revision comparison avoids timestamp races: updates committed in the same clock tick or by a long transaction cannot be skipped merely because their timestamp equals a polling cursor. `generatedAt` is not part of the revision.
 
+For immediate invalidation and disconnect resume, combine this endpoint with the safe SSE contract in `docs/job-execution-updates.md`.
+
 ## Safety
 
 Summaries are projected from the sanitized execution-state model. They do not include model-call idempotency keys, claim tokens, provider request/task references, approval commands/input/policy, API keys, delivery claim tokens, artifact paths, or raw provider and delivery errors. Blocker details use controlled public descriptions; use the authenticated single-task execution-state endpoint for deeper diagnosis.

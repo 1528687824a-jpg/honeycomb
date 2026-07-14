@@ -802,6 +802,23 @@ tasks only. See `docs/job-execution-summaries.md`.
 npm run smoke:job-execution-summaries
 ```
 
+Task changes are also available as a durable, resumable invalidation stream:
+
+```text
+GET  /jobs/execution-updates/stream
+POST /auth/stream-ticket
+```
+
+The normal desktop path uses an `Authorization` header with streaming `fetch`;
+browser `EventSource` clients use a 60-second exact-path ticket. Only changed
+task IDs are sent, then the revision endpoint retrieves authoritative summaries.
+The long-lived API token is never placed in the stream URL. See
+`docs/job-execution-updates.md`. With PostgreSQL running:
+
+```powershell
+npm run smoke:job-execution-updates
+```
+
 ## Automatic runtime maintenance
 
 The orchestrator API and DBOS worker both start a bounded recovery runner. A

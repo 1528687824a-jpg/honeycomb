@@ -5,9 +5,12 @@ import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import {
   bearerToken,
+  issueStreamTicket,
   isPublicRequest,
   requestToken,
-  timingSafeEqualString
+  requireApiToken,
+  timingSafeEqualString,
+  verifyStreamTicket
 } from "../apps/orchestrator-api/src/api-auth";
 import {
   normalizeWorkspaceRegistrationTarget,
@@ -94,8 +97,103 @@ test("api auth token helpers honor public routes and token sources", () => {
   );
   assert.equal(
     requestToken(mockRequest({ query: { access_token: "query-token" } })),
-    "query-token"
+    null
   );
+});
+
+test("short-lived stream tickets are signed, path-bound, and expire", () => {
+  const nowMs = Date.parse("2026-07-14T12:00:00.000Z");
+  const grant = issueStreamTicket({
+    apiToken: "machine-api-token",
+    path: "/jobs/execution-updates/stream",
+    ttlMs: 60_000,
+    nowMs
+  });
+
+  assert.equal(grant.ticket.includes("machine-api-token"), false);
+  assert.equal(verifyStreamTicket({
+    ticket: grant.ticket,
+    apiToken: "machine-api-token",
+    path: "/jobs/execution-updates/stream",
+    nowMs: nowMs + 30_000
+  }), true);
+  assert.equal(verifyStreamTicket({
+    ticket: grant.ticket,
+    apiToken: "machine-api-token",
+    path: "/sessions/SESSION-1/events/stream",
+    nowMs: nowMs + 30_000
+  }), false);
+  assert.equal(verifyStreamTicket({
+    ticket: `${grant.ticket.slice(0, -1)}${grant.ticket.endsWith("x") ? "y" : "x"}`,
+    apiToken: "machine-api-token",
+    path: "/jobs/execution-updates/stream",
+    nowMs: nowMs + 30_000
+  }), false);
+  assert.equal(verifyStreamTicket({
+    ticket: grant.ticket,
+    apiToken: "machine-api-token",
+    path: "/jobs/execution-updates/stream",
+    nowMs: nowMs + 60_000
+  }), false);
+});
+
+test("api middleware accepts stream tickets only for their GET path", () => {
+  const previousToken = process.env.HONEYCOMB_API_TOKEN;
+  const previousInsecure = process.env.HONEYCOMB_ALLOW_INSECURE_API;
+  process.env.HONEYCOMB_API_TOKEN = "machine-api-token";
+  delete process.env.HONEYCOMB_ALLOW_INSECURE_API;
+  const grant = issueStreamTicket({
+    apiToken: "machine-api-token",
+    path: "/jobs/execution-updates/stream"
+  });
+  const response = () => {
+    const state = { statusCode: 200, body: null as unknown };
+    return {
+      state,
+      status(code: number) {
+        state.statusCode = code;
+        return this;
+      },
+      json(body: unknown) {
+        state.body = body;
+        return this;
+      }
+    };
+  };
+
+  try {
+    let accepted = 0;
+    const acceptedResponse = response();
+    requireApiToken(
+      mockRequest({
+        method: "GET",
+        path: "/jobs/execution-updates/stream",
+        query: { stream_ticket: grant.ticket }
+      }),
+      acceptedResponse as any,
+      () => { accepted += 1; }
+    );
+    assert.equal(accepted, 1);
+    assert.equal(acceptedResponse.state.statusCode, 200);
+
+    const rejectedResponse = response();
+    requireApiToken(
+      mockRequest({
+        method: "POST",
+        path: "/jobs/execution-updates/stream",
+        query: { stream_ticket: grant.ticket }
+      }),
+      rejectedResponse as any,
+      () => { accepted += 1; }
+    );
+    assert.equal(accepted, 1);
+    assert.equal(rejectedResponse.state.statusCode, 401);
+  } finally {
+    if (previousToken === undefined) delete process.env.HONEYCOMB_API_TOKEN;
+    else process.env.HONEYCOMB_API_TOKEN = previousToken;
+    if (previousInsecure === undefined) delete process.env.HONEYCOMB_ALLOW_INSECURE_API;
+    else process.env.HONEYCOMB_ALLOW_INSECURE_API = previousInsecure;
+  }
 });
 
 test("workspace registration target normalizes all accepted target forms", () => {

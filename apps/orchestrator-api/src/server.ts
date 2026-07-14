@@ -289,7 +289,7 @@ import {
   withLiveProviderSecretStatuses
 } from "./provider-secret-status";
 import { checkMcpCommand } from "./mcp-diagnostics";
-import { requireApiToken, timingSafeEqualString } from "./api-auth";
+import { issueStreamTicket, requireApiToken, timingSafeEqualString } from "./api-auth";
 import {
   evaluateAgentNetworkPolicy,
   type AgentNetworkOperation
@@ -318,6 +318,7 @@ import {
   recoverProviderMediaArtifacts,
   type ProviderReconciliationResult
 } from "./model-call-reconciliation";
+import { registerJobExecutionUpdateStream } from "./job-execution-update-stream";
 
 const unstickModelCallSchema = z.object({
   jobId: z.string().min(1),
@@ -877,6 +878,18 @@ const workspaceRegisterSchema = z.object({
   registeredBy: z.string().trim().min(1).max(200).optional(),
   metadata: z.record(z.unknown()).optional()
 });
+
+const streamTicketRequestSchema = z.discriminatedUnion("scope", [
+  z.object({
+    scope: z.literal("session_events"),
+    sessionId: z.string().trim().min(1).max(200),
+    ttlSeconds: z.number().int().min(5).max(300).optional()
+  }),
+  z.object({
+    scope: z.literal("job_execution_updates"),
+    ttlSeconds: z.number().int().min(5).max(300).optional()
+  })
+]);
 
 const artifactDestinationGrantListSchema = z.object({
   enabled: z.coerce.boolean().optional()
@@ -2221,7 +2234,7 @@ async function main() {
       response.header("access-control-allow-methods", "GET,POST,PATCH,DELETE,OPTIONS");
       response.header(
         "access-control-allow-headers",
-        "authorization,content-type,x-admin-token,x-honeycomb-token"
+        "authorization,content-type,last-event-id,x-admin-token,x-honeycomb-token"
       );
     }
 
@@ -2239,6 +2252,33 @@ async function main() {
   app.get("/health", (_request, response) => {
     response.json({ ok: true });
   });
+
+  app.post("/auth/stream-ticket", (request, response, next) => {
+    try {
+      const input = streamTicketRequestSchema.parse(request.body ?? {});
+      response.setHeader("cache-control", "no-store");
+      const ticketPath = input.scope === "session_events"
+        ? `/sessions/${encodeURIComponent(input.sessionId)}/events/stream`
+        : "/jobs/execution-updates/stream";
+      const apiToken = process.env.HONEYCOMB_API_TOKEN?.trim();
+      if (!apiToken) {
+        response.json({ ticket: null, path: ticketPath, expiresAt: null, insecure: true });
+        return;
+      }
+      response.json({
+        ...issueStreamTicket({
+          apiToken,
+          path: ticketPath,
+          ttlMs: input.ttlSeconds ? input.ttlSeconds * 1000 : undefined
+        }),
+        insecure: false
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  registerJobExecutionUpdateStream(app);
 
   app.post("/panel/agent-prompts/personalize", (request, response, next) => {
     try {
