@@ -28,6 +28,7 @@ test("extractArtifactFileRefs returns safe task files and generated media files"
   const root = path.join(os.tmpdir(), "honeycomb-job-data");
   const jobRoot = path.join(root, "JOB-1");
   const outputMd = path.join(jobRoot, "stages", "001-image", "output-attempt-1.md");
+  const documentContent = path.join(jobRoot, "stages", "001-image", "content-attempt-1.md");
   const stateJson = path.join(jobRoot, "stages", "001-image", "stage-output.json");
   const imagePath = path.join(jobRoot, "stages", "001-image", "poster.jpg");
 
@@ -50,6 +51,7 @@ test("extractArtifactFileRefs returns safe task files and generated media files"
         }
       }),
       metadata: {
+        documentContentPath: documentContent,
         stateJsonPath: stateJson,
         markdownPath: outputMd
       }
@@ -57,15 +59,15 @@ test("extractArtifactFileRefs returns safe task files and generated media files"
     { jobDataDir: root }
   );
 
-  assert.equal(refs.length, 3);
+  assert.equal(refs.length, 4);
   assert.deepEqual(
     refs.map((ref) => ref.label),
-    ["artifact-uri", "artifact-path", "generated-1"]
+    ["artifact-uri", "artifact-path", "documentContentPath", "generated-1"]
   );
-  assert.equal(refs[2].kind, "image");
-  assert.equal(refs[2].mimeType, "image/jpeg");
-  assert.equal(refs[2].sizeBytes, 1234);
-  assert.equal(refs[2].externalUrl, "https://example.test/poster.jpg");
+  assert.equal(refs[3].kind, "image");
+  assert.equal(refs[3].mimeType, "image/jpeg");
+  assert.equal(refs[3].sizeBytes, 1234);
+  assert.equal(refs[3].externalUrl, "https://example.test/poster.jpg");
 });
 
 test("extractArtifactFileRefs keeps generated media URLs when local download failed", () => {

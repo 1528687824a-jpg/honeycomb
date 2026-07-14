@@ -69,6 +69,7 @@ import type {
   StageDefinition,
   StageRecord,
   StageRunResult,
+  TaskDeliverable,
   TestReviewResult
 } from "../../../packages/shared/src/types";
 import {
@@ -90,6 +91,12 @@ import {
   type GeneratedMediaDeliveryCandidate
 } from "../../../packages/shared/src/artifact-delivery-policy";
 import { planRequiredImageNormalizations } from "../../../packages/shared/src/image-normalization-policy";
+import {
+  isRequiredDocumentDeliverable,
+  isTextConvertibleDocumentFormat,
+  resolveDocumentDeliverableFormat,
+  type DocumentFormat
+} from "../../../packages/shared/src/document-delivery-policy";
 import { inspectVideoFile } from "../../../packages/shared/src/video-file-inspection";
 import { resolveProviderVideoResumeReference } from "../../../packages/shared/src/provider-video-resume";
 import { preflightTaskExecution } from "../../../packages/runtime/src/task-preflight";
@@ -113,6 +120,12 @@ import {
   inspectRasterImageFile,
   normalizeImageArtifact
 } from "./image-normalization";
+import {
+  DocumentNormalizationError,
+  discoverDocumentFiles,
+  normalizeDocumentArtifact,
+  type DocumentFileInspection
+} from "./document-normalization";
 import { loadClusterConfig, type LoadedClusterConfig } from "./config/cluster";
 import { deliverOutboundMessage } from "./egress/dispatcher";
 import {
@@ -2084,6 +2097,18 @@ export async function runStageAgent(input: {
     upstreamArtifactPath: upstreamArtifact?.uri ?? null
   });
   const isMediaProviderDirectStage = stage.stageType === "image" || stage.stageType === "video";
+  const requiredDocumentFormats = (job.orchestrationPlan?.deliverables ?? [])
+    .filter(isRequiredDocumentDeliverable)
+    .map(resolveDocumentDeliverableFormat)
+    .filter((format): format is DocumentFormat => format !== null);
+  const documentProductionInstructions = requiredDocumentFormats.length > 0 && !isMediaProviderDirectStage
+    ? [
+        `Required document formats: ${[...new Set(requiredDocumentFormats)].join(", ")}.`,
+        "Return the complete deliverable body, not a summary or a promise to create it later.",
+        "For JSON or CSV, return only valid raw structured content without Markdown fences.",
+        "When native tools are available, write requested DOCX/PDF/PPTX/XLSX files inside the assigned output directory and report their exact paths. Never rename plain text to an Office or PDF extension."
+      ].join("\n")
+    : "";
   await appendJobEvent(input.jobId, "stage.agent_prompt_context_loaded", {
     stageId: stage.id,
     agentId: stage.agentId,
@@ -2102,6 +2127,7 @@ export async function runStageAgent(input: {
     `User task: ${truncateForPrompt(job.rawPrompt, 4000)}`,
     `Stage type: ${stage.stageType}`,
     `Stage name: ${stage.name}`,
+    documentProductionInstructions,
     upstreamPromptContext ? `Upstream artifact context:\n${upstreamPromptContext}` : "",
     stage.stageType === "image"
       ? "Generate the requested image/poster directly. Use the user task as the visual brief."
@@ -2122,6 +2148,7 @@ export async function runStageAgent(input: {
     `阶段编号：${stage.stageIndex}`,
     `阶段类型：${stage.stageType}`,
     `阶段任务：${stage.name}`,
+    documentProductionInstructions,
     `输出目录（Windows）：${stageDir}`,
     `输出目录（WSL）：${toWslPath(stageDir)}`,
     `工作日志路径（Windows）：${workLogPath}`,
@@ -2155,6 +2182,7 @@ export async function runStageAgent(input: {
     mode: input.attemptNo === 1 ? "production" : "correction",
     status: quality === "needs_fix" ? "needs_retry" : "completed",
     artifact_path: "",
+    document_content_path: "",
     work_log_path: workLogPath,
     summary_path: workLogPath,
     upstream_artifact_paths: upstreamArtifact?.uri ? [upstreamArtifact.uri] : [],
@@ -2202,6 +2230,10 @@ export async function runStageAgent(input: {
     )}-output.json`
   );
   const outputMdPath = path.join(stageDir, `output-attempt-${input.attemptNo}.md`);
+  const documentContentPath = path.join(
+    stageDir,
+    `content-attempt-${input.attemptNo}.md`
+  );
   const generatedArtifactLines = (openClawResult?.artifacts ?? []).flatMap((artifact, index) => [
     `Generated artifact ${index + 1}:`,
     artifact.filePath ? `- File: ${artifact.filePath}` : "",
@@ -2209,8 +2241,10 @@ export async function runStageAgent(input: {
     artifact.note ? `- Note: ${artifact.note}` : ""
   ]).filter(Boolean);
   output.artifact_path = outputMdPath;
+  output.document_content_path = documentContentPath;
 
   await writeFile(stateJsonPath, `${JSON.stringify(output, null, 2)}\n`, "utf8");
+  await writeFile(documentContentPath, `${output.summary.trimEnd()}\n`, "utf8");
   await writeFile(
     outputMdPath,
     [
@@ -2250,6 +2284,7 @@ export async function runStageAgent(input: {
     uri: stateJsonPath,
     metadata: {
       markdownPath: outputMdPath,
+      documentContentPath,
       workLogPath,
       stateJsonPath,
       agentSessionId,
@@ -3009,17 +3044,144 @@ function requestedDeliveryFileName(input: {
   job: JobRecord;
   deliverableIndex: number;
   format: string | null;
-  kind: "image" | "video";
+  kind: TaskDeliverable["kind"];
 }) {
   const baseName = input.job.displayTitle?.trim() || input.job.orchestrationPlan?.title?.trim() || "Honeycomb 产物";
-  const requiredMedia = (input.job.orchestrationPlan?.deliverables ?? []).filter(
-    (deliverable) => deliverable.required && (deliverable.kind === "image" || deliverable.kind === "video")
-  );
-  const suffix = requiredMedia.length > 1 ? `-${input.deliverableIndex + 1}` : "";
+  const requiredFileIndexes = (input.job.orchestrationPlan?.deliverables ?? [])
+    .map((deliverable, deliverableIndex) => ({ deliverable, deliverableIndex }))
+    .filter(({ deliverable }) =>
+      deliverable.required &&
+      (deliverable.kind === "image" || deliverable.kind === "video" ||
+        isRequiredDocumentDeliverable(deliverable))
+    )
+    .map(({ deliverableIndex }) => deliverableIndex);
+  const position = requiredFileIndexes.indexOf(input.deliverableIndex) + 1;
+  const suffix = requiredFileIndexes.length > 1 ? `-${Math.max(1, position)}` : "";
   const extension = input.format === "jpeg"
     ? "jpg"
-    : input.format ?? (input.kind === "video" ? "mp4" : "png");
+    : input.format ?? (input.kind === "video" ? "mp4" : input.kind === "image" ? "png" : "md");
   return `${baseName}${suffix}.${extension}`;
+}
+
+type FinalizationDocumentSource = {
+  artifactId: string;
+  stageId: string;
+  stageIndex: number;
+  stageType: string;
+  filePath: string;
+  inspection: DocumentFileInspection;
+  managedPriority: number;
+};
+
+function documentStagePriority(stageType: string) {
+  const normalized = stageType.trim().toLowerCase();
+  if (normalized.includes("write") || normalized.includes("writing") ||
+      normalized.includes("writer") || normalized.includes("report")) {
+    return 0;
+  }
+  if (normalized.includes("research") || normalized.includes("analysis")) {
+    return 1;
+  }
+  if (normalized.includes("image") || normalized.includes("video") || normalized.includes("test")) {
+    return 3;
+  }
+  return 2;
+}
+
+function sortDocumentSources(left: FinalizationDocumentSource, right: FinalizationDocumentSource) {
+  return documentStagePriority(left.stageType) - documentStagePriority(right.stageType) ||
+    left.managedPriority - right.managedPriority ||
+    right.stageIndex - left.stageIndex ||
+    left.filePath.localeCompare(right.filePath);
+}
+
+function documentPathKey(filePath: string) {
+  const resolved = path.resolve(filePath);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+async function collectFinalizationDocumentSources(input: {
+  workdir: string;
+  stages: Array<{
+    stage: StageRecord;
+    artifactId: string | null;
+    executionMode: string | null;
+    documentContentPath: string | null;
+    markdownPath: string | null;
+  }>;
+}) {
+  const candidates = new Map<string, FinalizationDocumentSource>();
+  const rejected: Array<{
+    stageId: string;
+    filePath: string;
+    code: string;
+  }> = [];
+  for (const entry of input.stages) {
+    if (!entry.artifactId) {
+      continue;
+    }
+    if (entry.executionMode === "mock") {
+      continue;
+    }
+    const directories = [...new Set(
+      [entry.documentContentPath, entry.markdownPath]
+        .filter((filePath): filePath is string => Boolean(filePath))
+        .map((filePath) => path.dirname(filePath))
+    )];
+    for (const directory of directories) {
+      let discovery;
+      try {
+        discovery = await discoverDocumentFiles({
+          directory,
+          workdir: input.workdir
+        });
+      } catch (error) {
+        rejected.push({
+          stageId: entry.stage.id,
+          filePath: directory,
+          code: error instanceof DocumentNormalizationError
+            ? error.code
+            : "document_output_invalid"
+        });
+        continue;
+      }
+      for (const rejection of discovery.rejected) {
+        rejected.push({
+          stageId: entry.stage.id,
+          ...rejection
+        });
+      }
+      for (const file of discovery.files) {
+        const baseName = path.basename(file.filePath).toLowerCase();
+        const managedPriority = entry.documentContentPath &&
+            path.resolve(file.filePath) === path.resolve(entry.documentContentPath)
+          ? 1
+          : entry.markdownPath && path.resolve(file.filePath) === path.resolve(entry.markdownPath)
+            ? 2
+            : /^(?:content|output)-attempt-\d+\.md$/.test(baseName)
+              ? 2
+              : 0;
+        const candidate: FinalizationDocumentSource = {
+          artifactId: entry.artifactId,
+          stageId: entry.stage.id,
+          stageIndex: entry.stage.stageIndex,
+          stageType: entry.stage.stageType,
+          filePath: file.filePath,
+          inspection: file.inspection,
+          managedPriority
+        };
+        const key = documentPathKey(file.filePath);
+        const previous = candidates.get(key);
+        if (!previous || sortDocumentSources(candidate, previous) < 0) {
+          candidates.set(key, candidate);
+        }
+      }
+    }
+  }
+  return {
+    sources: [...candidates.values()].sort(sortDocumentSources),
+    rejected
+  };
 }
 
 export async function isArtifactDeliveryReadyForFinalization(jobId: string) {
@@ -3389,8 +3551,16 @@ export async function finalizeJob(jobId: string) {
       const parsed = parseArtifactJson(outputArtifact);
       return {
         stage,
+        artifactId: outputArtifact?.id ?? null,
+        executionMode: parsed?.openclaw &&
+            typeof parsed.openclaw === "object" &&
+            !Array.isArray(parsed.openclaw)
+          ? asString((parsed.openclaw as Record<string, unknown>).mode)
+          : null,
         summary: (asString(parsed?.summary) ?? parseArtifactSummary(outputArtifact)) || "No summary recorded.",
         artifactPath: asString(parsed?.artifact_path) ?? outputArtifact?.uri ?? null,
+        documentContentPath: asString(outputArtifact?.metadata.documentContentPath),
+        markdownPath: asString(outputArtifact?.metadata.markdownPath),
         generatedArtifacts: extractGeneratedMediaArtifacts(parsed).map((generated, generatedIndex) => ({
           ...generated,
           artifactId: outputArtifact?.id ?? null,
@@ -3655,6 +3825,253 @@ export async function finalizeJob(jobId: string) {
       finalPath: null
     };
   }
+
+  const documentDiscovery = await collectFinalizationDocumentSources({
+    workdir,
+    stages: stageSummaries.map((summary) => ({
+      stage: summary.stage,
+      artifactId: summary.artifactId,
+      executionMode: summary.executionMode,
+      documentContentPath: summary.documentContentPath,
+      markdownPath: summary.markdownPath
+    }))
+  });
+  if (documentDiscovery.rejected.length > 0) {
+    await appendJobEvent(jobId, "artifact.document_candidates_rejected", {
+      rejected: documentDiscovery.rejected.slice(0, 50),
+      omittedCount: Math.max(0, documentDiscovery.rejected.length - 50)
+    }, { actor: "document-normalizer" });
+  }
+  const requiredDocuments = (job.orchestrationPlan?.deliverables ?? [])
+    .map((deliverable, deliverableIndex) => ({
+      deliverable,
+      deliverableIndex,
+      format: resolveDocumentDeliverableFormat(deliverable)
+    }))
+    .filter((entry): entry is typeof entry & { format: DocumentFormat } =>
+      isRequiredDocumentDeliverable(entry.deliverable) && entry.format !== null
+    );
+  const documentMatches: Array<{
+    deliverableIndex: number;
+    format: DocumentFormat;
+    artifactFile: NonNullable<Awaited<ReturnType<typeof upsertArtifactFile>>>;
+  }> = [];
+  const documentFailures: Array<{
+    deliverableIndex: number;
+    format: DocumentFormat;
+    code: string;
+    message: string;
+    details: Record<string, unknown>;
+  }> = [];
+  const usedExactDocumentPaths = new Set<string>();
+  const usedConvertibleSources = new Set<string>();
+  const documentTitle = job.displayTitle?.trim() ||
+    job.orchestrationPlan?.title?.trim() ||
+    "Honeycomb 文档";
+
+  for (const requirement of requiredDocuments) {
+    const exact = documentDiscovery.sources.find((source) =>
+      source.inspection.format === requirement.format &&
+      !usedExactDocumentPaths.has(source.filePath)
+    );
+    if (exact) {
+      usedExactDocumentPaths.add(exact.filePath);
+      usedConvertibleSources.add(`${requirement.format}:${exact.artifactId}`);
+      const pathFingerprint = createHash("sha256")
+        .update(exact.filePath)
+        .digest("hex")
+        .slice(0, 12);
+      const artifactFile = await upsertArtifactFile({
+        id: `${exact.artifactId}-DOCUMENT-${pathFingerprint}`,
+        artifactId: exact.artifactId,
+        jobId,
+        stageId: exact.stageId,
+        kind: "document",
+        status: "available",
+        filePath: exact.filePath,
+        externalUrl: null,
+        fileName: path.basename(exact.filePath),
+        mimeType: exact.inspection.mimeType,
+        format: exact.inspection.format,
+        sizeBytes: exact.inspection.sizeBytes,
+        width: null,
+        height: null,
+        checksumSha256: exact.inspection.checksumSha256,
+        source: exact.managedPriority === 0
+          ? "agent-generated-document"
+          : "honeycomb-stage-content",
+        error: null,
+        metadata: {
+          normalized: false,
+          requestedFormat: requirement.format,
+          pageCount: exact.inspection.pageCount,
+          entryCount: exact.inspection.entryCount,
+          textCharacters: exact.inspection.textCharacters
+        }
+      });
+      documentMatches.push({
+        deliverableIndex: requirement.deliverableIndex,
+        format: requirement.format,
+        artifactFile
+      });
+      continue;
+    }
+
+    if (!isTextConvertibleDocumentFormat(requirement.format)) {
+      documentFailures.push({
+        deliverableIndex: requirement.deliverableIndex,
+        format: requirement.format,
+        code: "document_exact_format_missing",
+        message: `No validated ${requirement.format.toUpperCase()} file was produced by a child agent.`,
+        details: {}
+      });
+      continue;
+    }
+    const source = documentDiscovery.sources.find((candidate) =>
+      (candidate.inspection.format === "md" || candidate.inspection.format === "txt") &&
+      !usedConvertibleSources.has(`${requirement.format}:${candidate.artifactId}`)
+    );
+    if (!source) {
+      documentFailures.push({
+        deliverableIndex: requirement.deliverableIndex,
+        format: requirement.format,
+        code: "document_text_source_missing",
+        message: "No validated child-agent text source is available for document generation.",
+        details: {
+          rejectedCandidates: documentDiscovery.rejected.slice(0, 20)
+        }
+      });
+      continue;
+    }
+    usedConvertibleSources.add(`${requirement.format}:${source.artifactId}`);
+
+    await heartbeat(
+      jobId,
+      "finalize.document_normalizing",
+      `deliverable=${requirement.deliverableIndex};format=${requirement.format}`,
+      source.stageId
+    );
+    await appendJobEvent(jobId, "artifact.document_normalization_started", {
+      deliverableIndex: requirement.deliverableIndex,
+      sourcePath: source.filePath,
+      requestedFormat: requirement.format
+    }, {
+      actor: "document-normalizer",
+      stageId: source.stageId,
+      artifactId: source.artifactId
+    });
+    try {
+      const normalized = await normalizeDocumentArtifact({
+        sourcePath: source.filePath,
+        workdir,
+        deliverableIndex: requirement.deliverableIndex,
+        requestedFormat: requirement.format,
+        title: documentTitle
+      });
+      const artifactFile = await upsertArtifactFile({
+        id: `${source.artifactId}-DOCUMENT-NORMALIZED-${(requirement.deliverableIndex + 1)
+          .toString()
+          .padStart(2, "0")}`,
+        artifactId: source.artifactId,
+        jobId,
+        stageId: source.stageId,
+        kind: "document",
+        status: "available",
+        filePath: normalized.filePath,
+        externalUrl: null,
+        fileName: normalized.fileName,
+        mimeType: normalized.mimeType,
+        format: normalized.format,
+        sizeBytes: normalized.sizeBytes,
+        width: null,
+        height: null,
+        checksumSha256: normalized.checksumSha256,
+        source: "honeycomb-document-normalizer",
+        error: null,
+        metadata: {
+          normalized: true,
+          sourcePath: source.filePath,
+          sourceChecksumSha256: normalized.sourceChecksumSha256,
+          requestedFormat: requirement.format,
+          transformed: normalized.transformed,
+          reused: normalized.reused,
+          pageCount: normalized.pageCount,
+          entryCount: normalized.entryCount,
+          textCharacters: normalized.textCharacters
+        }
+      });
+      documentMatches.push({
+        deliverableIndex: requirement.deliverableIndex,
+        format: requirement.format,
+        artifactFile
+      });
+      await appendJobEvent(jobId, "artifact.document_normalized", {
+        deliverableIndex: requirement.deliverableIndex,
+        sourcePath: source.filePath,
+        artifactFileId: artifactFile.id,
+        format: normalized.format,
+        sizeBytes: normalized.sizeBytes,
+        checksumSha256: normalized.checksumSha256,
+        pageCount: normalized.pageCount,
+        entryCount: normalized.entryCount,
+        reused: normalized.reused
+      }, {
+        actor: "document-normalizer",
+        stageId: source.stageId,
+        artifactId: source.artifactId
+      });
+    } catch (error) {
+      const code = error instanceof DocumentNormalizationError
+        ? error.code
+        : "document_normalization_failed";
+      const details = error instanceof DocumentNormalizationError ? error.details : {};
+      const message = error instanceof Error ? error.message.slice(0, 500) : code;
+      documentFailures.push({
+        deliverableIndex: requirement.deliverableIndex,
+        format: requirement.format,
+        code,
+        message,
+        details
+      });
+      await appendJobEvent(jobId, "artifact.document_normalization_failed", {
+        deliverableIndex: requirement.deliverableIndex,
+        sourcePath: source.filePath,
+        requestedFormat: requirement.format,
+        code,
+        message,
+        details
+      }, {
+        actor: "document-normalizer",
+        stageId: source.stageId,
+        artifactId: source.artifactId
+      });
+    }
+  }
+
+  if (documentFailures.length > 0) {
+    await setJobStatus(jobId, "waiting_for_human", {
+      reason: "required_document_delivery_missing",
+      issues: documentFailures
+    });
+    await appendJobEvent(jobId, "final.delivery_blocked", {
+      reason: "required_document_delivery_missing",
+      issues: documentFailures,
+      discoveredDocuments: documentDiscovery.sources.map((source) => ({
+        stageId: source.stageId,
+        format: source.inspection.format,
+        filePath: source.filePath,
+        sizeBytes: source.inspection.sizeBytes
+      }))
+    });
+    return {
+      status: "waiting_for_human" as const,
+      finalOutput: "",
+      finalArtifactId: null,
+      finalPath: null
+    };
+  }
+
+  let plannedDeliveryCount = 0;
   for (const match of mediaAssessment.matches) {
     const deliverable = job.orchestrationPlan?.deliverables[match.deliverableIndex];
     const artifactFile = deliveryArtifactFiles[match.candidateIndex];
@@ -3690,8 +4107,43 @@ export async function finalizeJob(jobId: string) {
         height: deliverable.height
       }
     });
+    plannedDeliveryCount += 1;
   }
-  if (mediaAssessment.matches.length > 0) {
+  for (const match of documentMatches) {
+    const deliverable = job.orchestrationPlan?.deliverables[match.deliverableIndex];
+    if (!deliverable || !isRequiredDocumentDeliverable(deliverable)) {
+      throw new Error(`Document delivery match is incomplete for deliverable ${match.deliverableIndex}`);
+    }
+    await ensureArtifactDelivery({
+      id: `${jobId}-DELIVERY-${(match.deliverableIndex + 1).toString().padStart(2, "0")}`,
+      jobId,
+      artifactFileId: match.artifactFile.id,
+      deliverableIndex: match.deliverableIndex,
+      required: deliverable.required,
+      target: deliverable.target,
+      targetPath: deliverable.targetPath,
+      requestedFileName: requestedDeliveryFileName({
+        job,
+        deliverableIndex: match.deliverableIndex,
+        format: match.format,
+        kind: deliverable.kind
+      }),
+      initialStatus: deliverable.target === "conversation" ? "succeeded" : "pending",
+      expectedSizeBytes: match.artifactFile.sizeBytes,
+      expectedChecksumSha256: match.artifactFile.checksumSha256,
+      deliveredPath: deliverable.target === "conversation"
+        ? `/jobs/${jobId}/artifact-files/${match.artifactFile.id}/content`
+        : null,
+      metadata: {
+        kind: "document",
+        requestedKind: deliverable.kind,
+        description: deliverable.description,
+        format: match.format
+      }
+    });
+    plannedDeliveryCount += 1;
+  }
+  if (plannedDeliveryCount > 0) {
     const deliverySummary = await getArtifactDeliverySummary(jobId);
     if (!deliverySummary.readyToFinalize) {
       const authorizationBlocked = deliverySummary.deliveries.some(
@@ -3745,6 +4197,9 @@ export async function finalizeJob(jobId: string) {
   const executionMode = isOpenClawRealMode()
     ? `real provider-backed execution (${resolveOpenClawAgentRunner({ runner: getOpenClawAgentRunner() })})`
     : "mock execution";
+  const completedDeliveries = plannedDeliveryCount > 0
+    ? (await getArtifactDeliverySummary(jobId)).deliveries
+    : [];
   const stageLines = stageSummaries.flatMap(({ stage, summary, artifactPath, generatedArtifacts }) => [
     `- ${stage.stageIndex}. ${stage.name} (${stage.agentId})`,
     `  Status: ${stage.status}`,
@@ -3764,6 +4219,11 @@ export async function finalizeJob(jobId: string) {
     "",
     "Completed stages:",
     ...stageLines,
+    "",
+    completedDeliveries.length > 0 ? "Delivered files:" : "No separate file delivery was required.",
+    ...completedDeliveries.map((delivery) =>
+      `- ${delivery.requestedFileName}: ${delivery.deliveredPath ?? delivery.status}`
+    ),
     "",
     discussionSynthesis
       ? ["Main-agent discussion synthesis:", "", discussionSynthesis.content ?? ""].join("\n")

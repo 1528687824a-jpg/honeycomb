@@ -281,13 +281,35 @@ The media success gate and durable Windows desktop delivery loop are implemented
 - `npm run smoke:artifact-destination-authorization` covers registration/grant
   requirements, authorization refresh, receipt boundaries, revocation, and the
   defined behavior for a delivery that already owns a short lease.
-- All 168 unit tests, TypeScript build/check, desktop production build,
+- Explicit MD, TXT, JSON, CSV, PDF, DOCX, PPTX, and XLSX requests now create a
+  required document-file gate. Ordinary conversation text remains a chat reply
+  and does not create a file only for internal bookkeeping.
+- Child-agent document files are inspected from their bytes. PDF page structure
+  and OOXML package roots are validated; fake extensions, malformed archives,
+  encrypted/path-traversing ZIP entries, expansion bombs, and paths outside the
+  job work directory cannot become canonical artifacts.
+- Validated child-agent text can be converted to MD, TXT, PDF, and DOCX. JSON
+  and CSV are emitted only when the source already parses as that exact
+  structure; Honeycomb never invents rows or fields. PPTX/XLSX require a real
+  child-agent-created OOXML file.
+- PDF generation embeds a CJK-capable font. Windows uses an installed Chinese
+  system font and the Linux worker image installs Noto Sans CJK. Mock stage
+  output is excluded, so a simulation cannot satisfy a real document request.
+- Derived document paths are content/specification-addressed. Valid results are
+  reused before regeneration; corrupt interrupted results are rebuilt through a
+  flushed temporary file, structural reinspection, and atomic rename.
+- Canonical document rows use the same authenticated download and durable
+  destination-delivery protocol as media. Missing or malformed required files
+  leave the task paused with an explicit document-delivery reason.
+- See [`document-artifact-normalization.md`](document-artifact-normalization.md)
+  for the completion contract, limits, and focused verification command.
+- All 178 unit tests, TypeScript build/check, desktop production build,
   dependency audit, cross-platform Sharp lock verification, Compose validation,
   package-layout check, no-secrets check, and diff whitespace check pass.
 
-Stage 3 still needs document artifact normalization. PostgreSQL and Docker
-Desktop remained stopped, so the migration-backed smoke scripts have not yet
-been executed.
+Stage 3 is complete in code. PostgreSQL and Docker Desktop remained stopped, so
+the migration-backed smoke scripts have not yet been executed. The next active
+slice is Stage 4: real behavioral regression for all four routing modes.
 
 ## Current Backend Status
 

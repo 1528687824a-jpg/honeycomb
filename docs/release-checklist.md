@@ -102,6 +102,7 @@ npm run test:unit
 npm run check:no-secrets
 npm audit --omit=dev
 node --import tsx --test tests/image-normalization.test.ts tests/image-normalization-policy.test.ts tests/artifact-delivery-policy.test.ts
+node --import tsx --test tests/document-delivery-policy.test.ts tests/document-normalization.test.ts tests/orchestration-contract.test.ts
 npm run smoke:docker-compose
 npm run smoke:http-only
 npm run smoke:m3-config

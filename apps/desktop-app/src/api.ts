@@ -1389,7 +1389,7 @@ export type CanonicalArtifactFile = {
   artifactId: string;
   jobId: string;
   stageId: string | null;
-  kind: "image" | "video";
+  kind: "image" | "video" | "document";
   status: "available" | "remote_only" | "download_failed" | "missing";
   filePath: string | null;
   externalUrl: string | null;

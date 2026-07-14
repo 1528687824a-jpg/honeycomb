@@ -2657,7 +2657,7 @@ function App() {
         ]
           .includes(job.heartbeatNote ?? "")
       ) {
-        void maybeExportGeneratedMediaToDesktop(job);
+        void maybeDeliverArtifactsToDesktop(job);
       }
     }
     return nextSelectedId;
@@ -2696,7 +2696,7 @@ function App() {
     }
   }
 
-  async function maybeExportGeneratedMediaToDesktop(job: JobRecord) {
+  async function maybeDeliverArtifactsToDesktop(job: JobRecord) {
     const durableDeliveryPending = job.status === "waiting_for_human" && [
       "artifact_delivery_pending",
       "artifact_delivery_authorization_required",
@@ -2782,7 +2782,7 @@ function App() {
           await finalizeArtifactDeliveries(job.id).catch(() => undefined);
         }
       } catch (caught) {
-        console.warn("Failed to deliver generated media", caught);
+        console.warn("Failed to deliver generated artifacts", caught);
       } finally {
         deliveryProcessingJobIds.current.delete(job.id);
       }
@@ -2870,7 +2870,7 @@ function App() {
     setSelectedJob(job);
     setUnknownOutcomes(nextUnknownOutcomes);
     setArtifactDeliveries(nextArtifactDeliveries);
-    void maybeExportGeneratedMediaToDesktop(job);
+    void maybeDeliverArtifactsToDesktop(job);
     setTimeline((currentTimeline) => {
       if (!timelineCursor || currentTimeline?.job.id !== targetJobId) {
         return nextTimeline;
@@ -5593,28 +5593,40 @@ function App() {
             ) : null}
 
             {selectedFromList?.status === "waiting_for_human" &&
-            ["required_media_delivery_missing", "required_image_normalization_failed"]
+            [
+              "required_media_delivery_missing",
+              "required_image_normalization_failed",
+              "required_document_delivery_missing"
+            ]
               .includes(selectedFromList.heartbeatNote ?? "") ? (
               <section className="jobPreflightNotice" role="alert">
                 <AlertTriangle size={18} aria-hidden="true" />
                 <div>
                   <h3>
                     {language === "zh"
-                      ? selectedFromList.heartbeatNote === "required_image_normalization_failed"
-                        ? "图片无法安全转换为目标规格"
-                        : "真实媒体文件尚未达到交付标准"
-                      : selectedFromList.heartbeatNote === "required_image_normalization_failed"
-                        ? "The image could not be safely normalized"
-                        : "The media file is not ready for delivery"}
+                      ? selectedFromList.heartbeatNote === "required_document_delivery_missing"
+                        ? "文档文件尚未达到交付标准"
+                        : selectedFromList.heartbeatNote === "required_image_normalization_failed"
+                          ? "图片无法安全转换为目标规格"
+                          : "真实媒体文件尚未达到交付标准"
+                      : selectedFromList.heartbeatNote === "required_document_delivery_missing"
+                        ? "The document file is not ready for delivery"
+                        : selectedFromList.heartbeatNote === "required_image_normalization_failed"
+                          ? "The image could not be safely normalized"
+                          : "The media file is not ready for delivery"}
                   </h3>
                   <p>
                     {language === "zh"
-                      ? selectedFromList.heartbeatNote === "required_image_normalization_failed"
-                        ? "源图的比例差异过大、文件无法读取，或输出超过安全限制。Honeycomb 没有强行裁切或交付错误文件。"
-                        : "Honeycomb 没有找到可下载的本地图片或视频，或者文件格式、尺寸与任务要求不一致，因此没有把任务标记为成功。"
-                      : selectedFromList.heartbeatNote === "required_image_normalization_failed"
-                        ? "The source aspect ratio is too different, the file is unreadable, or the output exceeds safety limits. Honeycomb did not force a destructive crop or deliver a bad file."
-                        : "Honeycomb did not find a downloadable local image or video, or its format or dimensions do not match the task. The task was not marked successful."}
+                      ? selectedFromList.heartbeatNote === "required_document_delivery_missing"
+                        ? "Honeycomb 没有找到真实文档，文件结构无法通过解析，或 Agent 的文字不能安全转换成要求的格式。任务不会用错误扩展名冒充 DOCX、PDF 或其他文档。"
+                        : selectedFromList.heartbeatNote === "required_image_normalization_failed"
+                          ? "源图的比例差异过大、文件无法读取，或输出超过安全限制。Honeycomb 没有强行裁切或交付错误文件。"
+                          : "Honeycomb 没有找到可下载的本地图片或视频，或者文件格式、尺寸与任务要求不一致，因此没有把任务标记为成功。"
+                      : selectedFromList.heartbeatNote === "required_document_delivery_missing"
+                        ? "Honeycomb found no real document, its structure failed parsing, or the agent text could not be safely converted to the requested format. A renamed fake DOCX or PDF is never delivered."
+                        : selectedFromList.heartbeatNote === "required_image_normalization_failed"
+                          ? "The source aspect ratio is too different, the file is unreadable, or the output exceeds safety limits. Honeycomb did not force a destructive crop or deliver a bad file."
+                          : "Honeycomb did not find a downloadable local image or video, or its format or dimensions do not match the task. The task was not marked successful."}
                   </p>
                 </div>
               </section>

@@ -738,7 +738,7 @@ export type ArtifactFileRecord = {
   artifactId: string;
   jobId: string;
   stageId: string | null;
-  kind: "image" | "video";
+  kind: "image" | "video" | "document";
   status: ArtifactFileStatus;
   filePath: string | null;
   externalUrl: string | null;

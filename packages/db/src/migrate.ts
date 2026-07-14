@@ -143,7 +143,7 @@ const statements = [
     artifact_id text not null references agent.artifacts(id) on delete cascade,
     job_id text not null references agent.jobs(id) on delete cascade,
     stage_id text references agent.job_stages(id),
-    kind text not null check (kind in ('image', 'video')),
+    kind text not null check (kind in ('image', 'video', 'document')),
     status text not null check (status in ('available', 'remote_only', 'download_failed', 'missing')),
     file_path text,
     external_url text,
@@ -607,6 +607,20 @@ const statements = [
     where stalled_at is not null`,
   `create index if not exists artifacts_job_id_created_at_idx
     on agent.artifacts(job_id, created_at)`,
+  `do $$ begin
+     if not exists (
+       select 1
+       from pg_constraint
+       where conrelid = 'agent.artifact_files'::regclass
+         and conname = 'artifact_files_kind_check'
+         and pg_get_constraintdef(oid) like '%document%'
+     ) then
+       alter table agent.artifact_files drop constraint if exists artifact_files_kind_check;
+       alter table agent.artifact_files
+         add constraint artifact_files_kind_check
+         check (kind in ('image', 'video', 'document'));
+     end if;
+   end $$`,
   `create index if not exists artifact_files_job_id_created_at_idx
     on agent.artifact_files(job_id, created_at)`,
   `create index if not exists artifact_files_artifact_id_idx

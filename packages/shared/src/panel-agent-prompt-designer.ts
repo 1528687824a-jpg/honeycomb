@@ -143,6 +143,8 @@ const agentPromptTemplates: Record<string, AgentPromptTemplate> = {
       "Write for the user's target audience, not for a generic audience.",
       "Keep structure clear and the logical or narrative line easy to follow.",
       "Use the user's requested tone, length, and delivery format.",
+      "Write the complete deliverable into the assigned output directory. For JSON/CSV use valid raw structured content; for DOCX/PDF/PPTX/XLSX use a real generator or tool and verify the resulting file can be opened.",
+      "Never satisfy a file request by renaming Markdown or plain text to another extension.",
       "When upstream facts are insufficient, weaken, remove, or mark the claim instead of fabricating."
     ],
     qualityChecks: [
@@ -154,6 +156,7 @@ const agentPromptTemplates: Record<string, AgentPromptTemplate> = {
     outputContract: [
       "产出完成",
       "产物路径：{text deliverable path}",
+      "产物格式：{actual validated format}",
       "工作日志路径：{agent-work-log.md path}",
       "状态JSON路径：{stage-*-writing-output.json path}"
     ],

@@ -60,6 +60,32 @@ async function main() {
     expectedSizeBytes: 128,
     expectedChecksumSha256: checksum
   });
+  const documentChecksum = "b".repeat(64);
+  const documentFile = await upsertArtifactFile({
+    id: `${artifact.id}-FILE-02`,
+    artifactId: artifact.id,
+    jobId: job.id,
+    kind: "document",
+    status: "available",
+    filePath: `/app/data/jobs/${job.id}/report.docx`,
+    fileName: "report.docx",
+    mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    format: "docx",
+    sizeBytes: 256,
+    checksumSha256: documentChecksum,
+    source: "honeycomb-document-normalizer"
+  });
+  const documentDelivery = await ensureArtifactDelivery({
+    id: `${job.id}-DELIVERY-02`,
+    jobId: job.id,
+    artifactFileId: documentFile.id,
+    deliverableIndex: 1,
+    required: true,
+    target: "desktop",
+    requestedFileName: "report.docx",
+    expectedSizeBytes: 256,
+    expectedChecksumSha256: documentChecksum
+  });
   assert.equal((await getArtifactDeliverySummary(job.id)).readyToFinalize, false);
 
   const concurrentClaims = await Promise.all([
@@ -99,6 +125,21 @@ async function main() {
     deliveredChecksumSha256: checksum.toUpperCase()
   });
   assert.equal(completed.completed, true);
+  assert.equal((await getArtifactDeliverySummary(job.id)).readyToFinalize, false);
+
+  const documentClaim = await claimArtifactDelivery({
+    jobId: job.id,
+    deliveryId: documentDelivery.id
+  });
+  assert.equal(documentClaim.claimed, true);
+  assert.equal((await completeArtifactDelivery({
+    jobId: job.id,
+    deliveryId: documentDelivery.id,
+    claimToken: documentClaim.claimToken!,
+    deliveredPath: "C:\\Desktop\\report.docx",
+    deliveredSizeBytes: 256,
+    deliveredChecksumSha256: documentChecksum
+  })).completed, true);
   assert.equal((await getArtifactDeliverySummary(job.id)).readyToFinalize, true);
 
   await setJobStatus(job.id, "waiting_for_human", { reason: "artifact_delivery_pending" });
@@ -114,9 +155,11 @@ async function main() {
     jobId: job.id,
     checked: [
       "canonical_artifact_file",
+      "canonical_document_artifact_file",
       "single_concurrent_delivery_claim",
       "receipt_size_and_checksum_gate",
       "failed_delivery_retry",
+      "all_required_media_and_document_deliveries_gate_finalization",
       "single_finalization_claim",
       "late_workflow_write_preserves_terminal_status"
     ]

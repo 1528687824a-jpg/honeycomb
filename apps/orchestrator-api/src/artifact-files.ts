@@ -256,7 +256,13 @@ export function extractArtifactFileRefs(
 
   const metadata = artifact.metadata ?? {};
   const metadataFilePaths: Array<string | null> = [];
-  for (const key of ["markdownPath", "workLogPath", "stateJsonPath", "finalPath"] as const) {
+  for (const key of [
+    "documentContentPath",
+    "markdownPath",
+    "workLogPath",
+    "stateJsonPath",
+    "finalPath"
+  ] as const) {
     const filePath = asString(metadata[key]);
     metadataFilePaths.push(filePath);
     addPath({

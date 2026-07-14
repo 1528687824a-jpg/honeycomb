@@ -52,6 +52,24 @@ test("research report fallback selects research then writing", () => {
   assert.deepEqual(plan.stages.map((stage) => stage.stageType), ["research", "write"]);
 });
 
+test("explicit DOCX desktop work selects writing and preserves the real file requirement", () => {
+  const plan = buildDeterministicTaskPlan({
+    rawPrompt: "写一份茶道活动总结报告，DOCX 格式，完成后放到桌面"
+  });
+
+  assert.deepEqual(plan.selectedAgents, ["writer-agent"]);
+  assert.deepEqual(plan.deliverables, [{
+    kind: "text",
+    description: "Requested task result",
+    required: true,
+    format: "docx",
+    width: null,
+    height: null,
+    target: "desktop",
+    targetPath: null
+  }]);
+});
+
 test("decision discussion fallback uses discussion mode and multiple viewpoints", () => {
   const plan = buildDeterministicTaskPlan({
     rawPrompt: "请比较本地部署和云部署，组织多方讨论各自取舍后给出方案选择"
