@@ -14,6 +14,7 @@ import {
   extractOpenClawUsage,
   extractProviderDirectChatText,
   persistMediaCandidates,
+  ProviderDirectResponseError,
   resolveOpenClawAgentRunner,
   runOpenClawAgent,
   selectProviderDirectKind,
@@ -307,6 +308,68 @@ test("provider-direct requests stop when the job cancellation signal aborts", as
     await assert.rejects(pending, { message: "job_cancelled" });
   } finally {
     if (responseTimer) clearTimeout(responseTimer);
+    if (previousMode === undefined) {
+      delete process.env.OPENCLAW_AGENT_MODE;
+    } else {
+      process.env.OPENCLAW_AGENT_MODE = previousMode;
+    }
+    if (previousRunner === undefined) {
+      delete process.env.OPENCLAW_AGENT_RUNNER;
+    } else {
+      process.env.OPENCLAW_AGENT_RUNNER = previousRunner;
+    }
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("provider-direct errors preserve status, provider code, and Retry-After", async () => {
+  let idempotencyKey: string | string[] | undefined;
+  const server = http.createServer((request, response) => {
+    idempotencyKey = request.headers["idempotency-key"];
+    response.writeHead(429, {
+      "content-type": "application/json",
+      "retry-after": "2"
+    });
+    response.end(JSON.stringify({
+      error: {
+        message: "Please slow down",
+        code: "rate_limit_exceeded"
+      }
+    }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+  const previousMode = process.env.OPENCLAW_AGENT_MODE;
+  const previousRunner = process.env.OPENCLAW_AGENT_RUNNER;
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    process.env.OPENCLAW_AGENT_MODE = "real";
+    process.env.OPENCLAW_AGENT_RUNNER = "provider-direct";
+
+    await assert.rejects(runOpenClawAgent({
+      agentId: "research-agent",
+      sessionId: "job:retry-after/stage",
+      message: "Test rate limiting.",
+      requestId: "job-retry-after:route:0",
+      provider: {
+        providerId: "test-provider",
+        baseUrl: `http://127.0.0.1:${address.port}`,
+        model: "test-chat-model",
+        apiKey: "test-key",
+        agentRole: "research"
+      },
+      timeoutSeconds: 5
+    }), (error: unknown) => {
+      assert.ok(error instanceof ProviderDirectResponseError);
+      assert.equal(error.statusCode, 429);
+      assert.equal(error.providerCode, "rate_limit_exceeded");
+      assert.equal(error.retryAfterMs, 2_000);
+      assert.equal(error.failureSource, "provider_http");
+      return true;
+    });
+    assert.equal(idempotencyKey, "job-retry-after:route:0");
+  } finally {
     if (previousMode === undefined) {
       delete process.env.OPENCLAW_AGENT_MODE;
     } else {

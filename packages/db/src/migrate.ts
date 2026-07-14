@@ -22,6 +22,7 @@ const statements = [
   `alter table agent.jobs add column if not exists orchestration_source text`,
   `alter table agent.jobs add column if not exists execution_preflight jsonb not null default '{}'`,
   `alter table agent.jobs add column if not exists execution_queue jsonb not null default '{}'`,
+  `alter table agent.jobs add column if not exists execution_retry jsonb not null default '{}'`,
   `alter table agent.jobs add column if not exists routing_mode text not null default 'supervisor_pipeline'`,
   `alter table agent.jobs add column if not exists max_model_calls int not null default 20`,
   `alter table agent.jobs add column if not exists classic_final_gate_enabled boolean not null default false`,

@@ -1,7 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { pool } from "./pool";
 
-export type ModelCallStatus = "started" | "succeeded" | "failed" | "failed_unknown_outcome" | "cancelled";
+export type ModelCallStatus =
+  | "started"
+  | "retry_waiting"
+  | "succeeded"
+  | "failed"
+  | "failed_unknown_outcome"
+  | "cancelled";
 
 export type ModelCallRecord = {
   id: string;
@@ -81,7 +87,14 @@ export async function markModelCallStarted(input: {
     if (jobStatus === "cancelled") {
       throw new Error("job_cancelled");
     }
-    if (!jobStatus || ["succeeded", "failed"].includes(jobStatus)) {
+    if (!jobStatus || ![
+      "created",
+      "queued",
+      "planning",
+      "running",
+      "testing",
+      "fixing"
+    ].includes(jobStatus)) {
       throw new Error(`Model call could not start: ${input.idempotencyKey}`);
     }
 
@@ -100,12 +113,16 @@ export async function markModelCallStarted(input: {
       ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'started')
       on conflict (idempotency_key) do update
         set status = case
-              when agent.model_calls.status in ('failed', 'failed_unknown_outcome') then 'started'
+              when agent.model_calls.status in ('retry_waiting', 'failed', 'failed_unknown_outcome') then 'started'
               else agent.model_calls.status
             end,
             error = case
-              when agent.model_calls.status in ('failed', 'failed_unknown_outcome') then null
+              when agent.model_calls.status in ('retry_waiting', 'failed', 'failed_unknown_outcome') then null
               else agent.model_calls.error
+            end,
+            response_payload = case
+              when agent.model_calls.status in ('retry_waiting', 'failed', 'failed_unknown_outcome') then null
+              else agent.model_calls.response_payload
             end,
             updated_at = now()
       returning *`,
@@ -202,16 +219,22 @@ export async function markModelCallSucceeded(input: {
 export async function markModelCallFailed(input: {
   idempotencyKey: string;
   error: string;
+  responsePayload?: Record<string, unknown> | null;
 }): Promise<ModelCallRecord | null> {
   const result = await pool.query(
     `update agent.model_calls
      set status = 'failed',
          error = $2,
+         response_payload = coalesce($3::jsonb, response_payload),
          updated_at = now()
      where idempotency_key = $1
-       and status = 'started'
+       and status in ('started', 'retry_waiting')
      returning *`,
-    [input.idempotencyKey, sanitizePostgresText(input.error)]
+    [
+      input.idempotencyKey,
+      sanitizePostgresText(input.error),
+      input.responsePayload ? JSON.stringify(input.responsePayload) : null
+    ]
   );
 
   return result.rows[0] ? toModelCallRecord(result.rows[0]) : null;
@@ -227,7 +250,7 @@ export async function markModelCallCancelled(input: {
          error = $2,
          updated_at = now()
      where idempotency_key = $1
-       and status = 'started'
+       and status in ('started', 'retry_waiting')
      returning *`,
     [input.idempotencyKey, sanitizePostgresText(input.error ?? "job_cancelled")]
   );
@@ -237,16 +260,46 @@ export async function markModelCallCancelled(input: {
 export async function markModelCallFailedUnknownOutcome(input: {
   idempotencyKey: string;
   error: string;
+  responsePayload?: Record<string, unknown> | null;
 }): Promise<ModelCallRecord | null> {
   const result = await pool.query(
     `update agent.model_calls
      set status = 'failed_unknown_outcome',
          error = $2,
+         response_payload = coalesce($3::jsonb, response_payload),
+         updated_at = now()
+     where idempotency_key = $1
+       and status in ('started', 'retry_waiting')
+     returning *`,
+    [
+      input.idempotencyKey,
+      sanitizePostgresText(input.error),
+      input.responsePayload ? JSON.stringify(input.responsePayload) : null
+    ]
+  );
+
+  return result.rows[0] ? toModelCallRecord(result.rows[0]) : null;
+}
+
+export async function markModelCallRetryWaiting(input: {
+  idempotencyKey: string;
+  error: string;
+  responsePayload: Record<string, unknown>;
+}): Promise<ModelCallRecord | null> {
+  const result = await pool.query(
+    `update agent.model_calls
+     set status = 'retry_waiting',
+         error = $2,
+         response_payload = $3::jsonb,
          updated_at = now()
      where idempotency_key = $1
        and status = 'started'
      returning *`,
-    [input.idempotencyKey, sanitizePostgresText(input.error)]
+    [
+      input.idempotencyKey,
+      sanitizePostgresText(input.error),
+      JSON.stringify(input.responsePayload)
+    ]
   );
 
   return result.rows[0] ? toModelCallRecord(result.rows[0]) : null;

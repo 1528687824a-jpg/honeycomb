@@ -47,7 +47,7 @@ The structured conversation-to-task contract is implemented:
 
 ### Windows Stage 2 Progress (2026-07-14)
 
-The first three execution-control slices are implemented:
+The first four execution-control slices are implemented:
 
 - Every new or resumed job runs a shared execution preflight before DBOS starts.
 - Preflight checks every production agent, the test agent, and the discussion
@@ -97,11 +97,31 @@ The first three execution-control slices are implemented:
 - `npm run smoke:cancel-job` now verifies active-call cancellation, rejection
   of new calls after cancellation, runtime cancellation counts, and timeline
   metadata.
-- `npm run check`, the desktop production build, and all 106 unit tests pass.
+- Provider failures now use a shared classification contract. Authentication,
+  authorization, quota/billing, model, endpoint, and invalid-request failures
+  do not repeat on the same route; viable fallback routes remain available.
+- HTTP 408/425/429, explicit 5xx responses, DNS/connect failures, and connection
+  refusal use bounded exponential backoff with jitter. Provider `Retry-After`
+  is preserved and honored.
+- Requests whose outcome may be unknown after dispatch are never automatically
+  retried or failed over. Their model call becomes `failed_unknown_outcome` and
+  the task pauses in `waiting_for_human` instead of risking duplicate spend.
+- Retry waits use a durable `retry_waiting` model-call state. A worker restart
+  resumes from the persisted route and attempt checkpoint, while cancellation
+  stops both active and retry-waiting calls.
+- Retry state, classification, attempts, delay, and next retry time are visible
+  in task details and timeline events. Runtime usage reports retry-waiting jobs,
+  retry-waiting calls, and scheduled retry count.
+- Classified model failures do not trigger a second DBOS whole-step retry, and
+  workflow failure handling cannot overwrite a task already paused for human
+  action.
+- `npm run smoke:model-retry` covers the migration-backed retry state machine
+  and runtime counters when PostgreSQL is running.
+- `npm run check`, the desktop production build, and all 118 unit tests pass.
 
 Runtime database acceptance is pending while PostgreSQL and Docker Desktop are
-stopped. The next active Stage 2 slice is typed retry/backoff with `Retry-After`
-support, followed by unknown-outcome repair and hard spend limits.
+stopped. The next active Stage 2 slice is unknown-outcome reconciliation and
+repair, followed by hard spend limits.
 
 ## Current Backend Status
 

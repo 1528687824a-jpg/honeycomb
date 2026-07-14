@@ -1,3 +1,7 @@
+import type { TaskExecutionRetryState } from "./model-retry-policy";
+
+export type { TaskExecutionRetryState } from "./model-retry-policy";
+
 export type JobStatus =
   | "created"
   | "queued"
@@ -292,6 +296,7 @@ export type JobRecord = {
   orchestrationSource: OrchestrationPlanSource | null;
   executionPreflight: TaskExecutionPreflight | null;
   executionQueue: TaskExecutionQueueState | null;
+  executionRetry: TaskExecutionRetryState | null;
   routingMode: RoutingMode;
   maxModelCalls: number;
   classicFinalGateEnabled: boolean;

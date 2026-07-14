@@ -87,6 +87,7 @@ import {
 } from "../../../packages/shared/src/job-title";
 import type {
   TaskExecutionPreflight,
+  TaskExecutionRetryState,
   TaskOrchestrationPlan
 } from "../../../packages/shared/src/types";
 import { FirstRunPanel, type FirstRunFlow } from "./firstRun";
@@ -2133,6 +2134,29 @@ function taskPreflightMessage(preflight: TaskExecutionPreflight | null, language
       return `${entry.agentId}${language === "zh" ? "：" : ": "}${label}`;
     })
     .join(language === "zh" ? "；" : "; ");
+}
+
+function modelRetryFailureLabel(
+  category: TaskExecutionRetryState["failureCategory"],
+  language: Language
+) {
+  const labels: Record<TaskExecutionRetryState["failureCategory"], { zh: string; en: string }> = {
+    cancelled: { zh: "\u4efb\u52a1\u5df2\u53d6\u6d88", en: "task cancelled" },
+    configuration: { zh: "\u914d\u7f6e\u95ee\u9898", en: "configuration issue" },
+    authentication: { zh: "\u8eab\u4efd\u9a8c\u8bc1\u5931\u8d25", en: "authentication failed" },
+    authorization: { zh: "\u8d26\u53f7\u65e0\u6743\u9650", en: "permission denied" },
+    quota_or_billing: { zh: "\u4f59\u989d\u6216\u989d\u5ea6\u4e0d\u8db3", en: "quota or billing" },
+    model_or_endpoint: { zh: "\u6a21\u578b\u6216\u63a5\u53e3\u4e0d\u53ef\u7528", en: "model or endpoint unavailable" },
+    invalid_request: { zh: "\u8bf7\u6c42\u53c2\u6570\u4e0d\u53ef\u7528", en: "invalid request" },
+    rate_limited: { zh: "\u670d\u52a1\u5546\u9650\u6d41", en: "provider rate limit" },
+    provider_timeout: { zh: "\u670d\u52a1\u5546\u8d85\u65f6", en: "provider timeout" },
+    provider_server: { zh: "\u670d\u52a1\u5546\u6682\u65f6\u5f02\u5e38", en: "provider temporarily unavailable" },
+    network_transient: { zh: "\u7f51\u7edc\u6682\u65f6\u4e0d\u901a", en: "temporary network failure" },
+    network_unknown_outcome: { zh: "\u8fd4\u56de\u7ed3\u679c\u4e0d\u786e\u5b9a", en: "unknown request outcome" },
+    output_invalid: { zh: "\u6a21\u578b\u8fd4\u56de\u5185\u5bb9\u65e0\u6548", en: "invalid model output" },
+    unknown: { zh: "\u672a\u77e5\u9519\u8bef", en: "unknown error" }
+  };
+  return labels[category][language];
 }
 
 function App() {
@@ -5095,7 +5119,9 @@ function App() {
                       <span>{routingLabel(job.routingMode)}</span>
                     </span>
                     <span className="jobStatus">
-                      {job.executionQueue?.status === "queued"
+                      {job.executionRetry
+                        ? language === "zh" ? "\u91cd\u8bd5\u4e2d" : "Retrying"
+                        : job.executionQueue?.status === "queued"
                         ? language === "zh" ? "\u6392\u961f" : "Queued"
                         : copy.statuses[job.status]}
                     </span>
@@ -5202,6 +5228,36 @@ function App() {
                   <Settings size={14} aria-hidden="true" />
                   {language === "zh" ? "\u68c0\u67e5 Agent" : "Check agents"}
                 </button>
+              </section>
+            ) : null}
+
+            {selectedFromList?.executionRetry ? (
+              <section className="jobQueueNotice retrying" role="status" aria-live="polite">
+                <RefreshCw size={18} aria-hidden="true" />
+                <div>
+                  <h3>
+                    {language === "zh"
+                      ? "\u6a21\u578b\u670d\u52a1\u6682\u65f6\u4e0d\u53ef\u7528\uff0c\u6b63\u5728\u81ea\u52a8\u91cd\u8bd5"
+                      : "Model service is temporarily unavailable; retrying"}
+                  </h3>
+                  <p>
+                    {selectedFromList.executionRetry.agentId} / {selectedFromList.executionRetry.providerId}
+                  </p>
+                  <div className="jobQueueMetrics">
+                    <span>
+                      {language === "zh" ? "\u4e0b\u6b21\u5c1d\u8bd5" : "Next attempt"}
+                      {` ${selectedFromList.executionRetry.nextAttemptNo}/${selectedFromList.executionRetry.maxAttempts}`}
+                    </span>
+                    <span>
+                      {modelRetryFailureLabel(selectedFromList.executionRetry.failureCategory, language)}
+                    </span>
+                    <span>
+                      {language === "zh" ? "\u7b49\u5f85" : "Wait"}
+                      {` ${Math.max(0, Math.ceil((Date.parse(selectedFromList.executionRetry.retryAt) - Date.now()) / 1000))}s`}
+                    </span>
+                    <span>{formatTime(selectedFromList.executionRetry.retryAt, language)}</span>
+                  </div>
+                </div>
               </section>
             ) : null}
 

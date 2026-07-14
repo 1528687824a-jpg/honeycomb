@@ -6,6 +6,7 @@ import type {
   OrchestrationPlanSource,
   PanelMessageIntent,
   TaskExecutionQueueState,
+  TaskExecutionRetryState,
   TaskExecutionPreflight,
   TaskOrchestrationPlan
 } from "../../../packages/shared/src/types";
@@ -330,6 +331,7 @@ export type RuntimeUsageResponse = {
     jobs: {
       total: number;
       running: number;
+      retrying: number;
       waiting: number;
       succeeded: number;
       failed: number;
@@ -338,10 +340,12 @@ export type RuntimeUsageResponse = {
     modelCalls: {
       total: number;
       started: number;
+      retryWaiting: number;
       succeeded: number;
       failed: number;
       failedUnknownOutcome: number;
       cancelled: number;
+      retriesScheduled: number;
     };
     tokens?: {
       promptTokens: number;
@@ -1225,6 +1229,7 @@ export type JobRecord = {
   orchestrationSource: OrchestrationPlanSource | null;
   executionPreflight: TaskExecutionPreflight | null;
   executionQueue: TaskExecutionQueueState | null;
+  executionRetry: TaskExecutionRetryState | null;
   routingMode: RoutingMode;
   maxModelCalls: number;
   classicFinalGateEnabled: boolean;

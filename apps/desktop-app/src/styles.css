@@ -2197,6 +2197,12 @@ select {
   color: #dfbd64;
 }
 
+.jobQueueNotice.retrying {
+  border-bottom-color: #374968;
+  background: #151a24;
+  color: #91b9ee;
+}
+
 .jobQueueNotice h3,
 .jobQueueNotice p {
   margin: 0;
@@ -2209,6 +2215,10 @@ select {
 
 .jobQueueNotice.queued h3 {
   color: #fff0bd;
+}
+
+.jobQueueNotice.retrying h3 {
+  color: #e5efff;
 }
 
 .jobQueueNotice p {
@@ -2235,6 +2245,11 @@ select {
 .jobQueueNotice.queued .jobQueueMetrics span {
   border-color: #5e512e;
   color: #ead38d;
+}
+
+.jobQueueNotice.retrying .jobQueueMetrics span {
+  border-color: #405577;
+  color: #bed6f7;
 }
 
 .timelineHeader {

@@ -6,12 +6,18 @@ import type {
 } from "../../../packages/shared/src/types";
 import { WORKFLOW_NAME } from "../../../packages/shared/src/constants";
 import * as activities from "./activities";
+import { shouldRetryModelCallStep } from "./model-call-retry";
 import { maybeCrashOnce } from "./test-crash";
 
 const retryingStepConfig = {
   retriesAllowed: true,
   intervalSeconds: 1,
   maxAttempts: 3
+};
+
+const modelCallingStepConfig = {
+  ...retryingStepConfig,
+  shouldRetry: shouldRetryModelCallStep
 };
 
 const completeStageWithoutReview = DBOS.registerStep(activities.completeStageWithoutReview, {
@@ -68,7 +74,7 @@ const markJobFailed = DBOS.registerStep(activities.markJobFailed, {
 });
 const mainAgentSynthesizeDiscussion = DBOS.registerStep(activities.mainAgentSynthesizeDiscussion, {
   name: "mainAgentSynthesizeDiscussion",
-  ...retryingStepConfig
+  ...modelCallingStepConfig
 });
 const passStageAndHandoff = DBOS.registerStep(activities.passStageAndHandoff, {
   name: "passStageAndHandoff",
@@ -88,15 +94,15 @@ const requestStageFix = DBOS.registerStep(activities.requestStageFix, {
 });
 const runStageAgent = DBOS.registerStep(activities.runStageAgent, {
   name: "runStageAgent",
-  ...retryingStepConfig
+  ...modelCallingStepConfig
 });
 const runTestAgent = DBOS.registerStep(activities.runTestAgent, {
   name: "runTestAgent",
-  ...retryingStepConfig
+  ...modelCallingStepConfig
 });
 const runFinalTestAgent = DBOS.registerStep(activities.runFinalTestAgent, {
   name: "runFinalTestAgent",
-  ...retryingStepConfig
+  ...modelCallingStepConfig
 });
 const shouldRunFinalQualityGate = DBOS.registerStep(activities.shouldRunFinalQualityGate, {
   name: "shouldRunFinalQualityGate",
@@ -487,10 +493,10 @@ async function jobPipelineWorkflow(input: JobWorkflowInput) {
     return await runJobPipelineWorkflow(input);
   } catch (error) {
     const reason = workflowErrorMessage(error);
-    await markJobFailed(input.jobId, reason);
+    const persistedStatus = await markJobFailed(input.jobId, reason);
     return {
       jobId: input.jobId,
-      status: "failed",
+      status: persistedStatus,
       error: reason
     };
   }

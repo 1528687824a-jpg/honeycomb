@@ -13,6 +13,10 @@ import {
   isLikelyVideoGenerationModel
 } from "../../../../packages/shared/src/model-capabilities";
 import {
+  parseRetryAfterMs,
+  type ModelCallFailureSource
+} from "../../../../packages/shared/src/model-retry-policy";
+import {
   JobCancelledError,
   isJobCancellationError
 } from "../job-cancellation";
@@ -69,11 +73,27 @@ export type OpenClawTextSource =
   | "provider:video";
 
 export class OpenClawOutputError extends Error {
+  readonly failureSource = "output_invalid" as const;
+
   constructor(
     message: string,
     readonly stdoutPreview: string
   ) {
     super(message);
+    this.name = "OpenClawOutputError";
+  }
+}
+
+export class OpenClawProcessError extends Error {
+  readonly failureSource = "openclaw_process" as const;
+
+  constructor(
+    message: string,
+    readonly networkCode: string | null,
+    readonly timedOut: boolean
+  ) {
+    super(message);
+    this.name = "OpenClawProcessError";
   }
 }
 
@@ -250,12 +270,17 @@ export function extractOpenClawUsage(raw: unknown): OpenClawTokenUsage | null {
   return null;
 }
 
-class ProviderDirectResponseError extends Error {
+export class ProviderDirectResponseError extends Error {
   constructor(
     message: string,
-    readonly statusCode: number | null
+    readonly statusCode: number | null,
+    readonly failureSource: ModelCallFailureSource,
+    readonly providerCode: string | null = null,
+    readonly networkCode: string | null = null,
+    readonly retryAfterMs: number | null = null
   ) {
     super(message);
+    this.name = "ProviderDirectResponseError";
   }
 }
 
@@ -324,8 +349,9 @@ function createTimedAbortSignal(input: {
   };
 }
 
-async function providerResponseErrorMessage(response: Response) {
+async function providerResponseErrorDetails(response: Response) {
   let message = `${response.status} ${response.statusText}`.trim();
+  let providerCode: string | null = null;
   try {
     const body = await response.json() as {
       error?: { message?: unknown; code?: unknown };
@@ -341,15 +367,35 @@ async function providerResponseErrorMessage(response: Response) {
     if (remoteMessage) {
       message = `${message}: ${remoteMessage}`.slice(0, 500);
     }
+    const remoteCode = body.error?.code ?? body.code;
+    if (typeof remoteCode === "string" || typeof remoteCode === "number") {
+      providerCode = String(remoteCode).slice(0, 120);
+    }
   } catch {
     // Keep the status-only message. Do not echo raw provider bodies.
   }
-  return message;
+  return {
+    message,
+    providerCode,
+    retryAfterMs: parseRetryAfterMs(response.headers.get("retry-after"))
+  };
+}
+
+function nestedErrorCode(error: unknown) {
+  if (!error || typeof error !== "object") return null;
+  const value = error as { code?: unknown; cause?: unknown };
+  if (typeof value.code === "string") return value.code;
+  if (value.cause && typeof value.cause === "object") {
+    const causeCode = (value.cause as { code?: unknown }).code;
+    if (typeof causeCode === "string") return causeCode;
+  }
+  return null;
 }
 
 async function fetchProviderJson(input: {
   url: string;
   apiKey: string;
+  requestId?: string | null;
   body: Record<string, unknown>;
   timeoutMs: number;
   signal?: AbortSignal;
@@ -364,14 +410,23 @@ async function fetchProviderJson(input: {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        authorization: `Bearer ${input.apiKey}`
+        authorization: `Bearer ${input.apiKey}`,
+        ...(input.requestId ? { "idempotency-key": input.requestId.slice(0, 200) } : {})
       },
       body: JSON.stringify(input.body),
       signal: abort.signal
     });
 
     if (!response.ok) {
-      throw new ProviderDirectResponseError(await providerResponseErrorMessage(response), response.status);
+      const details = await providerResponseErrorDetails(response);
+      throw new ProviderDirectResponseError(
+        details.message,
+        response.status,
+        "provider_http",
+        details.providerCode,
+        null,
+        details.retryAfterMs
+      );
     }
 
     const responseText = await response.text();
@@ -393,7 +448,10 @@ async function fetchProviderJson(input: {
         : error instanceof Error
           ? error.message.slice(0, 500)
           : "provider_direct_request_failed",
-      null
+      null,
+      abort.timedOut() ? "provider_timeout" : "provider_network",
+      null,
+      nestedErrorCode(error)
     );
   } finally {
     abort.dispose();
@@ -828,6 +886,7 @@ function sanitizeProviderForDirectRun(provider?: OpenClawProviderRuntime | null)
 async function runProviderDirectChat(input: {
   sessionId: string;
   message: string;
+  requestId?: string | null;
   provider: OpenClawProviderRuntime & { baseUrl: string; model: string; apiKey: string };
   timeoutSeconds: number;
   signal?: AbortSignal;
@@ -836,6 +895,7 @@ async function runProviderDirectChat(input: {
   const raw = await fetchProviderJson({
     url: chatCompletionsUrl(input.provider.baseUrl),
     apiKey: input.provider.apiKey,
+    requestId: input.requestId,
     timeoutMs: providerTimeoutMs(input.timeoutSeconds),
     signal: input.signal,
     body: {
@@ -877,6 +937,7 @@ async function runProviderDirectChat(input: {
 async function runProviderDirectImage(input: {
   sessionId: string;
   message: string;
+  requestId?: string | null;
   outputDir?: string | null;
   provider: OpenClawProviderRuntime & { baseUrl: string; model: string; apiKey: string };
   timeoutSeconds: number;
@@ -898,6 +959,7 @@ async function runProviderDirectImage(input: {
   const raw = await fetchProviderJson({
     url: imageGenerationsUrl(input.provider.baseUrl),
     apiKey: input.provider.apiKey,
+    requestId: input.requestId,
     timeoutMs: providerTimeoutMs(input.timeoutSeconds),
     signal: input.signal,
     body
@@ -929,6 +991,7 @@ async function runProviderDirectImage(input: {
 async function runProviderDirectVideo(input: {
   sessionId: string;
   message: string;
+  requestId?: string | null;
   outputDir?: string | null;
   provider: OpenClawProviderRuntime & { baseUrl: string; model: string; apiKey: string };
   timeoutSeconds: number;
@@ -937,6 +1000,7 @@ async function runProviderDirectVideo(input: {
   const raw = await fetchProviderJson({
     url: videoTasksUrl(input.provider.baseUrl),
     apiKey: input.provider.apiKey,
+    requestId: input.requestId,
     timeoutMs: providerTimeoutMs(input.timeoutSeconds),
     signal: input.signal,
     body: {
@@ -978,6 +1042,7 @@ async function runProviderDirectVideo(input: {
 async function runProviderDirectAgent(input: {
   sessionId: string;
   message: string;
+  requestId?: string | null;
   provider?: OpenClawProviderRuntime | null;
   outputDir?: string | null;
   timeoutSeconds: number;
@@ -1107,6 +1172,7 @@ export async function runOpenClawAgent(input: {
   agentId: string;
   sessionId: string;
   message: string;
+  requestId?: string | null;
   providerDirectMessage?: string | null;
   provider?: OpenClawProviderRuntime | null;
   outputDir?: string | null;
@@ -1123,6 +1189,7 @@ export async function runOpenClawAgent(input: {
     return runProviderDirectAgent({
       sessionId: input.sessionId,
       message: input.providerDirectMessage ?? input.message,
+      requestId: input.requestId,
       provider: input.provider,
       outputDir: input.outputDir,
       timeoutSeconds,
@@ -1157,7 +1224,14 @@ export async function runOpenClawAgent(input: {
       }
       throw new JobCancelledError();
     }
-    throw error;
+    const value = error && typeof error === "object"
+      ? error as { killed?: unknown; signal?: unknown }
+      : null;
+    throw new OpenClawProcessError(
+      error instanceof Error ? error.message.slice(0, 500) : "openclaw_process_failed",
+      nestedErrorCode(error),
+      value?.killed === true || value?.signal === "SIGTERM" || value?.signal === "SIGKILL"
+    );
   }
 
   const trimmed = stdout.trim();

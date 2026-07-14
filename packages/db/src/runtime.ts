@@ -42,6 +42,7 @@ export type RuntimeUsageResponse = {
     jobs: {
       total: number;
       running: number;
+      retrying: number;
       waiting: number;
       succeeded: number;
       failed: number;
@@ -50,10 +51,12 @@ export type RuntimeUsageResponse = {
     modelCalls: {
       total: number;
       started: number;
+      retryWaiting: number;
       succeeded: number;
       failed: number;
       failedUnknownOutcome: number;
       cancelled: number;
+      retriesScheduled: number;
     };
     tokens: {
       promptTokens: number;
@@ -445,6 +448,7 @@ export async function getRuntimeUsage(input: {
       `select
          count(*)::int as total,
          count(*) filter (where status in ('queued', 'planning', 'running', 'testing', 'fixing'))::int as running,
+         count(*) filter (where execution_retry ->> 'status' = 'waiting')::int as retrying,
          count(*) filter (where status = 'waiting_for_human')::int as waiting,
          count(*) filter (where status = 'succeeded')::int as succeeded,
          count(*) filter (where status = 'failed')::int as failed,
@@ -457,6 +461,7 @@ export async function getRuntimeUsage(input: {
       `select
          count(*)::int as total,
          count(*) filter (where status = 'started')::int as started,
+         count(*) filter (where status = 'retry_waiting')::int as retry_waiting,
          count(*) filter (where status = 'succeeded')::int as succeeded,
          count(*) filter (where status = 'failed')::int as failed,
          count(*) filter (where status = 'failed_unknown_outcome')::int as failed_unknown_outcome,
@@ -468,6 +473,7 @@ export async function getRuntimeUsage(input: {
     pool.query(
       `select
          (select count(*)::int from agent.job_events ${whereSql}) as job_events,
+         (select count(*)::int from agent.job_events ${whereSql ? `${whereSql} and` : "where"} event_type = 'model_call.retry_scheduled') as retries_scheduled,
          (select count(*)::int from agent.agent_events ${whereSql}) as agent_events,
          (select count(*)::int from agent.group_messages ${whereSql}) as group_messages,
          (select count(*)::int from agent.artifacts ${whereSql}) as artifacts`,
@@ -651,6 +657,7 @@ export async function getRuntimeUsage(input: {
       jobs: {
         total: Number(jobRow.total ?? 0),
         running: Number(jobRow.running ?? 0),
+        retrying: Number(jobRow.retrying ?? 0),
         waiting: Number(jobRow.waiting ?? 0),
         succeeded: Number(jobRow.succeeded ?? 0),
         failed: Number(jobRow.failed ?? 0),
@@ -659,10 +666,12 @@ export async function getRuntimeUsage(input: {
       modelCalls: {
         total: Number(modelRow.total ?? 0),
         started: Number(modelRow.started ?? 0),
+        retryWaiting: Number(modelRow.retry_waiting ?? 0),
         succeeded: Number(modelRow.succeeded ?? 0),
         failed: Number(modelRow.failed ?? 0),
         failedUnknownOutcome: Number(modelRow.failed_unknown_outcome ?? 0),
-        cancelled: Number(modelRow.cancelled ?? 0)
+        cancelled: Number(modelRow.cancelled ?? 0),
+        retriesScheduled: Number(eventRow.retries_scheduled ?? 0)
       },
       tokens: {
         promptTokens: Number(tokens.rows[0]?.prompt_tokens ?? 0),

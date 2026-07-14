@@ -15,7 +15,7 @@ For jobs in a non-terminal status, the API:
 ```text
 1. sets status=cancelled;
 2. sets completedAt if it was empty;
-3. marks every started model call as cancelled;
+3. marks every started or retry-waiting model call as cancelled;
 4. appends job.cancelled with the number of stopped model calls;
 5. archives the session with retentionPolicy.archiveReason=job_cancelled;
 6. appends job.archived;
@@ -44,7 +44,8 @@ When cancellation is observed, Honeycomb:
 4. aborts `wsl.exe` and issues a best-effort Linux-side termination targeted at
    the unique OpenClaw session ID;
 5. releases the persistent model-call concurrency lease;
-6. records `model_calls.status=cancelled` and
+6. records `model_calls.status=cancelled` (including a call currently in
+   `retry_waiting`) and
    `tool.openclaw_agent_cancelled` without trying a fallback provider;
 7. asks DBOS to cancel the durable workflow so it does not retry the cancelled
    step or schedule later steps.

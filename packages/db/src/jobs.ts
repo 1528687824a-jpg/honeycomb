@@ -15,6 +15,7 @@ import {
   type OrchestrationPlanSource,
   type RoutingMode,
   type TaskExecutionQueueState,
+  type TaskExecutionRetryState,
   type TaskExecutionPreflight,
   type JobStatus
 } from "../../shared/src/types";
@@ -26,6 +27,7 @@ import {
 } from "../../shared/src/orchestration-contract";
 import { parseTaskExecutionPreflight } from "../../shared/src/task-preflight-contract";
 import { parseTaskExecutionQueueState } from "../../shared/src/task-queue-contract";
+import { parseTaskExecutionRetryState } from "../../shared/src/task-retry-contract";
 import { pool } from "./pool";
 import { appendAgentEvent } from "./session";
 
@@ -248,6 +250,7 @@ function toJobRecord(row: any): JobRecord {
       normalizeOrchestrationSource(row.orchestration_source) ?? orchestrationPlan?.source ?? null,
     executionPreflight: parseTaskExecutionPreflight(row.execution_preflight),
     executionQueue: currentExecutionQueue(row.execution_queue),
+    executionRetry: parseTaskExecutionRetryState(row.execution_retry),
     routingMode: normalizeRoutingMode(row.routing_mode),
     maxModelCalls: row.max_model_calls ?? DEFAULT_MAX_MODEL_CALLS,
     classicFinalGateEnabled: row.classic_final_gate_enabled ?? false,
@@ -617,9 +620,15 @@ export async function setJobStatus(
            when $3 in ('healthy', 'paused', 'terminal') then null
            else stalled_at
          end,
+         execution_retry = case
+           when $2 in ('waiting_for_human', 'succeeded', 'failed', 'cancelled') then '{}'::jsonb
+           else execution_retry
+         end,
          updated_at = now()
      where id = $1
        and (status <> 'cancelled' or $2 = 'cancelled')
+       and (status not in ('succeeded', 'failed') or status = $2)
+       and not (status = 'waiting_for_human' and $2 = 'failed')
      returning id`,
     [jobId, status, heartbeatStatus, `job.${status}`, heartbeatNoteFromPayload(payload)]
   );
@@ -672,6 +681,7 @@ export async function setJobFinalOutput(jobId: string, finalOutput: string) {
     `update agent.jobs
      set final_output = $2,
          status = 'succeeded',
+         execution_retry = '{}'::jsonb,
          heartbeat_at = now(),
          heartbeat_status = 'terminal',
          heartbeat_source = 'job.succeeded',
@@ -700,7 +710,7 @@ async function cancelStartedModelCallsForJob(jobId: string) {
          error = 'job_cancelled',
          updated_at = now()
      where job_id = $1
-       and status = 'started'`,
+       and status in ('started', 'retry_waiting')`,
     [jobId]
   );
   return result.rowCount ?? 0;
@@ -747,6 +757,7 @@ export async function cancelJob(input: {
   const result = await pool.query(
     `update agent.jobs
      set status = 'cancelled',
+         execution_retry = '{}'::jsonb,
          heartbeat_at = now(),
          heartbeat_status = 'terminal',
          heartbeat_source = 'job.cancelled',
@@ -852,6 +863,32 @@ export async function clearJobExecutionQueue(jobId: string, requestKey: string) 
        and execution_queue ->> 'requestKey' = $2
      returning *`,
     [jobId, requestKey]
+  );
+  return result.rows[0] ? toJobRecord(result.rows[0]) : null;
+}
+
+export async function setJobExecutionRetry(jobId: string, retry: TaskExecutionRetryState) {
+  const result = await pool.query(
+    `update agent.jobs
+     set execution_retry = $2::jsonb,
+         updated_at = now()
+     where id = $1
+       and status not in ('waiting_for_human', 'succeeded', 'failed', 'cancelled')
+     returning *`,
+    [jobId, JSON.stringify(retry)]
+  );
+  return result.rows[0] ? toJobRecord(result.rows[0]) : null;
+}
+
+export async function clearJobExecutionRetry(jobId: string, idempotencyKey: string) {
+  const result = await pool.query(
+    `update agent.jobs
+     set execution_retry = '{}'::jsonb,
+         updated_at = now()
+     where id = $1
+       and execution_retry ->> 'idempotencyKey' = $2
+     returning *`,
+    [jobId, idempotencyKey]
   );
   return result.rows[0] ? toJobRecord(result.rows[0]) : null;
 }

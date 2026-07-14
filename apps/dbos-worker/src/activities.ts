@@ -4,9 +4,11 @@ import path from "node:path";
 import {
   appendJobEvent,
   archiveJobSession,
+  clearJobExecutionRetry,
   getJob,
   recordJobHeartbeat,
   setJobExecutionPreflight,
+  setJobExecutionRetry,
   setJobFinalOutput,
   setJobStatus,
   setJobWorkdir
@@ -32,6 +34,8 @@ import {
   getModelCallByKey,
   markModelCallCancelled,
   markModelCallFailed,
+  markModelCallFailedUnknownOutcome,
+  markModelCallRetryWaiting,
   markModelCallStarted,
   markModelCallSucceeded
 } from "../../../packages/db/src/model-calls";
@@ -56,6 +60,13 @@ import {
   DEFAULT_MAX_MODEL_CALLS,
   DEFAULT_ROUTING_MODE
 } from "../../../packages/shared/src/types";
+import {
+  computeModelRetryDelay,
+  resolveModelRetryPolicy,
+  type ModelCallFailureDecision,
+  type TaskExecutionRetryState
+} from "../../../packages/shared/src/model-retry-policy";
+import { parseTaskExecutionRetryState } from "../../../packages/shared/src/task-retry-contract";
 import { inferFallbackStages } from "../../../packages/shared/src/orchestration-contract";
 import { preflightTaskExecution } from "../../../packages/runtime/src/task-preflight";
 import {
@@ -68,7 +79,6 @@ import {
   getOpenClawAgentRunner,
   resolveOpenClawAgentRunner,
   runOpenClawAgent,
-  shouldUseProviderDirectRunner,
   type OpenClawRunResult
 } from "./adapters/openclaw";
 import { loadClusterConfig, type LoadedClusterConfig } from "./config/cluster";
@@ -83,6 +93,12 @@ import {
   isJobCancellationError,
   watchJobCancellation
 } from "./job-cancellation";
+import {
+  ModelCallExecutionError,
+  classifyModelCallError,
+  resolveModelCallRetryAction,
+  waitForModelRetry
+} from "./model-call-retry";
 import { maybeCrashOnce } from "./test-crash";
 
 type OpenClawActionType =
@@ -132,7 +148,7 @@ function routeReadinessError(route: AgentRuntimeSecrets) {
     return null;
   }
   if (!route.providerId) {
-    return shouldUseProviderDirectRunner() ? "provider_not_bound" : null;
+    return "provider_not_bound";
   }
   if (!route.providerBaseUrl) {
     return "provider_base_url_missing";
@@ -148,15 +164,35 @@ function routeReadinessError(route: AgentRuntimeSecrets) {
 
 function routeAttemptPayload(input: {
   route: AgentRuntimeRoute;
+  routeIndex: number;
+  routeAttemptNo: number;
+  maxRouteAttempts: number;
   ok: boolean;
   latencyMs: number;
   error?: string | null;
+  decision?: ModelCallFailureDecision | null;
 }) {
   return {
     route: input.route,
+    routeIndex: input.routeIndex,
+    routeAttemptNo: input.routeAttemptNo,
+    maxRouteAttempts: input.maxRouteAttempts,
     ok: input.ok,
     latencyMs: input.latencyMs,
-    error: input.error ?? null
+    error: input.error ?? null,
+    failure: input.decision
+      ? {
+          category: input.decision.category,
+          retryable: input.decision.retryable,
+          allowFailover: input.decision.allowFailover,
+          unknownOutcome: input.decision.unknownOutcome,
+          userActionRequired: input.decision.userActionRequired,
+          statusCode: input.decision.statusCode,
+          providerCode: input.decision.providerCode,
+          networkCode: input.decision.networkCode,
+          retryAfterMs: input.decision.retryAfterMs
+        }
+      : null
   };
 }
 
@@ -166,6 +202,20 @@ function getModelCallResult(payload: Record<string, unknown> | null): OpenClawRu
   }
 
   return payload.result as OpenClawRunResult | null;
+}
+
+function getStoredRetryState(payload: Record<string, unknown> | null) {
+  return parseTaskExecutionRetryState(payload?.retryState);
+}
+
+function unknownOutcomeDecision(message: string): ModelCallFailureDecision {
+  return {
+    ...classifyModelCallError(new Error(message)),
+    retryable: false,
+    allowFailover: false,
+    unknownOutcome: true,
+    userActionRequired: true
+  };
 }
 
 async function runOpenClawAgentIdempotent(input: {
@@ -231,258 +281,538 @@ async function runOpenClawAgentIdempotent(input: {
   }
 
   if (existing?.status === "started") {
-    throw new Error(
-      `Ambiguous OpenClaw model call already started without a completed result: ${idempotencyKey}`
-    );
-  }
-
-  await heartbeat(
-    input.jobId,
-    `openclaw.${input.actionType}.starting`,
-    input.agentId,
-    input.stageId ?? null
-  );
-  await appendJobEvent(
-    input.jobId,
-    "tool.openclaw_agent_requested",
-    {
-      stageId: input.stageId,
+    const message = `model_call_started_outcome_unknown: ${idempotencyKey}`;
+    const decision = unknownOutcomeDecision(message);
+    await markModelCallFailedUnknownOutcome({
+      idempotencyKey,
+      error: message,
+      responsePayload: {
+        previousPayload: existing.responsePayload,
+        finalFailure: { error: message, ...decision }
+      }
+    });
+    await appendJobEvent(input.jobId, "tool.openclaw_agent_failed_unknown_outcome", {
+      stageId: input.stageId ?? null,
       agentId: primaryRoute.honeycombAgentId,
       requestedAgentId: input.agentId,
       openclawAgentId: primaryRoute.openclawAgentId,
       attemptNo: input.attemptNo,
       actionType: input.actionType,
       idempotencyKey,
-      mode: isOpenClawRealMode() ? "real" : "mock",
-      runner: isOpenClawRealMode()
-        ? resolveOpenClawAgentRunner({ runner: getOpenClawAgentRunner() })
-        : "mock",
-      route: redactedPrimaryRoute,
-      routeCandidates: redactedRouteCandidates
-    },
-    {
+      error: message,
+      failure: decision
+    }, {
       actor: "tool-gateway",
       stageId: input.stageId ?? null
-    }
-  );
+    });
+    await setJobStatus(input.jobId, "waiting_for_human", {
+      reason: `model_call_unknown_outcome: ${message}`,
+      actionType: input.actionType,
+      agentId: primaryRoute.honeycombAgentId,
+      providerId: primaryRoute.providerId,
+      failure: decision
+    });
+    throw new ModelCallExecutionError(message, decision);
+  }
 
-  const routeAttempts: ReturnType<typeof routeAttemptPayload>[] = [];
+  const recoveredRetryState = existing?.status === "retry_waiting"
+    ? currentJob.executionRetry?.idempotencyKey === idempotencyKey
+      ? currentJob.executionRetry
+      : getStoredRetryState(existing.responsePayload)
+    : null;
+  if (existing?.status === "retry_waiting" && !recoveredRetryState) {
+    const message = "model_call_retry_state_missing";
+    const decision = unknownOutcomeDecision(message);
+    await markModelCallFailedUnknownOutcome({
+      idempotencyKey,
+      error: message,
+      responsePayload: {
+        previousPayload: existing.responsePayload,
+        finalFailure: { error: message, ...decision }
+      }
+    });
+    await appendJobEvent(input.jobId, "tool.openclaw_agent_failed_unknown_outcome", {
+      stageId: input.stageId ?? null,
+      agentId: primaryRoute.honeycombAgentId,
+      requestedAgentId: input.agentId,
+      openclawAgentId: primaryRoute.openclawAgentId,
+      attemptNo: input.attemptNo,
+      actionType: input.actionType,
+      idempotencyKey,
+      error: message,
+      failure: decision
+    }, {
+      actor: "tool-gateway",
+      stageId: input.stageId ?? null
+    });
+    await setJobStatus(input.jobId, "waiting_for_human", {
+      reason: `model_call_unknown_outcome: ${message}`,
+      actionType: input.actionType,
+      agentId: primaryRoute.honeycombAgentId,
+      providerId: primaryRoute.providerId,
+      failure: decision
+    });
+    throw new ModelCallExecutionError(message, decision);
+  }
+
+  if (!recoveredRetryState) {
+    await heartbeat(
+      input.jobId,
+      `openclaw.${input.actionType}.starting`,
+      input.agentId,
+      input.stageId ?? null
+    );
+    await appendJobEvent(
+      input.jobId,
+      "tool.openclaw_agent_requested",
+      {
+        stageId: input.stageId,
+        agentId: primaryRoute.honeycombAgentId,
+        requestedAgentId: input.agentId,
+        openclawAgentId: primaryRoute.openclawAgentId,
+        attemptNo: input.attemptNo,
+        actionType: input.actionType,
+        idempotencyKey,
+        mode: isOpenClawRealMode() ? "real" : "mock",
+        runner: isOpenClawRealMode()
+          ? resolveOpenClawAgentRunner({ runner: getOpenClawAgentRunner() })
+          : "mock",
+        route: redactedPrimaryRoute,
+        routeCandidates: redactedRouteCandidates
+      },
+      {
+        actor: "tool-gateway",
+        stageId: input.stageId ?? null
+      }
+    );
+  }
+
+  const storedRouteAttempts = existing?.status === "retry_waiting"
+    ? existing.responsePayload?.routeAttempts
+    : null;
+  const routeAttempts: ReturnType<typeof routeAttemptPayload>[] = Array.isArray(storedRouteAttempts)
+    ? storedRouteAttempts as ReturnType<typeof routeAttemptPayload>[]
+    : [];
+  const retryPolicy = resolveModelRetryPolicy();
   let lastError: string | null = null;
+  let lastDecision: ModelCallFailureDecision | null = null;
   let modelCallStarted = false;
+  let modelCallRecorded = existing?.status === "retry_waiting";
+  let cancellationWatcher: Awaited<ReturnType<typeof watchJobCancellation>> | null = null;
+  let userActionFailure: {
+    decision: ModelCallFailureDecision;
+    error: string;
+    route: AgentRuntimeRoute;
+  } | null = null;
+
   try {
-    for (let routeIndex = 0; routeIndex < routes.length; routeIndex++) {
+    cancellationWatcher = await watchJobCancellation({ jobId: input.jobId });
+
+    let startRouteIndex = 0;
+    let startRouteAttemptNo = 1;
+    if (recoveredRetryState) {
+      if (recoveredRetryState.routeIndex >= routes.length) {
+        throw new ModelCallExecutionError(
+          "model_call_retry_route_missing",
+          unknownOutcomeDecision("model_call_retry_route_missing")
+        );
+      }
+      startRouteIndex = recoveredRetryState.routeIndex;
+      startRouteAttemptNo = recoveredRetryState.nextAttemptNo;
+      await setJobExecutionRetry(input.jobId, recoveredRetryState);
+      await heartbeat(
+        input.jobId,
+        `openclaw.${input.actionType}.retry_recovered`,
+        `${recoveredRetryState.failureCategory}; retry ${recoveredRetryState.nextAttemptNo}/${recoveredRetryState.maxAttempts}`,
+        input.stageId ?? null
+      );
+      await appendJobEvent(input.jobId, "model_call.retry_recovered", {
+        stageId: input.stageId ?? null,
+        actionType: input.actionType,
+        agentId: recoveredRetryState.agentId,
+        providerId: recoveredRetryState.providerId,
+        idempotencyKey,
+        routeIndex: recoveredRetryState.routeIndex,
+        routeAttemptNo: recoveredRetryState.nextAttemptNo,
+        maxAttempts: recoveredRetryState.maxAttempts,
+        retryAt: recoveredRetryState.retryAt
+      });
+      await waitForModelRetry(
+        Math.max(0, Date.parse(recoveredRetryState.retryAt) - Date.now()),
+        cancellationWatcher.signal
+      );
+      await clearJobExecutionRetry(input.jobId, idempotencyKey);
+    }
+
+    for (let routeIndex = startRouteIndex; routeIndex < routes.length; routeIndex++) {
       const route = routes[routeIndex];
       const redactedRoute = redactAgentRuntime(route);
-      const startedAt = Date.now();
-      let slotLease: ModelCallSlotLease | null = null;
-      let slotReleaseReason: string | null = null;
-      let cancellationWatcher: Awaited<ReturnType<typeof watchJobCancellation>> | null = null;
-      try {
-        const readinessError = routeReadinessError(route);
-        if (readinessError) {
-          throw new Error(readinessError);
+      const maxRouteAttempts = recoveredRetryState && routeIndex === recoveredRetryState.routeIndex
+        ? recoveredRetryState.maxAttempts
+        : retryPolicy.maxAttempts;
+      const firstRouteAttemptNo = recoveredRetryState && routeIndex === recoveredRetryState.routeIndex
+        ? startRouteAttemptNo
+        : 1;
+      const readinessError = routeReadinessError(route);
+      if (readinessError) {
+        const decision = classifyModelCallError(Object.assign(new Error(readinessError), {
+          failureSource: "configuration"
+        }));
+        lastError = readinessError;
+        lastDecision = decision;
+        if (decision.userActionRequired && !userActionFailure) {
+          userActionFailure = { decision, error: readinessError, route: redactedRoute };
         }
-
-        slotLease = await acquireModelCallSlot({
-          idempotencyKey,
-          jobId: input.jobId,
-          stageId: input.stageId,
+        routeAttempts.push(routeAttemptPayload({
+          route: redactedRoute,
           routeIndex,
-          route,
-          timeoutSeconds: input.timeoutSeconds,
-          actionType: input.actionType
-        });
-        cancellationWatcher = await watchJobCancellation({ jobId: input.jobId });
-        if (!modelCallStarted) {
-          await markModelCallStarted({
-            idempotencyKey,
-            jobId: input.jobId,
-            stageId: input.stageId,
-            attemptNo: input.attemptNo,
-            actionType: input.actionType,
-            agentId: primaryRoute.honeycombAgentId,
-            agentSessionId: input.sessionId,
-            requestHash: sha256(input.message)
-          });
-          modelCallStarted = true;
-        }
-
-        await heartbeat(
-          input.jobId,
-          `openclaw.${input.actionType}.route_started`,
-          `${route.honeycombAgentId} route ${routeIndex + 1}/${routes.length}`,
-          input.stageId ?? null
-        );
-        const result = await runOpenClawAgent({
-          agentId: route.openclawAgentId,
-          sessionId: input.sessionId,
-          message: input.message,
-          providerDirectMessage: input.providerDirectMessage,
-          provider: {
-            providerId: route.providerId,
-            baseUrl: route.providerBaseUrl,
-            model: route.model,
-            apiKey: route.apiKey,
-            agentRole: route.agentRole
-          },
-          outputDir: input.outputDir,
-          timeoutSeconds: input.timeoutSeconds,
-          signal: cancellationWatcher.signal
-        });
-        if (cancellationWatcher.signal.aborted) {
-          throw new JobCancelledError();
-        }
-        const latestJob = await getJob(input.jobId);
-        if (!latestJob || latestJob.status === "cancelled") {
-          throw new JobCancelledError();
-        }
-        const successAttempt = routeAttemptPayload({
-          route: redactedRoute,
-          ok: true,
-          latencyMs: Date.now() - startedAt
-        });
-        routeAttempts.push(successAttempt);
-
-        await markModelCallSucceeded({
-          idempotencyKey,
-          responsePayload: {
-            result,
-            route: redactedRoute,
-            routeAttempts,
-            routeSelection: {
-              selectedIndex: routeIndex,
-              attemptedCount: routeAttempts.length,
-              failoverUsed: routeIndex > 0
-            }
-          }
-        });
-
-        await appendJobEvent(
-          input.jobId,
-          "tool.openclaw_agent_completed",
-          {
-            stageId: input.stageId,
-            agentId: route.honeycombAgentId,
-            requestedAgentId: input.agentId,
-            openclawAgentId: route.openclawAgentId,
-            attemptNo: input.attemptNo,
-            actionType: input.actionType,
-            idempotencyKey,
-            mode: result?.mode ?? null,
-            sessionId: result?.sessionId ?? input.sessionId,
-            route: redactedRoute,
-            routeAttempts,
-            routeSelection: {
-              selectedIndex: routeIndex,
-              attemptedCount: routeAttempts.length,
-              failoverUsed: routeIndex > 0
-            }
-          },
-          {
-            actor: "tool-gateway",
-            stageId: input.stageId ?? null
-          }
-        );
-        await heartbeat(
-          input.jobId,
-          `openclaw.${input.actionType}.completed`,
-          `${route.honeycombAgentId} route ${routeIndex + 1}/${routes.length}`,
-          input.stageId ?? null
-        );
-
-        maybeCrashOnce(
-          `after-openclaw-${input.actionType}-stage-${input.stageIndex
-            .toString()
-            .padStart(3, "0")}-attempt-${input.attemptNo.toString().padStart(2, "0")}`,
-          input.jobId
-        );
-
-        return result;
-      } catch (error) {
-        const cancelled = isJobCancellationError(error) || toSafeErrorMessage(error) === "job_cancelled";
-        lastError = cancelled ? "job_cancelled" : toSafeErrorMessage(error);
-        slotReleaseReason = lastError;
-        if (cancelled) {
-          throw new JobCancelledError();
-        }
-        const failedAttempt = routeAttemptPayload({
-          route: redactedRoute,
+          routeAttemptNo: firstRouteAttemptNo,
+          maxRouteAttempts,
           ok: false,
-          latencyMs: Date.now() - startedAt,
-          error: lastError
-        });
-        routeAttempts.push(failedAttempt);
-        await heartbeat(
-          input.jobId,
-          `openclaw.${input.actionType}.route_failed`,
-          lastError,
-          input.stageId ?? null
-        );
-        await appendJobEvent(
-          input.jobId,
-          "tool.openclaw_agent_route_failed",
-          {
-            stageId: input.stageId,
-            agentId: route.honeycombAgentId,
-            requestedAgentId: input.agentId,
-            openclawAgentId: route.openclawAgentId,
-            attemptNo: input.attemptNo,
-            actionType: input.actionType,
-            idempotencyKey,
-            routeIndex,
-            route: redactedRoute,
-            error: lastError
-          },
-          {
-            actor: "tool-gateway",
-            stageId: input.stageId ?? null
-          }
-        );
-      } finally {
-        cancellationWatcher?.dispose();
-        await releaseModelCallSlot({
-          jobId: input.jobId,
+          latencyMs: 0,
+          error: readinessError,
+          decision
+        }));
+        await appendJobEvent(input.jobId, "tool.openclaw_agent_route_failed", {
           stageId: input.stageId,
-          actionType: input.actionType,
-          route,
-          lease: slotLease,
-          reason: slotReleaseReason
-        });
-      }
-    }
-
-    throw new Error(
-      `All OpenClaw route attempts failed for ${idempotencyKey}: ${lastError ?? "unknown_error"}`
-    );
-  } catch (error) {
-    const cancelled = isJobCancellationError(error) || toSafeErrorMessage(error) === "job_cancelled";
-    const safeError = cancelled ? "job_cancelled" : toSafeErrorMessage(error);
-    if (modelCallStarted) {
-      if (cancelled) {
-        await markModelCallCancelled({ idempotencyKey, error: safeError });
-      } else {
-        await markModelCallFailed({ idempotencyKey, error: safeError });
-      }
-    }
-    if (cancelled) {
-      await appendJobEvent(
-        input.jobId,
-        "tool.openclaw_agent_cancelled",
-        {
-          stageId: input.stageId,
-          agentId: primaryRoute.honeycombAgentId,
+          agentId: route.honeycombAgentId,
           requestedAgentId: input.agentId,
-          openclawAgentId: primaryRoute.openclawAgentId,
+          openclawAgentId: route.openclawAgentId,
           attemptNo: input.attemptNo,
           actionType: input.actionType,
           idempotencyKey,
-          routeAttempts
-        },
-        {
+          routeIndex,
+          routeAttemptNo: firstRouteAttemptNo,
+          maxRouteAttempts,
+          route: redactedRoute,
+          error: readinessError,
+          failure: decision
+        }, {
           actor: "tool-gateway",
           stageId: input.stageId ?? null
+        });
+
+        if (resolveModelCallRetryAction({
+          decision,
+          routeAttemptNo: firstRouteAttemptNo,
+          maxAttempts: maxRouteAttempts
+        }) === "failover") {
+          continue;
         }
-      );
+        throw new ModelCallExecutionError(readinessError, decision);
+      }
+
+      for (let routeAttemptNo = firstRouteAttemptNo; routeAttemptNo <= maxRouteAttempts; routeAttemptNo++) {
+        const startedAt = Date.now();
+        let slotLease: ModelCallSlotLease | null = null;
+        let slotReleaseReason: string | null = null;
+        let retryState: TaskExecutionRetryState | null = null;
+        let shouldFailover = false;
+        try {
+          slotLease = await acquireModelCallSlot({
+            idempotencyKey,
+            jobId: input.jobId,
+            stageId: input.stageId,
+            routeIndex,
+            route,
+            timeoutSeconds: input.timeoutSeconds,
+            actionType: input.actionType
+          });
+
+          await heartbeat(
+            input.jobId,
+            `openclaw.${input.actionType}.route_started`,
+            `${route.honeycombAgentId} route ${routeIndex + 1}/${routes.length}, attempt ${routeAttemptNo}/${maxRouteAttempts}`,
+            input.stageId ?? null
+          );
+          if (!modelCallStarted) {
+            await markModelCallStarted({
+              idempotencyKey,
+              jobId: input.jobId,
+              stageId: input.stageId,
+              attemptNo: input.attemptNo,
+              actionType: input.actionType,
+              agentId: primaryRoute.honeycombAgentId,
+              agentSessionId: input.sessionId,
+              requestHash: sha256(input.message)
+            });
+            modelCallStarted = true;
+            modelCallRecorded = true;
+          }
+
+          let result: OpenClawRunResult | null = null;
+          let providerFailure: { message: string; decision: ModelCallFailureDecision } | null = null;
+          try {
+            result = await runOpenClawAgent({
+              agentId: route.openclawAgentId,
+              sessionId: input.sessionId,
+              message: input.message,
+              requestId: sha256(`${idempotencyKey}:route:${routeIndex}`),
+              providerDirectMessage: input.providerDirectMessage,
+              provider: {
+                providerId: route.providerId,
+                baseUrl: route.providerBaseUrl,
+                model: route.model,
+                apiKey: route.apiKey,
+                agentRole: route.agentRole
+              },
+              outputDir: input.outputDir,
+              timeoutSeconds: input.timeoutSeconds,
+              signal: cancellationWatcher.signal
+            });
+          } catch (error) {
+            const cancelled = isJobCancellationError(error) || toSafeErrorMessage(error) === "job_cancelled";
+            if (cancelled) {
+              throw new JobCancelledError();
+            }
+            providerFailure = {
+              message: toSafeErrorMessage(error).slice(0, 500),
+              decision: classifyModelCallError(error)
+            };
+          }
+
+          if (providerFailure) {
+            const { message, decision } = providerFailure;
+            const retryAction = resolveModelCallRetryAction({
+              decision,
+              routeAttemptNo,
+              maxAttempts: maxRouteAttempts
+            });
+            lastError = message;
+            lastDecision = decision;
+            slotReleaseReason = message;
+            if (decision.userActionRequired && !userActionFailure) {
+              userActionFailure = { decision, error: message, route: redactedRoute };
+            }
+            routeAttempts.push(routeAttemptPayload({
+              route: redactedRoute,
+              routeIndex,
+              routeAttemptNo,
+              maxRouteAttempts,
+              ok: false,
+              latencyMs: Date.now() - startedAt,
+              error: message,
+              decision
+            }));
+            if (retryAction === "retry") {
+              const delayMs = computeModelRetryDelay({
+                retryNumber: routeAttemptNo,
+                retryAfterMs: decision.retryAfterMs,
+                policy: retryPolicy
+              });
+              const updatedAt = nowIso();
+              retryState = {
+                version: "honeycomb.model-retry.v1",
+                status: "waiting",
+                idempotencyKey,
+                actionType: input.actionType,
+                agentId: route.honeycombAgentId,
+                providerId: route.providerId!,
+                routeIndex,
+                failedAttemptNo: routeAttemptNo,
+                nextAttemptNo: routeAttemptNo + 1,
+                maxAttempts: maxRouteAttempts,
+                failureCategory: decision.category,
+                reason: message,
+                delayMs,
+                retryAfterMs: decision.retryAfterMs,
+                retryAt: new Date(Date.now() + delayMs).toISOString(),
+                updatedAt
+              };
+              const waitingCall = await markModelCallRetryWaiting({
+                idempotencyKey,
+                error: message,
+                responsePayload: {
+                  routeAttempts,
+                  retryState
+                }
+              });
+              if (!waitingCall) {
+                const latestCall = await getModelCallByKey(idempotencyKey);
+                if (latestCall?.status === "cancelled") {
+                  throw new JobCancelledError();
+                }
+                throw new Error("model_call_retry_transition_failed");
+              }
+              modelCallStarted = false;
+              modelCallRecorded = true;
+              await setJobExecutionRetry(input.jobId, retryState);
+            }
+            await heartbeat(
+              input.jobId,
+              `openclaw.${input.actionType}.route_failed`,
+              message,
+              input.stageId ?? null
+            );
+            await appendJobEvent(input.jobId, "tool.openclaw_agent_route_failed", {
+              stageId: input.stageId,
+              agentId: route.honeycombAgentId,
+              requestedAgentId: input.agentId,
+              openclawAgentId: route.openclawAgentId,
+              attemptNo: input.attemptNo,
+              actionType: input.actionType,
+              idempotencyKey,
+              routeIndex,
+              routeAttemptNo,
+              maxRouteAttempts,
+              route: redactedRoute,
+              error: message,
+              failure: decision,
+              retryAction
+            }, {
+              actor: "tool-gateway",
+              stageId: input.stageId ?? null
+            });
+
+            if (retryAction === "retry") {
+              await appendJobEvent(input.jobId, "model_call.retry_scheduled", {
+                stageId: input.stageId ?? null,
+                actionType: input.actionType,
+                agentId: route.honeycombAgentId,
+                providerId: route.providerId,
+                idempotencyKey,
+                routeIndex,
+                failedAttemptNo: routeAttemptNo,
+                nextAttemptNo: routeAttemptNo + 1,
+                maxAttempts: maxRouteAttempts,
+                failureCategory: decision.category,
+                delayMs: retryState!.delayMs,
+                retryAfterMs: decision.retryAfterMs,
+                retryAt: retryState!.retryAt
+              });
+            } else if (retryAction === "failover") {
+              shouldFailover = true;
+            } else {
+              throw new ModelCallExecutionError(message, decision);
+            }
+          } else {
+            if (cancellationWatcher.signal.aborted) {
+              throw new JobCancelledError();
+            }
+            const latestJob = await getJob(input.jobId);
+            if (!latestJob || latestJob.status === "cancelled") {
+              throw new JobCancelledError();
+            }
+            routeAttempts.push(routeAttemptPayload({
+              route: redactedRoute,
+              routeIndex,
+              routeAttemptNo,
+              maxRouteAttempts,
+              ok: true,
+              latencyMs: Date.now() - startedAt
+            }));
+            const routeSelection = {
+              selectedIndex: routeIndex,
+              attemptedCount: routeAttempts.length,
+              failoverUsed: routeIndex > 0,
+              retryUsed: routeAttemptNo > 1
+            };
+
+            await markModelCallSucceeded({
+              idempotencyKey,
+              responsePayload: {
+                result,
+                route: redactedRoute,
+                routeAttempts,
+                routeSelection
+              }
+            });
+            await appendJobEvent(input.jobId, "tool.openclaw_agent_completed", {
+              stageId: input.stageId,
+              agentId: route.honeycombAgentId,
+              requestedAgentId: input.agentId,
+              openclawAgentId: route.openclawAgentId,
+              attemptNo: input.attemptNo,
+              actionType: input.actionType,
+              idempotencyKey,
+              mode: result?.mode ?? null,
+              sessionId: result?.sessionId ?? input.sessionId,
+              route: redactedRoute,
+              routeAttempts,
+              routeSelection
+            }, {
+              actor: "tool-gateway",
+              stageId: input.stageId ?? null
+            });
+            await heartbeat(
+              input.jobId,
+              `openclaw.${input.actionType}.completed`,
+              `${route.honeycombAgentId} route ${routeIndex + 1}/${routes.length}`,
+              input.stageId ?? null
+            );
+
+            maybeCrashOnce(
+              `after-openclaw-${input.actionType}-stage-${input.stageIndex
+                .toString()
+                .padStart(3, "0")}-attempt-${input.attemptNo.toString().padStart(2, "0")}`,
+              input.jobId
+            );
+            return result;
+          }
+        } finally {
+          await releaseModelCallSlot({
+            jobId: input.jobId,
+            stageId: input.stageId,
+            actionType: input.actionType,
+            route,
+            lease: slotLease,
+            reason: slotReleaseReason
+          });
+        }
+
+        if (retryState) {
+          await heartbeat(
+            input.jobId,
+            `openclaw.${input.actionType}.retry_waiting`,
+            `${retryState.failureCategory}; retry ${retryState.nextAttemptNo}/${retryState.maxAttempts}`,
+            input.stageId ?? null
+          );
+          await waitForModelRetry(retryState.delayMs, cancellationWatcher.signal);
+          await clearJobExecutionRetry(input.jobId, idempotencyKey);
+          await appendJobEvent(input.jobId, "model_call.retry_started", {
+            stageId: input.stageId ?? null,
+            actionType: input.actionType,
+            agentId: route.honeycombAgentId,
+            providerId: route.providerId,
+            idempotencyKey,
+            routeIndex,
+            routeAttemptNo: retryState.nextAttemptNo,
+            maxAttempts: retryState.maxAttempts,
+            previousFailureCategory: retryState.failureCategory
+          });
+          continue;
+        }
+        if (shouldFailover) {
+          break;
+        }
+      }
+    }
+
+    const decision = lastDecision ?? classifyModelCallError(new Error("no_model_route_available"));
+    throw new ModelCallExecutionError(
+      `All OpenClaw route attempts failed for ${idempotencyKey}: ${lastError ?? "unknown_error"}`,
+      decision
+    );
+  } catch (error) {
+    const cancelled = isJobCancellationError(error) || toSafeErrorMessage(error) === "job_cancelled";
+    const safeError = cancelled ? "job_cancelled" : toSafeErrorMessage(error).slice(0, 500);
+    if (cancelled) {
+      if (modelCallRecorded) {
+        await markModelCallCancelled({ idempotencyKey, error: safeError });
+      }
+      await appendJobEvent(input.jobId, "tool.openclaw_agent_cancelled", {
+        stageId: input.stageId,
+        agentId: primaryRoute.honeycombAgentId,
+        requestedAgentId: input.agentId,
+        openclawAgentId: primaryRoute.openclawAgentId,
+        attemptNo: input.attemptNo,
+        actionType: input.actionType,
+        idempotencyKey,
+        routeAttempts
+      }, {
+        actor: "tool-gateway",
+        stageId: input.stageId ?? null
+      });
       await heartbeat(
         input.jobId,
         `openclaw.${input.actionType}.cancelled`,
@@ -491,13 +821,84 @@ async function runOpenClawAgentIdempotent(input: {
       );
       throw new JobCancelledError();
     }
+
+    if (!(error instanceof ModelCallExecutionError)) {
+      throw error;
+    }
+
+    const failurePayload = {
+      routeAttempts,
+      finalFailure: {
+        error: safeError,
+        ...error.decision
+      }
+    };
+    if (modelCallRecorded) {
+      if (error.decision.unknownOutcome) {
+        await markModelCallFailedUnknownOutcome({
+          idempotencyKey,
+          error: safeError,
+          responsePayload: failurePayload
+        });
+      } else {
+        await markModelCallFailed({
+          idempotencyKey,
+          error: safeError,
+          responsePayload: failurePayload
+        });
+      }
+    }
+
+    await appendJobEvent(
+      input.jobId,
+      error.decision.unknownOutcome
+        ? "tool.openclaw_agent_failed_unknown_outcome"
+        : "tool.openclaw_agent_failed",
+      {
+        stageId: input.stageId,
+        agentId: primaryRoute.honeycombAgentId,
+        requestedAgentId: input.agentId,
+        openclawAgentId: primaryRoute.openclawAgentId,
+        attemptNo: input.attemptNo,
+        actionType: input.actionType,
+        idempotencyKey,
+        error: safeError,
+        failure: error.decision,
+        routeAttempts
+      },
+      {
+        actor: "tool-gateway",
+        stageId: input.stageId ?? null
+      }
+    );
     await heartbeat(
       input.jobId,
       `openclaw.${input.actionType}.failed`,
       safeError,
       input.stageId ?? null
     );
-    throw new Error(safeError);
+
+    const actionRequired = userActionFailure ?? (error.decision.userActionRequired
+      ? { decision: error.decision, error: safeError, route: redactedPrimaryRoute }
+      : null);
+    if (error.decision.unknownOutcome || actionRequired) {
+      const blockingFailure = error.decision.unknownOutcome
+        ? { decision: error.decision, error: safeError, route: redactedPrimaryRoute }
+        : actionRequired!;
+      await setJobStatus(input.jobId, "waiting_for_human", {
+        reason: error.decision.unknownOutcome
+          ? `model_call_unknown_outcome: ${safeError}`
+          : `model_call_${blockingFailure.decision.category}: ${blockingFailure.error}`,
+        actionType: input.actionType,
+        agentId: blockingFailure.route.honeycombAgentId,
+        providerId: blockingFailure.route.providerId,
+        failure: blockingFailure.decision
+      });
+    }
+    throw error;
+  } finally {
+    cancellationWatcher?.dispose();
+    await clearJobExecutionRetry(input.jobId, idempotencyKey).catch(() => undefined);
   }
 }
 
@@ -720,7 +1121,23 @@ export async function ensureJobWaitingForHuman(input: { jobId: string; reason: s
 }
 
 export async function markJobFailed(jobId: string, reason: string) {
-  await setJobStatus(jobId, "failed", { reason });
+  const job = await getJob(jobId);
+  if (!job) {
+    return "failed" as const;
+  }
+  if (
+    job.status === "waiting_for_human" ||
+    job.status === "cancelled" ||
+    job.status === "succeeded" ||
+    job.status === "failed"
+  ) {
+    return job.status;
+  }
+  const changed = await setJobStatus(jobId, "failed", { reason });
+  if (!changed) {
+    return (await getJob(jobId))?.status ?? "failed";
+  }
+  return "failed" as const;
 }
 
 export async function prepareJobWorkspace(jobId: string) {

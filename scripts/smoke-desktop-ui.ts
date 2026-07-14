@@ -542,8 +542,8 @@ async function runUiFlow(page: CdpClient) {
         throw new Error("job request did not include supervisor workbench context");
       }
       await waitFor(
-        () => document.body.textContent.includes("Sent to the agent team") ||
-          document.body.textContent.includes("已发送给 Agent 团队"),
+        () => document.body.textContent.includes("Task dispatched:") ||
+          document.body.textContent.includes("任务已派发："),
         "conversation did not render the sent message"
       );
       const jobsTab = await waitFor(

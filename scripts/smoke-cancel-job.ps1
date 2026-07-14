@@ -74,6 +74,7 @@ Assert-Equal -Actual $waiting.status -Expected "waiting_for_human" -Message "bud
 
 $env:SMOKE_CANCEL_JOB_ID = $created.jobId
 $env:SMOKE_CANCEL_MODEL_CALL_KEY = "$($created.jobId):cancel-smoke-active-call"
+$env:SMOKE_CANCEL_RETRY_CALL_KEY = "$($created.jobId):cancel-smoke-retry-waiting-call"
 $seedModelCallScript = @'
 async function main() {
   const { pool } = await import("./packages/db/src/pool");
@@ -84,6 +85,16 @@ async function main() {
     [
       `MC-CANCEL-${Math.random().toString(16).slice(2, 10).toUpperCase()}`,
       process.env.SMOKE_CANCEL_MODEL_CALL_KEY,
+      process.env.SMOKE_CANCEL_JOB_ID
+    ]
+  );
+  await pool.query(
+    `insert into agent.model_calls (
+      id, idempotency_key, job_id, attempt_no, action_type, agent_id, status
+    ) values ($1, $2, $3, 1, 'cancel-smoke', 'research-agent', 'retry_waiting')`,
+    [
+      `MC-RETRY-${Math.random().toString(16).slice(2, 10).toUpperCase()}`,
+      process.env.SMOKE_CANCEL_RETRY_CALL_KEY,
       process.env.SMOKE_CANCEL_JOB_ID
     ]
   );
@@ -127,9 +138,12 @@ async function main() {
   const { markModelCallStarted } = await import("./packages/db/src/model-calls");
   const { pool } = await import("./packages/db/src/pool");
   const result = await pool.query(
-    `select status, error from agent.model_calls where idempotency_key = $1`,
-    [process.env.SMOKE_CANCEL_MODEL_CALL_KEY]
+    `select idempotency_key, status, error
+     from agent.model_calls
+     where idempotency_key = any($1::text[])`,
+    [[process.env.SMOKE_CANCEL_MODEL_CALL_KEY, process.env.SMOKE_CANCEL_RETRY_CALL_KEY]]
   );
+  const byKey = new Map(result.rows.map((row) => [row.idempotency_key, row]));
   let restartError = null;
   try {
     await markModelCallStarted({
@@ -143,8 +157,10 @@ async function main() {
     restartError = error instanceof Error ? error.message : String(error);
   }
   console.log(JSON.stringify({
-    status: result.rows[0]?.status ?? null,
-    error: result.rows[0]?.error ?? null,
+    status: byKey.get(process.env.SMOKE_CANCEL_MODEL_CALL_KEY)?.status ?? null,
+    error: byKey.get(process.env.SMOKE_CANCEL_MODEL_CALL_KEY)?.error ?? null,
+    retryWaitingStatus: byKey.get(process.env.SMOKE_CANCEL_RETRY_CALL_KEY)?.status ?? null,
+    retryWaitingError: byKey.get(process.env.SMOKE_CANCEL_RETRY_CALL_KEY)?.error ?? null,
     restartError
   }));
   await pool.end();
@@ -158,6 +174,8 @@ main().catch((error) => {
 $modelCallCheck = ($verifyModelCallScript | npx tsx - | ConvertFrom-Json)
 Assert-Equal -Actual $modelCallCheck.status -Expected "cancelled" -Message "active model call status after cancel"
 Assert-Equal -Actual $modelCallCheck.error -Expected "job_cancelled" -Message "active model call cancel reason"
+Assert-Equal -Actual $modelCallCheck.retryWaitingStatus -Expected "cancelled" -Message "retry-waiting model call status after cancel"
+Assert-Equal -Actual $modelCallCheck.retryWaitingError -Expected "job_cancelled" -Message "retry-waiting model call cancel reason"
 Assert-Equal -Actual $modelCallCheck.restartError -Expected "job_cancelled" -Message "cancelled job must reject new model calls"
 
 $secondCancel = Invoke-RestMethod `
@@ -180,7 +198,7 @@ $archiveEvents = @(
 Assert-True -Condition ($cancelEvents.Count -gt 0) -Message "timeline missing job.cancelled"
 Assert-Equal -Actual $cancelEvents.Count -Expected 1 -Message "timeline should have one job.cancelled job event"
 Assert-Equal -Actual $archiveEvents.Count -Expected 1 -Message "timeline should have one job.archived job event"
-Assert-True -Condition ($cancelEvents[0].payload.cancelledModelCallCount -ge 1) -Message "cancel event should count stopped model calls"
+Assert-True -Condition ($cancelEvents[0].payload.cancelledModelCallCount -ge 2) -Message "cancel event should count active and retry-waiting model calls"
 
 $usage = Invoke-RestMethod -Uri "http://localhost:3000/runtime/usage"
 Assert-True -Condition ($usage.summary.modelCalls.cancelled -ge 1) -Message "runtime usage should count cancelled model calls"
@@ -216,6 +234,7 @@ Assert-True -Condition ($archiveIndex -gt $cancelIndex) -Message "job.archived s
     "cancel_archives_session",
     "cancel_is_idempotent",
     "active_model_call_cancelled",
+    "retry_waiting_model_call_cancelled",
     "cancelled_job_rejects_new_model_calls",
     "runtime_usage_counts_cancelled_model_calls",
     "timeline_has_cancel_event",
