@@ -61,6 +61,10 @@ import {
 } from "../../../packages/db/src/model-calls";
 import { getModelCallQueueOverview } from "../../../packages/db/src/model-call-queue";
 import {
+  getModelCallLeaseSummary,
+  scanExpiredModelCallLeases
+} from "../../../packages/db/src/model-call-leases";
+import {
   claimModelCallSpendDispatch,
   getJobSpendBudget,
   listModelCallSpendForJob,
@@ -498,6 +502,10 @@ const panelChatSchema = z.object({
   maxModelCalls: z.number().int().min(1).max(100).optional(),
   outputStyle: z.enum(["concise", "detailed", "warm", "formal"]).optional(),
   language: z.enum(["en", "zh"]).optional()
+});
+
+const modelCallLeaseQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(500).optional()
 });
 
 const modelCallQueueQuerySchema = z.object({
@@ -2547,6 +2555,40 @@ async function main() {
     }
   });
 
+  app.get("/jobs/:jobId/model-call-leases", async (request, response, next) => {
+    try {
+      const job = await getJob(routeParameter(request.params.jobId));
+      if (!job) {
+        response.status(404).json({ error: "job_not_found" });
+        return;
+      }
+      const query = modelCallLeaseQuerySchema.parse(request.query);
+      response.json(await getModelCallLeaseSummary({
+        jobId: job.id,
+        limit: query.limit
+      }));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/jobs/:jobId/model-call-leases/scan", async (request, response, next) => {
+    try {
+      const job = await getJob(routeParameter(request.params.jobId));
+      if (!job) {
+        response.status(404).json({ error: "job_not_found" });
+        return;
+      }
+      const input = modelCallLeaseQuerySchema.parse(request.body ?? {});
+      response.json(await scanExpiredModelCallLeases({
+        jobId: job.id,
+        limit: input.limit
+      }));
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.get("/jobs/:jobId/spend", async (request, response, next) => {
     try {
       const jobId = routeParameter(request.params.jobId);
@@ -2876,6 +2918,24 @@ async function main() {
     try {
       const query = modelCallQueueQuerySchema.parse(request.query);
       response.json(await getModelCallQueueOverview(query.limit));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/runtime/model-call-leases", async (request, response, next) => {
+    try {
+      const query = modelCallLeaseQuerySchema.parse(request.query);
+      response.json(await getModelCallLeaseSummary(query));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/runtime/model-call-leases/scan", async (request, response, next) => {
+    try {
+      const input = modelCallLeaseQuerySchema.parse(request.body ?? {});
+      response.json(await scanExpiredModelCallLeases(input));
     } catch (error) {
       next(error);
     }

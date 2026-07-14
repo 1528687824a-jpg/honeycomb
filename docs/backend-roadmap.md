@@ -736,6 +736,11 @@ slice is Stage 4: real behavioral regression for all four routing modes.
       reads active/stale/stalled counts, `POST /runtime/heartbeats/scan`
       marks expired active jobs as `stalled` without cancelling or deleting
       them, and `npm run smoke:job-heartbeats` validates the path.
+      Expired model-call leases are now visible globally and per task through
+      `/runtime/model-call-leases` and `/jobs/:jobId/model-call-leases`.
+      The bounded recovery scan and diagnostics repair action preserve resumable
+      provider video task IDs, while ambiguous ordinary calls pause for explicit
+      reconciliation instead of being sent again.
 
 ## Current Next Step: Staged Work Plan (2026-06-12)
 

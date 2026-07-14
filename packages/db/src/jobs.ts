@@ -872,6 +872,8 @@ async function cancelStartedModelCallsForJob(jobId: string) {
          error = 'job_cancelled',
          claim_token = null,
          lease_expires_at = null,
+         lease_recovery_status = null,
+         lease_recovery_checked_at = null,
          updated_at = now()
      where job_id = $1
        and status in ('started', 'retry_waiting')`,

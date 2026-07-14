@@ -56,6 +56,7 @@ $actionsResponse = Invoke-RestMethod -Uri "$apiBaseUrl/runtime/repair/actions" -
 $actionIds = @($actionsResponse.actions | ForEach-Object { $_.id })
 foreach ($expected in @(
   "database.migrate",
+  "modelCalls.scanExpiredLeases",
   "providers.reconcileSecrets",
   "mcp.checkAll",
   "openclaw.runtime.start",

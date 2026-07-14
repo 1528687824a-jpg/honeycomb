@@ -52,6 +52,40 @@ type LeaseModelCallStatus =
   | "failed_unknown_outcome"
   | "cancelled";
 
+export type ModelCallLeaseRecoveryClassification =
+  | "inactive"
+  | "active"
+  | "provider_resume_available"
+  | "reconciliation_required";
+
+export function classifyModelCallLeaseRecovery(input: {
+  status: LeaseModelCallStatus;
+  leaseExpiresAt: string | null;
+  now: string;
+  requestReference: {
+    runner?: string | null;
+    kind?: string | null;
+    providerTaskId?: string | null;
+  } | null;
+}): ModelCallLeaseRecoveryClassification {
+  if (input.status !== "started") {
+    return "inactive";
+  }
+  if (leaseIsActive(input.leaseExpiresAt, input.now)) {
+    return "active";
+  }
+  const reference = input.requestReference;
+  if (
+    reference?.runner === "provider-direct" &&
+    reference.kind === "video" &&
+    typeof reference.providerTaskId === "string" &&
+    reference.providerTaskId.trim()
+  ) {
+    return "provider_resume_available";
+  }
+  return "reconciliation_required";
+}
+
 export type ModelCallLeaseClaimDecision = {
   allowed: boolean;
   reused: boolean;

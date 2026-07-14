@@ -504,6 +504,10 @@ const runtimeRepairActionLabels: Record<Language, Record<RuntimeRepairActionId, 
       title: "Run migrations",
       description: "Apply safe Honeycomb database migrations."
     },
+    "modelCalls.scanExpiredLeases": {
+      title: "Scan expired calls",
+      description: "Classify expired model calls without sending a duplicate provider request."
+    },
     "providers.reconcileSecrets": {
       title: "Sync key status",
       description: "Fix stale provider key flags from local secret storage."
@@ -533,6 +537,10 @@ const runtimeRepairActionLabels: Record<Language, Record<RuntimeRepairActionId, 
     "database.migrate": {
       title: "运行数据库迁移",
       description: "执行安全的 Honeycomb 数据库迁移。"
+    },
+    "modelCalls.scanExpiredLeases": {
+      title: "扫描过期模型调用",
+      description: "判断过期调用如何恢复，同时避免向服务商重复发送任务。"
     },
     "providers.reconcileSecrets": {
       title: "同步 Key 状态",

@@ -1,10 +1,53 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  classifyModelCallLeaseRecovery,
   resolveJobExecutionClaim,
   resolveModelCallLeaseClaim,
   resolveResumeWorkflowId
 } from "../packages/shared/src/execution-lease-policy";
+
+test("model-call lease recovery distinguishes active, resumable, and ambiguous work", () => {
+  const now = "2026-07-14T00:00:00.000Z";
+  assert.equal(classifyModelCallLeaseRecovery({
+    status: "started",
+    leaseExpiresAt: "2026-07-14T00:01:00.000Z",
+    now,
+    requestReference: null
+  }), "active");
+  assert.equal(classifyModelCallLeaseRecovery({
+    status: "started",
+    leaseExpiresAt: "2026-07-13T23:59:00.000Z",
+    now,
+    requestReference: {
+      runner: "provider-direct",
+      kind: "video",
+      providerTaskId: "video-task-1"
+    }
+  }), "provider_resume_available");
+  assert.equal(classifyModelCallLeaseRecovery({
+    status: "started",
+    leaseExpiresAt: "2026-07-13T23:59:00.000Z",
+    now,
+    requestReference: {
+      runner: "provider-direct",
+      kind: "video",
+      providerTaskId: null
+    }
+  }), "reconciliation_required");
+  assert.equal(classifyModelCallLeaseRecovery({
+    status: "started",
+    leaseExpiresAt: null,
+    now,
+    requestReference: null
+  }), "reconciliation_required");
+  assert.equal(classifyModelCallLeaseRecovery({
+    status: "succeeded",
+    leaseExpiresAt: null,
+    now,
+    requestReference: null
+  }), "inactive");
+});
 
 test("a created job can be claimed exactly once by a new workflow", () => {
   assert.deepEqual(resolveJobExecutionClaim({

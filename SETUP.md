@@ -759,6 +759,20 @@ Workflow resume ownership and model-call lease details are documented in
 npm run smoke:execution-leases
 ```
 
+Runtime lease inspection and recovery:
+
+```text
+GET  /runtime/model-call-leases
+GET  /jobs/:jobId/model-call-leases
+POST /runtime/model-call-leases/scan
+POST /jobs/:jobId/model-call-leases/scan
+```
+
+The scan is also available as the `modelCalls.scanExpiredLeases` diagnostics
+repair action. It never repeats an expired provider request. Ordinary calls are
+paused for human reconciliation; persisted provider-direct video tasks retain
+their task ID and can safely resume polling.
+
 Admin API unstick path:
 
 ```text
@@ -783,6 +797,10 @@ SQL-only fallback:
 update agent.model_calls
 set status = 'failed_unknown_outcome',
     error = 'failed_unknown_outcome: operator confirmed the original call outcome is unknown',
+    claim_token = null,
+    lease_expires_at = null,
+    lease_recovery_status = 'reconciliation_required',
+    lease_recovery_checked_at = now(),
     updated_at = now()
 where idempotency_key = '<idempotency-key>'
   and status = 'started';

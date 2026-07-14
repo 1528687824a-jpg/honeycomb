@@ -5,6 +5,7 @@ import {
   seedDefaultAgentConfigs
 } from "../../../packages/db/src/config-registry";
 import { runMigrations } from "../../../packages/db/src/migrate";
+import { scanExpiredModelCallLeases } from "../../../packages/db/src/model-call-leases";
 import {
   listMcpServers,
   patchMcpServer
@@ -29,6 +30,7 @@ import {
 
 export const RUNTIME_REPAIR_ACTION_IDS = [
   "database.migrate",
+  "modelCalls.scanExpiredLeases",
   "providers.reconcileSecrets",
   "mcp.checkAll",
   "openclaw.runtime.start",
@@ -72,6 +74,13 @@ export function listRuntimeRepairActions(): RuntimeRepairAction[] {
       id: "database.migrate",
       title: "Run database migrations",
       description: "Run the idempotent Honeycomb database migration set against the configured database.",
+      riskLevel: "medium",
+      inputs: []
+    },
+    {
+      id: "modelCalls.scanExpiredLeases",
+      title: "Scan expired model-call leases",
+      description: "Classify expired model calls without repeating an ambiguous provider request.",
       riskLevel: "medium",
       inputs: []
     },
@@ -138,6 +147,22 @@ async function repairDatabaseMigrate(action: RuntimeRepairActionId): Promise<Run
     details: {
       durationMs: Date.now() - startedAt
     }
+  });
+}
+
+async function repairExpiredModelCallLeases(
+  action: RuntimeRepairActionId
+): Promise<RuntimeRepairResult> {
+  const scan = await scanExpiredModelCallLeases();
+  return result({
+    action,
+    ok: scan.errors.length === 0,
+    changed: scan.scanned > 0,
+    summary:
+      scan.scanned > 0
+        ? `Classified ${scan.scanned} expired model call(s): ${scan.providerResumeAvailable} resumable and ${scan.reconciliationRequired} requiring reconciliation.`
+        : "No unclassified expired model-call leases were found.",
+    details: scan
   });
 }
 
@@ -361,6 +386,8 @@ export async function runRuntimeRepairAction(input: RuntimeRepairInput): Promise
   switch (input.action) {
     case "database.migrate":
       return repairDatabaseMigrate(input.action);
+    case "modelCalls.scanExpiredLeases":
+      return repairExpiredModelCallLeases(input.action);
     case "providers.reconcileSecrets":
       return repairProviderSecrets(input.action);
     case "mcp.checkAll":

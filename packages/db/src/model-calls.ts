@@ -35,6 +35,8 @@ export type ModelCallRecord = {
   reconciliation: ModelCallReconciliationState | null;
   claimToken: string | null;
   leaseExpiresAt: string | null;
+  leaseRecoveryStatus: string | null;
+  leaseRecoveryCheckedAt: string | null;
   error: string | null;
   createdAt: string;
   updatedAt: string;
@@ -57,6 +59,8 @@ function toModelCallRecord(row: any): ModelCallRecord {
     reconciliation: parseModelCallReconciliationState(row.reconciliation),
     claimToken: row.claim_token ?? null,
     leaseExpiresAt: row.lease_expires_at?.toISOString() ?? null,
+    leaseRecoveryStatus: row.lease_recovery_status ?? null,
+    leaseRecoveryCheckedAt: row.lease_recovery_checked_at?.toISOString() ?? null,
     error: row.error,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString()
@@ -189,6 +193,8 @@ export async function markModelCallStarted(input: {
                reconciliation = case when status in ('retry_waiting', 'failed') then '{}'::jsonb else reconciliation end,
                claim_token = $2,
                lease_expires_at = now() + ($3::int * interval '1 second'),
+               lease_recovery_status = null,
+               lease_recovery_checked_at = null,
                updated_at = now()
            where idempotency_key = $1
            returning *`,
@@ -305,6 +311,8 @@ export async function markModelCallSucceeded(input: {
            error = case when $2 = 'cancelled' then 'job_cancelled' else null end,
            claim_token = null,
            lease_expires_at = null,
+           lease_recovery_status = null,
+           lease_recovery_checked_at = null,
            updated_at = now()
        where idempotency_key = $1
          and status = 'started'
@@ -348,6 +356,8 @@ export async function markModelCallFailed(input: {
          response_payload = coalesce($3::jsonb, response_payload),
          claim_token = null,
          lease_expires_at = null,
+         lease_recovery_status = null,
+         lease_recovery_checked_at = null,
          updated_at = now()
      where idempotency_key = $1
        and status in ('started', 'retry_waiting')
@@ -375,6 +385,8 @@ export async function markModelCallCancelled(input: {
          error = $2,
          claim_token = null,
          lease_expires_at = null,
+         lease_recovery_status = null,
+         lease_recovery_checked_at = null,
          updated_at = now()
      where idempotency_key = $1
        and status in ('started', 'retry_waiting')
@@ -403,6 +415,8 @@ export async function markModelCallFailedUnknownOutcome(input: {
          response_payload = coalesce($3::jsonb, response_payload),
          claim_token = null,
          lease_expires_at = null,
+         lease_recovery_status = case when $5::boolean then 'reconciliation_required' else null end,
+         lease_recovery_checked_at = case when $5::boolean then now() else null end,
          updated_at = now()
      where idempotency_key = $1
        and status in ('started', 'retry_waiting')
@@ -433,6 +447,8 @@ export async function markModelCallRetryWaiting(input: {
          response_payload = $3::jsonb,
          claim_token = null,
          lease_expires_at = null,
+         lease_recovery_status = null,
+         lease_recovery_checked_at = null,
          updated_at = now()
      where idempotency_key = $1
        and status = 'started'
@@ -559,6 +575,8 @@ export async function reconcileModelCallAsFailed(input: {
          reconciliation = $4::jsonb,
          claim_token = null,
          lease_expires_at = null,
+         lease_recovery_status = null,
+         lease_recovery_checked_at = null,
          response_payload = coalesce(response_payload, '{}'::jsonb)
            || jsonb_build_object('reconciliation', $4::jsonb),
          updated_at = now()
@@ -590,6 +608,8 @@ export async function reconcileModelCallAsSucceeded(input: {
          response_payload = $4::jsonb,
          claim_token = null,
          lease_expires_at = null,
+         lease_recovery_status = null,
+         lease_recovery_checked_at = null,
          updated_at = now()
      where id = $1
        and job_id = $2

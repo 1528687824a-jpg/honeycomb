@@ -691,9 +691,14 @@ const statements = [
   `alter table agent.model_calls add column if not exists reconciliation jsonb not null default '{}'`,
   `alter table agent.model_calls add column if not exists claim_token text`,
   `alter table agent.model_calls add column if not exists lease_expires_at timestamptz`,
+  `alter table agent.model_calls add column if not exists lease_recovery_status text`,
+  `alter table agent.model_calls add column if not exists lease_recovery_checked_at timestamptz`,
   `create index if not exists model_calls_active_lease_idx
     on agent.model_calls(status, lease_expires_at)
     where status = 'started'`,
+  `create index if not exists model_calls_lease_recovery_idx
+    on agent.model_calls(lease_recovery_status, lease_recovery_checked_at desc)
+    where lease_recovery_status is not null`,
   `create index if not exists model_call_queue_active_idx
     on agent.model_call_queue(status, expires_at)`,
   `create index if not exists model_call_queue_provider_idx

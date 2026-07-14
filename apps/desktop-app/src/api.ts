@@ -485,6 +485,7 @@ export type RuntimeDiagnosticsResponse = {
 
 export type RuntimeRepairActionId =
   | "database.migrate"
+  | "modelCalls.scanExpiredLeases"
   | "providers.reconcileSecrets"
   | "mcp.checkAll"
   | "openclaw.runtime.start"
@@ -1682,6 +1683,56 @@ export type JobHeartbeatScanResult = {
   summary: JobHeartbeatSummary;
 };
 
+export type ModelCallLeaseEntry = {
+  modelCallId: string;
+  idempotencyKey: string;
+  jobId: string;
+  stageId: string | null;
+  actionType: string;
+  agentId: string;
+  status: string;
+  leaseExpiresAt: string | null;
+  recoveryStatus: string | null;
+  recoveryCheckedAt: string | null;
+  classification: "inactive" | "active" | "provider_resume_available" | "reconciliation_required";
+  providerId: string | null;
+  model: string | null;
+  providerTaskId: string | null;
+  error: string | null;
+  updatedAt: string;
+};
+
+export type ModelCallLeaseSummary = {
+  checkedAt: string;
+  started: number;
+  active: number;
+  expiredStarted: number;
+  missingLease: number;
+  providerResumeAvailable: number;
+  reconciliationRequired: number;
+  recent: ModelCallLeaseEntry[];
+};
+
+export type ModelCallLeaseScanResult = {
+  checkedAt: string;
+  scanned: number;
+  providerResumeAvailable: number;
+  reconciliationRequired: number;
+  spendReconciled: number;
+  errors: string[];
+  processed: Array<{
+    modelCallId: string;
+    idempotencyKey: string;
+    jobId: string;
+    stageId: string | null;
+    actionType: string;
+    agentId: string;
+    classification: "provider_resume_available" | "reconciliation_required";
+    providerTaskId: string | null;
+  }>;
+  summary: ModelCallLeaseSummary;
+};
+
 export type ListSessionsInput = {
   limit?: number;
   status?: JobStatus;
@@ -2005,6 +2056,33 @@ export async function scanStalledJobHeartbeats(input: {
     method: "POST",
     body: JSON.stringify(input)
   });
+}
+
+export async function getModelCallLeaseSummary(limit = 50) {
+  return request<ModelCallLeaseSummary>(`/runtime/model-call-leases?limit=${limit}`);
+}
+
+export async function getJobModelCallLeaseSummary(jobId: string, limit = 50) {
+  return request<ModelCallLeaseSummary>(
+    `/jobs/${encodeURIComponent(jobId)}/model-call-leases?limit=${limit}`
+  );
+}
+
+export async function scanExpiredModelCallLeases(limit = 100) {
+  return request<ModelCallLeaseScanResult>("/runtime/model-call-leases/scan", {
+    method: "POST",
+    body: JSON.stringify({ limit })
+  });
+}
+
+export async function scanJobExpiredModelCallLeases(jobId: string, limit = 100) {
+  return request<ModelCallLeaseScanResult>(
+    `/jobs/${encodeURIComponent(jobId)}/model-call-leases/scan`,
+    {
+      method: "POST",
+      body: JSON.stringify({ limit })
+    }
+  );
 }
 
 export async function resumeJob(jobId: string, input: { maxCostUsd?: number } = {}) {

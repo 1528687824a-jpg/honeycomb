@@ -1,6 +1,7 @@
 import { listToolApprovals } from "../../../packages/db/src/approvals";
 import { listAgentConfigs, listModelProviders } from "../../../packages/db/src/config-registry";
 import { getJobHeartbeatSummary } from "../../../packages/db/src/jobs";
+import { getModelCallLeaseSummary } from "../../../packages/db/src/model-call-leases";
 import { pool } from "../../../packages/db/src/pool";
 import { listDueScheduledTasks, listScheduledTasks } from "../../../packages/db/src/schedules";
 import { listMcpServers, listSkills } from "../../../packages/db/src/tool-registry";
@@ -227,6 +228,50 @@ export async function getRuntimeDiagnostics(input: {
       title: "Job heartbeats",
       status: "unknown",
       summary: "Job heartbeat diagnostics could not be read.",
+      details: {
+        error: error instanceof Error ? error.message : String(error)
+      }
+    });
+  }
+
+  try {
+    const leases = await getModelCallLeaseSummary({ limit: 5 });
+    const leaseStatus = leases.expiredStarted > 0 || leases.reconciliationRequired > 0
+      ? "warning"
+      : "ok";
+    checks.push({
+      id: "model_call_leases",
+      title: "Model-call leases",
+      status: leaseStatus,
+      summary: leaseStatus === "ok"
+        ? `${leases.active} active model calls have valid execution leases.`
+        : `${leases.expiredStarted} started calls have expired leases; ${leases.providerResumeAvailable} provider video tasks can resume and ${leases.reconciliationRequired} calls require reconciliation.`,
+      details: leases
+    });
+    if (leases.expiredStarted > 0) {
+      pushAction(
+        recommendedActions,
+        "Run the model-call lease scan before resuming stalled work; the scan never repeats an ambiguous provider request."
+      );
+    }
+    if (leases.providerResumeAvailable > 0) {
+      pushAction(
+        recommendedActions,
+        "Resume stalled provider video tasks so Honeycomb can continue polling their persisted task IDs."
+      );
+    }
+    if (leases.reconciliationRequired > 0) {
+      pushAction(
+        recommendedActions,
+        "Review model calls with unknown provider outcomes and reconcile them before retrying their jobs."
+      );
+    }
+  } catch (error) {
+    checks.push({
+      id: "model_call_leases",
+      title: "Model-call leases",
+      status: "unknown",
+      summary: "Model-call lease diagnostics could not be read.",
       details: {
         error: error instanceof Error ? error.message : String(error)
       }

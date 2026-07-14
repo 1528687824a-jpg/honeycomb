@@ -29,6 +29,23 @@ Each `agent.model_calls` row stores `claim_token` and `lease_expires_at`.
 
 `MODEL_CALL_LEASE_SECONDS` defaults to `900`. Runtime calls use the greater safety window implied by their configured timeout.
 
+## Expired lease recovery
+
+Honeycomb exposes expired calls without returning claim tokens or provider secrets:
+
+- `GET /runtime/model-call-leases` returns global counts and recent affected calls.
+- `GET /jobs/:jobId/model-call-leases` returns the same view for one task.
+- `POST /runtime/model-call-leases/scan` classifies a bounded batch.
+- `POST /jobs/:jobId/model-call-leases/scan` limits recovery to one task.
+- The `modelCalls.scanExpiredLeases` runtime repair action runs the same safe scan from the diagnostics workbench.
+
+The scanner uses the same database lock order as execution and cancellation. Concurrent scanners skip a model-call ownership lock that is already held and recheck the lease before changing state.
+
+- A persisted provider-direct video task stays `started`, loses its stale owner token, marks the task stalled, and becomes available for polling takeover with the existing provider task ID.
+- Every other expired started call becomes `failed_unknown_outcome`; its task pauses in `waiting_for_human` until an operator records the real provider outcome.
+- Any reserved spend becomes unknown-outcome spend instead of being silently released or charged twice.
+- Re-running the scanner is idempotent and never repeats the original provider create request.
+
 ## Verification
 
 Pure policy coverage is in `tests/execution-lease-policy.test.ts`. Routing ownership propagation is covered by `tests/routing-execution.test.ts`.
@@ -39,4 +56,4 @@ With PostgreSQL running, execute:
 npm run smoke:execution-leases
 ```
 
-The smoke test races two workflow claims, two resume requests, and two model-call owners. It also verifies provider-task lease takeover and stale-owner fencing.
+The smoke test races two workflow claims, two resume requests, and two model-call owners. It also verifies provider-task lease takeover, stale-owner fencing, ordinary unknown-outcome classification, and resumable video-task classification.
