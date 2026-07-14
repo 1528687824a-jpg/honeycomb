@@ -47,7 +47,7 @@ The structured conversation-to-task contract is implemented:
 
 ### Windows Stage 2 Progress (2026-07-14)
 
-The first five execution-control slices are implemented:
+The execution-control and spend-protection stage is implemented:
 
 - Every new or resumed job runs a shared execution preflight before DBOS starts.
 - Preflight checks every production agent, the test agent, and the discussion
@@ -130,10 +130,62 @@ The first five execution-control slices are implemented:
   success cannot falsely complete a media task.
 - `npm run smoke:model-reconciliation` covers migration-backed request
   references, restart guards, state reset, safe retry unlock, and result reuse.
-- `npm run check`, the desktop production build, and all 125 unit tests pass.
+- Real provider calls now reserve USD atomically before dispatch against task
+  lifetime, requester daily, and provider daily limits. Concurrent workers use
+  one PostgreSQL advisory transaction lock, so they cannot both spend the same
+  remaining allowance.
+- `agent.model_call_spend` keeps one idempotent entry per route attempt. Known
+  non-charge failures release it, unknown outcomes retain it, successful calls
+  settle from provider token usage or a conservative request bound, and
+  reconciliation releases or settles the same entry without replaying work.
+- Panel-agent chat/planning calls use the same ledger for requester/provider
+  daily limits, keyed by the persisted source message. A task lifetime cap is
+  applied only after a task exists.
+- Spend limits are opt-in. Task limits come from `maxCostUsd` or
+  `HONEYCOMB_DEFAULT_JOB_MAX_COST_USD`; user/provider daily defaults come from
+  `HONEYCOMB_USER_DAILY_MAX_COST_USD` and
+  `HONEYCOMB_PROVIDER_DAILY_MAX_COST_USD`. Provider metadata
+  `spendLimits.dailyUsd` can override the provider daily default.
+- Provider metadata pricing supports token rates plus `maxPerRequestUsd` or
+  `perRequestUsd`, including model-specific overrides. When any hard limit is
+  enabled but a safe charge bound is unavailable, the task pauses before the
+  request is sent instead of spending an unknown amount.
+- Jobs persist settled, reserved, committed, and remaining USD plus the exact
+  blocking scope. The task page renders this state and requires a higher task
+  cap before resuming a task-level exhaustion.
+- `GET /jobs/:jobId/spend` exposes the audit ledger, while
+  `GET /runtime/usage` now includes authoritative spend-ledger totals alongside
+  historical token-based estimates.
+- `npm run smoke:model-call-spend` covers idempotent reservation, unknown
+  outcome retention, release, settlement, concurrent task limits, and daily
+  user/provider limits when PostgreSQL is running.
+- `npm run check`, the desktop production build, and all 133 unit tests pass.
+
+Provider hard-limit metadata example:
+
+```json
+{
+  "pricing": {
+    "inputPerMillionUsd": 0.14,
+    "outputPerMillionUsd": 0.28,
+    "maxInputTokens": 32000,
+    "maxOutputTokens": 4096,
+    "models": {
+      "image-model": { "maxPerRequestUsd": 0.08 }
+    }
+  },
+  "spendLimits": { "dailyUsd": 10 }
+}
+```
+
+`maxPerRequestUsd` is the preferred conservative reservation for variable media
+pricing. `perRequestUsd` may be used only when the provider charge is fixed.
+Token-priced native/WSL routes need metadata token ceilings or the matching
+`HONEYCOMB_SPEND_RESERVATION_MAX_*_TOKENS` environment settings.
 
 Runtime database acceptance is pending while PostgreSQL and Docker Desktop are
-stopped. The next active Stage 2 slice is hard spend limits.
+stopped. Stage 2 is complete in code; the next active slice is Stage 3 durable
+artifact persistence, asynchronous media completion, and destination delivery.
 
 ## Current Backend Status
 
@@ -154,6 +206,8 @@ stopped. The next active Stage 2 slice is hard spend limits.
      summary cost, per-provider/model cost, and per-agent/per-day cost buckets.
      Pricing is read from `provider.metadata.pricing`, including optional
      model-specific overrides.
+   - Atomic spend reservations enforce optional task/user/provider hard limits;
+     `GET /jobs/:jobId/spend` provides the per-attempt audit ledger.
    - Session events list.
    - Session events SSE stream for live UI updates.
    - Runtime diagnostics aggregate through `GET /runtime/diagnostics`,

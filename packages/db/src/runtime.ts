@@ -70,6 +70,16 @@ export type RuntimeUsageResponse = {
       callsWithCost: number;
       callsMissingPricing: number;
     };
+    spendLedger: {
+      currency: "USD";
+      settledUsd: number;
+      reservedUsd: number;
+      committedUsd: number;
+      settledEntries: number;
+      reservedEntries: number;
+      unknownOutcomeEntries: number;
+      blockedEntries: number;
+    };
     events: {
       jobEvents: number;
       agentEvents: number;
@@ -442,6 +452,7 @@ export async function getRuntimeUsage(input: {
     tokens,
     byDay,
     usageCostGroups,
+    spendLedger,
     providers
   ] = await Promise.all([
     pool.query(
@@ -549,6 +560,23 @@ export async function getRuntimeUsage(input: {
        from agent.model_calls
        ${whereSql}
        group by agent_id, day, provider_id, model`,
+      values
+    ),
+    pool.query(
+      `select
+         coalesce(sum(actual_usd) filter (where status in ('settled', 'settled_estimate')), 0) as settled_usd,
+         coalesce(sum(reserved_usd) filter (where status in ('reserved', 'outcome_unknown')), 0) as reserved_usd,
+         coalesce(sum(case
+           when status in ('reserved', 'outcome_unknown') then reserved_usd
+           when status in ('settled', 'settled_estimate') then coalesce(actual_usd, reserved_usd)
+           else 0
+         end), 0) as committed_usd,
+         count(*) filter (where status in ('settled', 'settled_estimate'))::int as settled_entries,
+         count(*) filter (where status = 'reserved')::int as reserved_entries,
+         count(*) filter (where status = 'outcome_unknown')::int as unknown_outcome_entries,
+         count(*) filter (where status = 'blocked')::int as blocked_entries
+       from agent.model_call_spend
+       ${whereSql}`,
       values
     ),
     listModelProviders()
@@ -684,6 +712,16 @@ export async function getRuntimeUsage(input: {
         estimatedUsd: roundEstimatedUsd(totalEstimatedUsd),
         callsWithCost: totalCallsWithCost,
         callsMissingPricing: totalCallsMissingPricing
+      },
+      spendLedger: {
+        currency: "USD",
+        settledUsd: roundEstimatedUsd(Number(spendLedger.rows[0]?.settled_usd ?? 0)),
+        reservedUsd: roundEstimatedUsd(Number(spendLedger.rows[0]?.reserved_usd ?? 0)),
+        committedUsd: roundEstimatedUsd(Number(spendLedger.rows[0]?.committed_usd ?? 0)),
+        settledEntries: Number(spendLedger.rows[0]?.settled_entries ?? 0),
+        reservedEntries: Number(spendLedger.rows[0]?.reserved_entries ?? 0),
+        unknownOutcomeEntries: Number(spendLedger.rows[0]?.unknown_outcome_entries ?? 0),
+        blockedEntries: Number(spendLedger.rows[0]?.blocked_entries ?? 0)
       },
       events: {
         jobEvents: Number(eventRow.job_events ?? 0),

@@ -2,10 +2,8 @@ $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $PSScriptRoot
 $dockerCli = "C:\Program Files\Docker\Docker\resources\bin\docker.exe"
-$dockerDesktop = "C:\Program Files\Docker\Docker\Docker Desktop.exe"
 $dockerProbeTimeoutSeconds = 10
 $dockerCommandTimeoutSeconds = 60
-$dockerReadyWaitSeconds = 300
 $postgresReadyWaitSeconds = 120
 $desktopCorsOrigins = @(
   "http://localhost:5173",
@@ -98,40 +96,6 @@ function Test-DockerReady {
   }
 }
 
-function Get-RemainingSeconds {
-  param(
-    [datetime]$Deadline
-  )
-
-  return [Math]::Max(0, [int][Math]::Ceiling(($Deadline - (Get-Date)).TotalSeconds))
-}
-
-function Wait-ForDockerReady {
-  param(
-    [datetime]$Deadline,
-    [int]$SleepSeconds = 1
-  )
-
-  while ($true) {
-    $remainingSeconds = Get-RemainingSeconds -Deadline $Deadline
-    if ($remainingSeconds -le 0) {
-      return $false
-    }
-
-    $probeTimeoutSeconds = [Math]::Min($dockerProbeTimeoutSeconds, $remainingSeconds)
-    if (Test-DockerReady -TimeoutSeconds $probeTimeoutSeconds) {
-      return $true
-    }
-
-    $remainingSeconds = Get-RemainingSeconds -Deadline $Deadline
-    if ($remainingSeconds -le 0) {
-      return $false
-    }
-
-    Start-Sleep -Seconds ([Math]::Min($SleepSeconds, $remainingSeconds))
-  }
-}
-
 function Wait-ForCondition {
   param(
     [scriptblock]$Condition,
@@ -184,20 +148,9 @@ function Stop-NonDockerPortListeners {
   }
 }
 
-$dockerReadyDeadline = (Get-Date).AddSeconds($dockerReadyWaitSeconds)
-$initialProbeTimeoutSeconds = [Math]::Min($dockerProbeTimeoutSeconds, $dockerReadyWaitSeconds)
+$initialProbeTimeoutSeconds = [Math]::Max(1, $dockerProbeTimeoutSeconds)
 if (-not (Test-DockerReady -TimeoutSeconds $initialProbeTimeoutSeconds)) {
-  if (-not (Test-Path -LiteralPath $dockerDesktop)) {
-    throw "Docker Desktop not found at $dockerDesktop"
-  }
-
-  Start-Process -FilePath $dockerDesktop -WindowStyle Hidden
-
-  $ready = Wait-ForDockerReady -Deadline $dockerReadyDeadline -SleepSeconds 3
-
-  if (-not $ready) {
-    throw "Docker daemon did not become ready within $dockerReadyWaitSeconds seconds"
-  }
+  throw "Docker is not running. Honeycomb does not start Docker Desktop automatically. Start Docker Desktop explicitly, then retry npm run dev:start."
 }
 
 Set-Location $root

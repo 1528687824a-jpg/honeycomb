@@ -363,6 +363,16 @@ export type RuntimeUsageResponse = {
       callsWithCost: number;
       callsMissingPricing: number;
     };
+    spendLedger?: {
+      currency: "USD";
+      settledUsd: number;
+      reservedUsd: number;
+      committedUsd: number;
+      settledEntries: number;
+      reservedEntries: number;
+      unknownOutcomeEntries: number;
+      blockedEntries: number;
+    };
     events: {
       jobEvents: number;
       agentEvents: number;
@@ -1196,6 +1206,7 @@ export type SessionForkInput = {
   startWorkflow?: boolean;
   routingMode?: RoutingMode;
   maxModelCalls?: number;
+  maxCostUsd?: number;
   classicFinalGateEnabled?: boolean;
   discussionRounds?: number;
   requesterId?: string;
@@ -1220,6 +1231,26 @@ export type SessionCompressionResponse = {
   };
 };
 
+export type JobSpendBudget = {
+  version: "honeycomb.job-spend-budget.v1";
+  enabled: boolean;
+  currency: "USD";
+  maxCostUsd: number | null;
+  settledUsd: number;
+  reservedUsd: number;
+  committedUsd: number;
+  remainingUsd: number | null;
+  blocked: boolean;
+  blockingScope: "pricing" | "job" | "user_daily" | "provider_daily" | null;
+  blockingReason: string | null;
+  userDailyLimitUsd: number | null;
+  userDailyCommittedUsd: number | null;
+  providerId: string | null;
+  providerDailyLimitUsd: number | null;
+  providerDailyCommittedUsd: number | null;
+  updatedAt: string | null;
+};
+
 export type JobRecord = {
   id: string;
   sessionId: string;
@@ -1236,6 +1267,8 @@ export type JobRecord = {
   executionRetry: TaskExecutionRetryState | null;
   routingMode: RoutingMode;
   maxModelCalls: number;
+  maxCostUsd: number | null;
+  spendBudget: JobSpendBudget;
   classicFinalGateEnabled: boolean;
   discussionRounds: number;
   finalOutput: string | null;
@@ -1390,6 +1423,7 @@ export type CreateJobInput = {
   workdir?: string;
   routingMode: RoutingMode;
   maxModelCalls: number;
+  maxCostUsd?: number;
 };
 
 export type PanelChatMessage = {
@@ -1404,6 +1438,8 @@ export type PanelChatInput = {
   projectPath?: string;
   projectName?: string;
   latestJobId?: string;
+  sourceMessageId?: string;
+  requesterId?: string;
   maxModelCalls?: number;
   outputStyle?: PanelOutputStyle;
   language?: "en" | "zh";
@@ -1640,7 +1676,8 @@ export async function createJob(input: CreateJobInput) {
       workdir: input.workdir,
       requesterId: "desktop-app",
       routingMode: input.routingMode,
-      maxModelCalls: input.maxModelCalls
+      maxModelCalls: input.maxModelCalls,
+      maxCostUsd: input.maxCostUsd
     })
   });
 }
@@ -1788,7 +1825,7 @@ export async function scanStalledJobHeartbeats(input: {
   });
 }
 
-export async function resumeJob(jobId: string) {
+export async function resumeJob(jobId: string, input: { maxCostUsd?: number } = {}) {
   return request<{
     ok: true;
     changed: true;
@@ -1798,12 +1835,15 @@ export async function resumeJob(jobId: string) {
     heartbeatStatus: JobHeartbeatStatus;
     workflowId: string;
     maxModelCalls: number;
+    maxCostUsd: number | null;
+    spendBudget: JobSpendBudget;
     preflight: TaskExecutionPreflight;
   }>(`/jobs/${jobId}/resume`, {
     method: "POST",
     body: JSON.stringify({
       reason: "Configuration reviewed from desktop console",
-      requesterId: "desktop-app"
+      requesterId: "desktop-app",
+      maxCostUsd: input.maxCostUsd
     })
   });
 }

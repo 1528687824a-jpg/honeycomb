@@ -40,6 +40,14 @@ import {
   markModelCallSucceeded,
   setModelCallRequestReference
 } from "../../../packages/db/src/model-calls";
+import {
+  markModelCallSpendOutcomeUnknown,
+  releaseModelCallSpend,
+  releaseModelCallSpendByIdempotency,
+  reserveModelCallSpend,
+  settleModelCallSpend,
+  settleModelCallSpendByIdempotency
+} from "../../../packages/db/src/model-call-spend";
 import { getAgentEventsForJob } from "../../../packages/db/src/session";
 import { createExperienceCandidate } from "../../../packages/db/src/experience";
 import type {
@@ -222,6 +230,62 @@ function unknownOutcomeDecision(message: string): ModelCallFailureDecision {
   };
 }
 
+function spendBudgetFailureDecision(): ModelCallFailureDecision {
+  return {
+    category: "quota_or_billing",
+    retryable: false,
+    allowFailover: false,
+    unknownOutcome: false,
+    userActionRequired: true,
+    statusCode: null,
+    providerCode: "honeycomb_spend_budget",
+    providerRequestId: null,
+    networkCode: null,
+    retryAfterMs: null
+  };
+}
+
+function positiveNumber(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function resultUsage(result: OpenClawRunResult | null | undefined) {
+  return result?.usage
+    ? {
+        promptTokens: result.usage.promptTokens,
+        completionTokens: result.usage.completionTokens
+      }
+    : null;
+}
+
+class SpendBudgetExceededAfterSettlementError extends Error {
+  readonly dbosRetryable = false;
+
+  constructor(readonly job: JobRecord) {
+    super(job.spendBudget.blockingReason ?? "spend_limit_exceeded_after_settlement");
+    this.name = "SpendBudgetExceededAfterSettlementError";
+  }
+}
+
+async function stopIfSettledSpendExceeded(jobId: string) {
+  const job = await getJob(jobId);
+  if (!job?.spendBudget.blocked || !job.spendBudget.blockingReason?.endsWith("_after_settlement")) {
+    return;
+  }
+  await setJobStatus(jobId, "waiting_for_human", {
+    reason: job.spendBudget.blockingReason,
+    blockingScope: job.spendBudget.blockingScope,
+    spendBudget: job.spendBudget
+  });
+  await appendJobEvent(jobId, "budget.spend_exceeded_after_settlement", {
+    blockingScope: job.spendBudget.blockingScope,
+    reason: job.spendBudget.blockingReason,
+    budget: job.spendBudget
+  });
+  throw new SpendBudgetExceededAfterSettlementError(job);
+}
+
 async function runOpenClawAgentIdempotent(input: {
   jobId: string;
   stageId?: string | null;
@@ -255,6 +319,11 @@ async function runOpenClawAgentIdempotent(input: {
   const redactedRouteCandidates = routes.map(redactAgentRuntime);
 
   if (existing?.status === "succeeded") {
+    await settleModelCallSpendByIdempotency({
+      idempotencyKey,
+      usage: resultUsage(getModelCallResult(existing.responsePayload)),
+      note: "recovered_succeeded_model_call"
+    });
     await heartbeat(
       input.jobId,
       `openclaw.${input.actionType}.reused`,
@@ -281,6 +350,7 @@ async function runOpenClawAgentIdempotent(input: {
         stageId: input.stageId ?? null
       }
     );
+    await stopIfSettledSpendExceeded(input.jobId);
     return getModelCallResult(existing.responsePayload);
   }
 
@@ -294,6 +364,10 @@ async function runOpenClawAgentIdempotent(input: {
         previousPayload: existing.responsePayload,
         finalFailure: { error: message, ...decision }
       }
+    });
+    await markModelCallSpendOutcomeUnknown({
+      idempotencyKey,
+      note: message
     });
     await appendJobEvent(input.jobId, "tool.openclaw_agent_failed_unknown_outcome", {
       stageId: input.stageId ?? null,
@@ -348,6 +422,10 @@ async function runOpenClawAgentIdempotent(input: {
         previousPayload: existing.responsePayload,
         finalFailure: { error: message, ...decision }
       }
+    });
+    await markModelCallSpendOutcomeUnknown({
+      idempotencyKey,
+      note: message
     });
     await appendJobEvent(input.jobId, "tool.openclaw_agent_failed_unknown_outcome", {
       stageId: input.stageId ?? null,
@@ -526,6 +604,7 @@ async function runOpenClawAgentIdempotent(input: {
         let slotReleaseReason: string | null = null;
         let retryState: TaskExecutionRetryState | null = null;
         let requestReference: ModelCallRequestReference | null = null;
+        let reservationKey: string | null = null;
         let shouldFailover = false;
         try {
           slotLease = await acquireModelCallSlot({
@@ -537,6 +616,81 @@ async function runOpenClawAgentIdempotent(input: {
             timeoutSeconds: input.timeoutSeconds,
             actionType: input.actionType
           });
+
+          if (isOpenClawRealMode()) {
+            const runner = resolveOpenClawAgentRunner({ runner: getOpenClawAgentRunner() });
+            const kind = runner === "provider-direct"
+              ? selectProviderDirectKind({
+                  providerId: route.providerId,
+                  baseUrl: route.providerBaseUrl,
+                  model: route.model,
+                  apiKey: route.apiKey,
+                  agentRole: route.agentRole
+                })
+              : "openclaw";
+            const directPrompt = input.providerDirectMessage ?? input.message;
+            const configuredInputCeiling = positiveNumber(
+              process.env.HONEYCOMB_SPEND_RESERVATION_MAX_INPUT_TOKENS
+            );
+            const inputTokenCeiling = runner === "provider-direct" && kind === "chat"
+              ? Math.max(
+                  configuredInputCeiling ?? 0,
+                  Buffer.byteLength(directPrompt, "utf8") + 2_048
+                )
+              : configuredInputCeiling;
+            const outputTokenCeiling = runner === "provider-direct" && kind === "chat"
+              ? positiveNumber(process.env.OPENCLAW_PROVIDER_DIRECT_MAX_TOKENS) ?? 1_200
+              : positiveNumber(process.env.HONEYCOMB_SPEND_RESERVATION_MAX_OUTPUT_TOKENS);
+            reservationKey = `${idempotencyKey}:route:${routeIndex}:attempt:${routeAttemptNo}`;
+            const spendReservation = await reserveModelCallSpend({
+              reservationKey,
+              idempotencyKey,
+              jobId: input.jobId,
+              stageId: input.stageId,
+              providerId: route.providerId!,
+              model: route.model,
+              agentId: route.honeycombAgentId,
+              actionType: input.actionType,
+              routeIndex,
+              routeAttemptNo,
+              kind,
+              inputTokenCeiling,
+              outputTokenCeiling
+            });
+            await appendJobEvent(input.jobId, spendReservation.allowed
+              ? "budget.spend_reserved"
+              : "budget.spend_blocked", {
+              stageId: input.stageId ?? null,
+              actionType: input.actionType,
+              agentId: route.honeycombAgentId,
+              providerId: route.providerId,
+              model: route.model,
+              routeIndex,
+              routeAttemptNo,
+              reservationKey,
+              enabled: spendReservation.enabled,
+              reused: spendReservation.reused,
+              reservationUsd: spendReservation.reservationUsd,
+              blockingScope: spendReservation.blockingScope,
+              reason: spendReservation.reason,
+              budget: spendReservation.budget
+            });
+            if (!spendReservation.allowed) {
+              const message = spendReservation.reason ?? "spend_budget_blocked";
+              const decision = spendBudgetFailureDecision();
+              slotReleaseReason = message;
+              await setJobStatus(input.jobId, "waiting_for_human", {
+                reason: message,
+                actionType: input.actionType,
+                agentId: route.honeycombAgentId,
+                providerId: route.providerId,
+                model: route.model,
+                spendBudget: spendReservation.budget,
+                blockingScope: spendReservation.blockingScope
+              });
+              throw new ModelCallExecutionError(message, decision);
+            }
+          }
 
           await heartbeat(
             input.jobId,
@@ -651,6 +805,25 @@ async function runOpenClawAgentIdempotent(input: {
 
           if (providerFailure) {
             const { message, decision } = providerFailure;
+            if (reservationKey) {
+              if (decision.unknownOutcome) {
+                await markModelCallSpendOutcomeUnknown({
+                  reservationKey,
+                  note: message
+                });
+              } else if (decision.category === "output_invalid") {
+                await settleModelCallSpend({
+                  reservationKey,
+                  usage: null,
+                  note: `provider_response_invalid: ${message}`
+                });
+              } else {
+                await releaseModelCallSpend({
+                  reservationKey,
+                  note: message
+                });
+              }
+            }
             const retryAction = resolveModelCallRetryAction({
               decision,
               routeAttemptNo,
@@ -798,6 +971,29 @@ async function runOpenClawAgentIdempotent(input: {
                 routeSelection
               }
             });
+            const settledSpend = reservationKey
+              ? await settleModelCallSpend({
+                  reservationKey,
+                  usage: resultUsage(result),
+                  note: result?.usage ? "provider_usage_settled" : "provider_result_settled_from_reservation"
+                })
+              : [];
+            if (settledSpend.length > 0) {
+              await appendJobEvent(input.jobId, "budget.spend_settled", {
+                stageId: input.stageId ?? null,
+                actionType: input.actionType,
+                agentId: route.honeycombAgentId,
+                providerId: route.providerId,
+                model: route.model,
+                routeIndex,
+                routeAttemptNo,
+                reservationKey,
+                status: settledSpend[0]?.status,
+                reservedUsd: settledSpend[0]?.reservedUsd,
+                actualUsd: settledSpend[0]?.actualUsd,
+                usage: settledSpend[0]?.usage
+              });
+            }
             await appendJobEvent(input.jobId, "tool.openclaw_agent_completed", {
               stageId: input.stageId,
               agentId: route.honeycombAgentId,
@@ -821,6 +1017,7 @@ async function runOpenClawAgentIdempotent(input: {
               `${route.honeycombAgentId} route ${routeIndex + 1}/${routes.length}`,
               input.stageId ?? null
             );
+            await stopIfSettledSpendExceeded(input.jobId);
 
             maybeCrashOnce(
               `after-openclaw-${input.actionType}-stage-${input.stageIndex
@@ -878,6 +1075,10 @@ async function runOpenClawAgentIdempotent(input: {
     const cancelled = isJobCancellationError(error) || toSafeErrorMessage(error) === "job_cancelled";
     const safeError = cancelled ? "job_cancelled" : toSafeErrorMessage(error).slice(0, 500);
     if (cancelled) {
+      await markModelCallSpendOutcomeUnknown({
+        idempotencyKey,
+        note: "job_cancelled_after_spend_reservation"
+      });
       if (modelCallRecorded) {
         await markModelCallCancelled({ idempotencyKey, error: safeError });
       }
@@ -905,6 +1106,18 @@ async function runOpenClawAgentIdempotent(input: {
 
     if (!(error instanceof ModelCallExecutionError)) {
       throw error;
+    }
+
+    if (error.decision.unknownOutcome) {
+      await markModelCallSpendOutcomeUnknown({
+        idempotencyKey,
+        note: safeError
+      });
+    } else {
+      await releaseModelCallSpendByIdempotency({
+        idempotencyKey,
+        note: safeError
+      });
     }
 
     const failurePayload = {

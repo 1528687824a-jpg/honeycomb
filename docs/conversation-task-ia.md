@@ -99,32 +99,28 @@ Honeycomb
 
 ## Docker Desktop Startup
 
-The current Windows launcher starts the desktop app first, then ensures the
-Docker-backed backend is available.
+The Windows launcher never starts Docker Desktop automatically.
 
 Current path in `scripts/launch-desktop-app.ps1`:
 
-- launch the Tauri desktop executable;
+- launch the Tauri desktop executable first;
 - check whether the authenticated API is already healthy;
-- if not healthy or images are stale, probe `docker info`;
-- when Docker is not ready, start `com.docker.service` and `Docker Desktop.exe`;
-- run `docker compose up -d --build`.
+- when the backend needs the Docker stack, probe `docker info`;
+- if Docker is stopped, leave it stopped, keep the UI open, and log that backend
+  features are offline;
+- only run `docker compose up -d --build` when Docker was already started
+  explicitly.
 
-So Docker Desktop opens because Honeycomb currently depends on the local Docker
-Compose stack for `orchestrator-api`, `dbos-worker`, and Postgres.
+Developer and tryout scripts also fail fast with a clear manual-start message
+when Docker is stopped. A unit test protects this policy across every launcher.
 
-Future UX options:
-
-- UI-only startup mode: open Honeycomb without starting Docker until the user
-  sends a task or opens runtime pages.
-- Lazy backend startup: start Docker only when a feature needs the backend.
-- Explicit startup preference: "start backend automatically" vs "ask first".
-- Native/bundled backend mode later, so everyday desktop launch does not require
-  Docker Desktop.
+The current backend still uses Docker Compose for `orchestrator-api`,
+`dbos-worker`, and Postgres. The release target remains a native or bundled
+runtime so ordinary users do not need to understand or operate Docker Desktop.
 
 ## Next Implementation Steps
 
 - Link conversation messages to created jobs.
 - Stream task progress back into the conversation panel while keeping Tasks as
   the full operations view.
-- Add an app preference for lazy Docker/backend startup.
+- Surface the backend-offline reason and recovery action directly in the UI.

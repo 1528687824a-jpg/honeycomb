@@ -25,6 +25,8 @@ const statements = [
   `alter table agent.jobs add column if not exists execution_retry jsonb not null default '{}'`,
   `alter table agent.jobs add column if not exists routing_mode text not null default 'supervisor_pipeline'`,
   `alter table agent.jobs add column if not exists max_model_calls int not null default 20`,
+  `alter table agent.jobs add column if not exists max_cost_usd numeric(18, 6)`,
+  `alter table agent.jobs add column if not exists spend_budget jsonb not null default '{}'`,
   `alter table agent.jobs add column if not exists classic_final_gate_enabled boolean not null default false`,
   `alter table agent.jobs add column if not exists discussion_rounds int not null default 2`,
   `alter table agent.jobs add column if not exists completed_at timestamptz`,
@@ -343,6 +345,87 @@ const statements = [
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now()
   )`,
+  `create table if not exists agent.model_call_spend (
+    id text primary key,
+    reservation_key text not null unique,
+    idempotency_key text not null,
+    job_id text references agent.jobs(id),
+    stage_id text references agent.job_stages(id),
+    requester_id text,
+    provider_id text not null,
+    model text,
+    agent_id text not null,
+    action_type text not null,
+    route_index int not null,
+    route_attempt_no int not null,
+    status text not null,
+    reserved_usd numeric(18, 6) not null default 0,
+    actual_usd numeric(18, 6),
+    currency text not null default 'USD',
+    pricing_source text,
+    reservation_basis jsonb not null default '{}',
+    usage jsonb not null default '{}',
+    note text,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    settled_at timestamptz,
+    released_at timestamptz,
+    constraint model_call_spend_status_check check (
+      status in ('reserved', 'outcome_unknown', 'settled', 'settled_estimate', 'released', 'blocked')
+    ),
+    constraint model_call_spend_amount_check check (
+      reserved_usd >= 0 and (actual_usd is null or actual_usd >= 0)
+    ),
+    constraint model_call_spend_currency_check check (currency = 'USD'),
+    constraint model_call_spend_route_check check (route_index >= 0 and route_attempt_no >= 1)
+  )`,
+  `alter table agent.model_call_spend alter column job_id drop not null`,
+  `do $$
+  begin
+    if not exists (
+      select 1 from pg_constraint
+      where conname = 'jobs_max_cost_usd_check'
+        and conrelid = 'agent.jobs'::regclass
+    ) then
+      alter table agent.jobs add constraint jobs_max_cost_usd_check
+        check (max_cost_usd is null or max_cost_usd >= 0);
+    end if;
+  end $$`,
+  `do $$
+  begin
+    if not exists (
+      select 1 from pg_constraint
+      where conname = 'model_call_spend_status_check'
+        and conrelid = 'agent.model_call_spend'::regclass
+    ) then
+      alter table agent.model_call_spend add constraint model_call_spend_status_check
+        check (status in ('reserved', 'outcome_unknown', 'settled', 'settled_estimate', 'released', 'blocked'));
+    end if;
+    if not exists (
+      select 1 from pg_constraint
+      where conname = 'model_call_spend_amount_check'
+        and conrelid = 'agent.model_call_spend'::regclass
+    ) then
+      alter table agent.model_call_spend add constraint model_call_spend_amount_check
+        check (reserved_usd >= 0 and (actual_usd is null or actual_usd >= 0));
+    end if;
+    if not exists (
+      select 1 from pg_constraint
+      where conname = 'model_call_spend_currency_check'
+        and conrelid = 'agent.model_call_spend'::regclass
+    ) then
+      alter table agent.model_call_spend add constraint model_call_spend_currency_check
+        check (currency = 'USD');
+    end if;
+    if not exists (
+      select 1 from pg_constraint
+      where conname = 'model_call_spend_route_check'
+        and conrelid = 'agent.model_call_spend'::regclass
+    ) then
+      alter table agent.model_call_spend add constraint model_call_spend_route_check
+        check (route_index >= 0 and route_attempt_no >= 1);
+    end if;
+  end $$`,
   `create table if not exists agent.model_call_queue (
     id text primary key,
     request_key text not null unique,
@@ -467,6 +550,15 @@ const statements = [
     on agent.model_calls(job_id, created_at)`,
   `create index if not exists model_calls_stage_attempt_idx
     on agent.model_calls(stage_id, attempt_no, action_type)`,
+  `create index if not exists model_call_spend_job_created_idx
+    on agent.model_call_spend(job_id, created_at)`,
+  `create index if not exists model_call_spend_requester_created_idx
+    on agent.model_call_spend(requester_id, created_at)
+    where requester_id is not null`,
+  `create index if not exists model_call_spend_provider_created_idx
+    on agent.model_call_spend(provider_id, created_at)`,
+  `create index if not exists model_call_spend_idempotency_idx
+    on agent.model_call_spend(idempotency_key, status)`,
   `alter table agent.model_calls add column if not exists request_reference jsonb not null default '{}'`,
   `alter table agent.model_calls add column if not exists reconciliation jsonb not null default '{}'`,
   `create index if not exists model_call_queue_active_idx

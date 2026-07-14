@@ -129,7 +129,8 @@ Agent 协作        四种编排模式、阶段交接和讨论轮次
 
 ### 启动
 
-在仓库根目录执行：
+开发体验版仍使用 Docker 后端。请先由用户明确启动 Docker Desktop；Honeycomb
+不会自动打开它。然后在仓库根目录执行：
 
 ```powershell
 npm run tryout:desktop
@@ -141,7 +142,8 @@ npm run tryout:desktop
 npm run tryout:shortcut
 ```
 
-之后可以直接双击桌面的 `honeycomb.lnk`。应用会立即打开，并在后台检查或启动本地服务。
+之后可以直接双击桌面的 `honeycomb.lnk`。应用会立即打开；Docker 已运行时，
+它会在后台检查或启动本地服务。Docker 未运行时，界面仍会打开，但后端功能保持离线。
 
 停止本地体验环境：
 

@@ -299,6 +299,8 @@ export type JobRecord = {
   executionRetry: TaskExecutionRetryState | null;
   routingMode: RoutingMode;
   maxModelCalls: number;
+  maxCostUsd: number | null;
+  spendBudget: JobSpendBudget;
   classicFinalGateEnabled: boolean;
   discussionRounds: number;
   status: JobStatus;
@@ -480,6 +482,42 @@ export type McpServerRecord = {
   updatedAt: string;
 };
 
+export const MODEL_CALL_SPEND_STATUSES = [
+  "reserved",
+  "outcome_unknown",
+  "settled",
+  "settled_estimate",
+  "released",
+  "blocked"
+] as const;
+export type ModelCallSpendStatus = (typeof MODEL_CALL_SPEND_STATUSES)[number];
+
+export type SpendBudgetBlockingScope =
+  | "pricing"
+  | "job"
+  | "user_daily"
+  | "provider_daily";
+
+export type JobSpendBudget = {
+  version: "honeycomb.job-spend-budget.v1";
+  enabled: boolean;
+  currency: "USD";
+  maxCostUsd: number | null;
+  settledUsd: number;
+  reservedUsd: number;
+  committedUsd: number;
+  remainingUsd: number | null;
+  blocked: boolean;
+  blockingScope: SpendBudgetBlockingScope | null;
+  blockingReason: string | null;
+  userDailyLimitUsd: number | null;
+  userDailyCommittedUsd: number | null;
+  providerId: string | null;
+  providerDailyLimitUsd: number | null;
+  providerDailyCommittedUsd: number | null;
+  updatedAt: string | null;
+};
+
 export type AgentMcpPolicyRecord = {
   id: string;
   agentId: string;
@@ -584,6 +622,7 @@ export type CreateJobInput = {
   ingressOrigin?: IngressOrigin;
   routingMode?: RoutingMode;
   maxModelCalls?: number;
+  maxCostUsd?: number | null;
   classicFinalGateEnabled?: boolean;
   discussionRounds?: number;
   requesterId?: string;

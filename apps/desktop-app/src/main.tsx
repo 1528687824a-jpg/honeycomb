@@ -1150,6 +1150,35 @@ function isCancellable(job: JobRecord | null) {
   return job ? cancellableStatuses.includes(job.status) : false;
 }
 
+function formatUsd(value: number | null | undefined) {
+  if (value === null || value === undefined) return "-";
+  const digits = value > 0 && value < 0.01 ? 6 : 2;
+  return `$${value.toFixed(digits)}`;
+}
+
+function spendBlockingMessage(job: JobRecord, language: Language) {
+  switch (job.spendBudget.blockingScope) {
+    case "job":
+      return language === "zh"
+        ? "这项任务的费用额度已经用完，请设置更高的新上限后再恢复。"
+        : "This task has used its spend allowance. Set a higher limit before resuming.";
+    case "user_daily":
+      return language === "zh"
+        ? "今天的用户费用额度已经用完，任务会保持暂停。"
+        : "The user's daily spend allowance is exhausted. The task remains paused.";
+    case "provider_daily":
+      return language === "zh"
+        ? "这个模型服务商今天的费用额度已经用完，任务会保持暂停。"
+        : "This provider's daily spend allowance is exhausted. The task remains paused.";
+    case "pricing":
+      return language === "zh"
+        ? "当前模型缺少可靠价格或单次费用上界，请先补全服务商费用配置。"
+        : "This model lacks reliable pricing or a per-request charge bound. Complete the provider spend settings first.";
+    default:
+      return "";
+  }
+}
+
 function isResumable(job: JobRecord | null) {
   return Boolean(job && (
     job.status === "waiting_for_human" ||
@@ -2244,6 +2273,7 @@ function App() {
   const [jobPromptFilter, setJobPromptFilter] = useState("");
   const [selectedJobId, setSelectedJobId] = useState("");
   const [selectedJob, setSelectedJob] = useState<JobRecord | null>(null);
+  const [maxCostUsdDraft, setMaxCostUsdDraft] = useState("");
   const [timeline, setTimeline] = useState<JobTimeline | null>(null);
   const [unknownOutcomes, setUnknownOutcomes] = useState<UnknownOutcomeModelCallsResponse | null>(null);
   const [reconciliationBusyId, setReconciliationBusyId] = useState("");
@@ -2351,6 +2381,21 @@ function App() {
     () => jobs.find((job) => job.id === selectedJobId) ?? selectedJob,
     [jobs, selectedJob, selectedJobId]
   );
+  useEffect(() => {
+    if (selectedFromList?.spendBudget.blockingScope !== "job") {
+      setMaxCostUsdDraft("");
+      return;
+    }
+    const currentLimit = selectedFromList.maxCostUsd ?? selectedFromList.spendBudget.maxCostUsd ?? 0;
+    const minimum = selectedFromList.spendBudget.committedUsd + 0.01;
+    setMaxCostUsdDraft(Math.max(currentLimit * 1.25, minimum).toFixed(2));
+  }, [
+    selectedFromList?.id,
+    selectedFromList?.maxCostUsd,
+    selectedFromList?.spendBudget.committedUsd,
+    selectedFromList?.spendBudget.maxCostUsd,
+    selectedFromList?.spendBudget.blockingScope
+  ]);
   const selectedUnknownOutcomes = unknownOutcomes?.jobId === selectedJobId
     ? unknownOutcomes.modelCalls
     : [];
@@ -2970,6 +3015,8 @@ function App() {
           projectPath: activeWorkspacePath,
           projectName: activeProject.name,
           latestJobId: latestJob?.id,
+          sourceMessageId: userMessage.id,
+          requesterId: "desktop-app",
           maxModelCalls,
           outputStyle: panelOutputStyle,
           language
@@ -3316,10 +3363,18 @@ function App() {
 
   async function resumeSelectedJob() {
     if (!selectedJobId) return;
+    let nextMaxCostUsd: number | undefined;
+    if (selectedFromList?.spendBudget.blockingScope === "job") {
+      nextMaxCostUsd = Number(maxCostUsdDraft);
+      if (!Number.isFinite(nextMaxCostUsd) || nextMaxCostUsd <= selectedFromList.spendBudget.committedUsd) {
+        setError(language === "zh" ? "新的任务费用上限必须高于当前已占用金额。" : "The new task limit must exceed the committed amount.");
+        return;
+      }
+    }
     setBusy(true);
     setError(null);
     try {
-      await resumeJob(selectedJobId);
+      await resumeJob(selectedJobId, { maxCostUsd: nextMaxCostUsd });
       await refreshAll(selectedJobId);
     } catch (caught) {
       await refreshAll(selectedJobId).catch(() => undefined);
@@ -5256,6 +5311,7 @@ function App() {
                 <li key={job.id}>
                   <button
                     className={job.id === selectedJobId ? "jobRow selected" : "jobRow"}
+                    data-job-id={job.id}
                     type="button"
                     onClick={() => setSelectedJobId(job.id)}
                   >
@@ -5327,7 +5383,12 @@ function App() {
                 </div>
                 <div>
                   <dt>{copy.budget}</dt>
-                  <dd>{selectedFromList.maxModelCalls}</dd>
+                  <dd>
+                    {selectedFromList.maxModelCalls}
+                    {selectedFromList.spendBudget.enabled
+                      ? ` / ${formatUsd(selectedFromList.spendBudget.committedUsd)}`
+                      : ""}
+                  </dd>
                 </div>
                 <div>
                   <dt>{copy.timeline}</dt>
@@ -5337,6 +5398,46 @@ function App() {
             ) : (
               <p className="emptyState">{copy.noJobLoaded}</p>
             )}
+
+            {selectedFromList?.spendBudget.enabled ? (
+              <section
+                className={`jobSpendNotice ${selectedFromList.spendBudget.blocked ? "blocked" : ""}`}
+                role={selectedFromList.spendBudget.blocked ? "alert" : "status"}
+              >
+                {selectedFromList.spendBudget.blocked
+                  ? <AlertTriangle size={18} aria-hidden="true" />
+                  : <Gauge size={18} aria-hidden="true" />}
+                <div>
+                  <h3>
+                    {selectedFromList.spendBudget.blocked
+                      ? language === "zh" ? "费用上限已暂停任务" : "Spend limit paused the task"
+                      : language === "zh" ? "任务费用" : "Task spend"}
+                  </h3>
+                  <div className="jobSpendMetrics">
+                    <span>{language === "zh" ? "已结算" : "Settled"} <strong>{formatUsd(selectedFromList.spendBudget.settledUsd)}</strong></span>
+                    <span>{language === "zh" ? "已预留" : "Reserved"} <strong>{formatUsd(selectedFromList.spendBudget.reservedUsd)}</strong></span>
+                    <span>{language === "zh" ? "任务上限" : "Task limit"} <strong>{formatUsd(selectedFromList.spendBudget.maxCostUsd)}</strong></span>
+                    <span>{language === "zh" ? "剩余" : "Remaining"} <strong>{formatUsd(selectedFromList.spendBudget.remainingUsd)}</strong></span>
+                  </div>
+                  {selectedFromList.spendBudget.blocked ? (
+                    <p>{spendBlockingMessage(selectedFromList, language)}</p>
+                  ) : null}
+                  {selectedFromList.spendBudget.blockingScope === "job" ? (
+                    <label className="jobSpendLimitEditor">
+                      <span>{language === "zh" ? "新上限" : "New limit"}</span>
+                      <input
+                        type="number"
+                        min={selectedFromList.spendBudget.committedUsd + 0.000001}
+                        step="0.01"
+                        value={maxCostUsdDraft}
+                        onChange={(event) => setMaxCostUsdDraft(event.target.value)}
+                      />
+                      <span>USD</span>
+                    </label>
+                  ) : null}
+                </div>
+              </section>
+            ) : null}
 
             {selectedFromList?.executionPreflight?.status === "blocked" ? (
               <section className="jobPreflightNotice" role="alert">

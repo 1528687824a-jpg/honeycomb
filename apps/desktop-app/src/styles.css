@@ -2133,6 +2133,80 @@ select {
   color: #f2ca64;
 }
 
+.jobSpendNotice {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid #2f4b44;
+  background: #141d1b;
+  color: #72c9ad;
+}
+
+.jobSpendNotice.blocked {
+  border-bottom-color: #67432d;
+  background: #211813;
+  color: #eea66f;
+}
+
+.jobSpendNotice h3,
+.jobSpendNotice p {
+  margin: 0;
+}
+
+.jobSpendNotice h3 {
+  color: #e3fff5;
+  font-size: 14px;
+}
+
+.jobSpendNotice.blocked h3 {
+  color: #ffe4d0;
+}
+
+.jobSpendNotice p {
+  margin-top: 7px;
+  color: #d6b59d;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.jobSpendMetrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin-top: 7px;
+  color: #9fbdb3;
+  font-size: 12px;
+}
+
+.jobSpendMetrics strong {
+  margin-left: 4px;
+  color: #ffffff;
+}
+
+.jobSpendLimitEditor {
+  display: grid;
+  grid-template-columns: auto minmax(100px, 160px) auto;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  margin-top: 10px;
+  color: #d6b59d;
+  font-size: 12px;
+}
+
+.jobSpendLimitEditor input {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  border: 1px solid #6c4934;
+  border-radius: 4px;
+  background: #171513;
+  color: #ffffff;
+  padding: 0 8px;
+}
+
 .jobPreflightNotice h3,
 .jobPreflightNotice p {
   margin: 0;
@@ -4773,6 +4847,7 @@ select {
   .customTimeFilters,
   .stats,
   .jobPreflightNotice,
+  .jobSpendNotice,
   .jobReconciliationNotice,
   .jobReconciliationCall,
   .jobReconciliationResolved,

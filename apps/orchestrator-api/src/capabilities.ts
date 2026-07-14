@@ -36,6 +36,7 @@ const capabilities: RuntimeCapability[] = [
       "GET /jobs/:jobId/artifacts",
       "GET /jobs/:jobId/artifacts/:artifactId/files/:fileIndex",
       "GET /jobs/:jobId/timeline",
+      "GET /jobs/:jobId/spend",
       "POST /jobs/:jobId/cancel",
       "POST /jobs/:jobId/resume",
       "GET /sessions",
@@ -51,6 +52,7 @@ const capabilities: RuntimeCapability[] = [
       "Task artifact listing",
       "Safe local artifact file download",
       "Waiting/stalled job resume path",
+      "Atomic task/user/provider spend reservation and settlement ledger for panel and child agents",
       "Session archive/restore/fork/compress"
     ],
     missing: [
@@ -64,7 +66,7 @@ const capabilities: RuntimeCapability[] = [
     id: "runtime_observability",
     title: "Runtime observability",
     status: "ready",
-    summary: "Runtime logs, token/cost usage, persistent model-call queue state, job heartbeats, session history, and SSE streaming are available.",
+    summary: "Runtime logs, token/cost usage, hard spend commitments, persistent model-call queue state, job heartbeats, session history, and SSE streaming are available.",
     routes: [
       "GET /runtime/logs",
       "GET /runtime/usage",
@@ -80,6 +82,7 @@ const capabilities: RuntimeCapability[] = [
       "Runtime log queries",
       "Token usage summary from real-mode OpenClaw usage payloads",
       "Estimated USD cost from provider metadata pricing",
+      "Settled, reserved, unknown-outcome, and blocked spend ledger totals",
       "Per-provider/model, per-agent, and per-day usage/cost buckets",
       "Global/provider/agent model-call queue overview",
       "Job heartbeat summary",

@@ -7,7 +7,6 @@ $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $PSScriptRoot
 $dockerCli = "C:\Program Files\Docker\Docker\resources\bin\docker.exe"
-$dockerDesktop = "C:\Program Files\Docker\Docker\Docker Desktop.exe"
 $desktopExe = Join-Path $root "apps\desktop-app\src-tauri\target\release\honeycomb.exe"
 $logPath = Join-Path $root "logs\desktop-launcher.log"
 $backendBuildStampPath = Join-Path $root ".runtime\backend-launcher-build.stamp"
@@ -267,40 +266,6 @@ function Test-DockerReady {
     return $false
   } finally {
     $ErrorActionPreference = $previousPreference
-  }
-}
-
-function Get-RemainingSeconds {
-  param(
-    [datetime]$Deadline
-  )
-
-  return [Math]::Max(0, [int][Math]::Ceiling(($Deadline - (Get-Date)).TotalSeconds))
-}
-
-function Wait-ForDockerReady {
-  param(
-    [datetime]$Deadline,
-    [int]$SleepSeconds = 1
-  )
-
-  while ($true) {
-    $remainingSeconds = Get-RemainingSeconds -Deadline $Deadline
-    if ($remainingSeconds -le 0) {
-      return $false
-    }
-
-    $probeTimeoutSeconds = [Math]::Min($dockerProbeTimeoutSeconds, $remainingSeconds)
-    if (Test-DockerReady -TimeoutSeconds $probeTimeoutSeconds) {
-      return $true
-    }
-
-    $remainingSeconds = Get-RemainingSeconds -Deadline $Deadline
-    if ($remainingSeconds -le 0) {
-      return $false
-    }
-
-    Start-Sleep -Seconds ([Math]::Min($SleepSeconds, $remainingSeconds))
   }
 }
 
@@ -633,19 +598,9 @@ try {
     if (-not $backendRuntimeMatches) {
       Write-LaunchLog "Backend containers do not match desired agent runtime env; Docker Compose will refresh them"
     }
-    $dockerReadyDeadline = (Get-Date).AddSeconds($TimeoutSeconds)
     $initialProbeTimeoutSeconds = [Math]::Min($dockerProbeTimeoutSeconds, [Math]::Max(1, $TimeoutSeconds))
     if (-not (Test-DockerReady -TimeoutSeconds $initialProbeTimeoutSeconds)) {
-      Write-LaunchLog "Docker not ready; starting Docker Desktop"
-      Start-Service com.docker.service -ErrorAction SilentlyContinue
-      if (Test-Path -LiteralPath $dockerDesktop) {
-        Start-Process -FilePath $dockerDesktop -WindowStyle Hidden
-      }
-    }
-
-    $dockerReady = Wait-ForDockerReady -Deadline $dockerReadyDeadline -SleepSeconds 1
-    if (-not $dockerReady) {
-      throw "Docker daemon did not become ready within $TimeoutSeconds seconds"
+      throw "Docker is not running. Honeycomb does not start Docker Desktop automatically. The desktop UI remains available, but backend features are offline until Docker is started explicitly."
     }
 
     if ($backendNeedsBuild) {

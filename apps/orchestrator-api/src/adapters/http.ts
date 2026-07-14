@@ -14,6 +14,7 @@ const createJobSchema = z
     workdir: z.string().max(1000).optional(),
     routingMode: z.enum(ROUTING_MODES).optional(),
     maxModelCalls: z.number().int().min(1).max(100).optional(),
+    maxCostUsd: z.number().min(0).max(1_000_000).optional(),
     classicFinalGateEnabled: z.boolean().optional(),
     discussionRounds: z.number().int().min(1).max(10).optional(),
     requesterId: z.string().optional()
@@ -40,6 +41,7 @@ export const httpIngressAdapter: ExpressIngressAdapter = {
           ingressOrigin: "http",
           routingMode: input.routingMode,
           maxModelCalls: input.maxModelCalls,
+          maxCostUsd: input.maxCostUsd,
           classicFinalGateEnabled: input.classicFinalGateEnabled,
           discussionRounds: input.discussionRounds,
           requesterId: input.requesterId
@@ -53,6 +55,8 @@ export const httpIngressAdapter: ExpressIngressAdapter = {
           ingressOrigin: job.ingressOrigin,
           routingMode: job.routingMode,
           maxModelCalls: job.maxModelCalls,
+          maxCostUsd: job.maxCostUsd,
+          spendBudget: job.spendBudget,
           classicFinalGateEnabled: job.classicFinalGateEnabled,
           discussionRounds: job.discussionRounds,
           status: started.status,

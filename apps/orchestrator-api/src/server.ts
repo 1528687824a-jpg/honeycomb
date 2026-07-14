@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import express from "express";
@@ -59,6 +60,15 @@ import {
   type ModelCallRecord
 } from "../../../packages/db/src/model-calls";
 import { getModelCallQueueOverview } from "../../../packages/db/src/model-call-queue";
+import {
+  claimModelCallSpendDispatch,
+  getJobSpendBudget,
+  listModelCallSpendForJob,
+  markModelCallSpendOutcomeUnknown,
+  releaseModelCallSpendByIdempotency,
+  reserveStandaloneModelSpend,
+  settleModelCallSpendByIdempotency
+} from "../../../packages/db/src/model-call-spend";
 import {
   listExperiences,
   recordExperienceRecall,
@@ -438,6 +448,8 @@ const panelChatSchema = z.object({
   projectPath: z.string().trim().max(2000).optional(),
   projectName: z.string().trim().max(300).optional(),
   latestJobId: z.string().trim().max(160).optional(),
+  sourceMessageId: z.string().trim().min(1).max(200).optional(),
+  requesterId: z.string().trim().min(1).max(200).optional(),
   maxModelCalls: z.number().int().min(1).max(100).optional(),
   outputStyle: z.enum(["concise", "detailed", "warm", "formal"]).optional(),
   language: z.enum(["en", "zh"]).optional()
@@ -744,6 +756,7 @@ const forkSessionSchema = z.object({
   startWorkflow: z.boolean().optional().default(true),
   routingMode: z.enum(ROUTING_MODES).optional(),
   maxModelCalls: z.number().int().min(1).max(100).optional(),
+  maxCostUsd: z.number().min(0).max(1_000_000).optional(),
   classicFinalGateEnabled: z.boolean().optional(),
   discussionRounds: z.number().int().min(1).max(10).optional(),
   requesterId: z.string().max(200).optional()
@@ -1258,6 +1271,27 @@ function buildPanelChatSystemPrompt(input: {
   ].join("\n");
 }
 
+function extractPanelChatUsage(body: unknown) {
+  const value = body && typeof body === "object" ? body as Record<string, unknown> : {};
+  const usage = value.usage && typeof value.usage === "object"
+    ? value.usage as Record<string, unknown>
+    : null;
+  if (!usage) return null;
+  const promptTokens = Number(
+    usage.prompt_tokens ?? usage.promptTokens ?? usage.input_tokens ?? usage.inputTokens
+  );
+  const completionTokens = Number(
+    usage.completion_tokens ?? usage.completionTokens ?? usage.output_tokens ?? usage.outputTokens
+  );
+  return Number.isFinite(promptTokens) && promptTokens >= 0 &&
+    Number.isFinite(completionTokens) && completionTokens >= 0
+    ? {
+        promptTokens: Math.trunc(promptTokens),
+        completionTokens: Math.trunc(completionTokens)
+      }
+    : null;
+}
+
 function personalizePanelAgentPrompts(input: PanelPromptPersonalizationInput) {
   return {
     generatedBy: "panel-agent" as const,
@@ -1329,9 +1363,46 @@ async function sendPanelChatToModel(input: PanelChatInput) {
     ...(needsCurrentMessage ? [{ role: "user" as const, content: input.message.trim() }] : [])
   ];
 
+  const spendReservationKey = `panel:${input.sourceMessageId?.trim() || randomUUID()}`;
+  const spendReservation = await reserveStandaloneModelSpend({
+    reservationKey: spendReservationKey,
+    requesterId: input.requesterId,
+    providerId: provider.id,
+    model,
+    agentId: panelAgent.id,
+    actionType: "panel-chat",
+    kind: "chat",
+    inputTokenCeiling: Buffer.byteLength(JSON.stringify(messages), "utf8") + 2_048,
+    outputTokenCeiling: 900
+  });
+  if (!spendReservation.allowed) {
+    throw new PanelChatError(
+      409,
+      `panel_${spendReservation.reason ?? "spend_budget_blocked"}`,
+      spendReservation.reason ?? "Panel agent spend budget is blocked."
+    );
+  }
+  if (spendReservation.enabled) {
+    const dispatchClaim = await claimModelCallSpendDispatch({
+      reservationKey: spendReservationKey,
+      note: "panel_provider_dispatch_started"
+    });
+    if (!dispatchClaim) {
+      throw new PanelChatError(
+        409,
+        "panel_request_already_dispatched",
+        "This panel-agent request was already dispatched and must not be replayed."
+      );
+    }
+  }
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 60_000);
+  let providerRequestStarted = false;
+  let providerAccepted = false;
+  let spendResolved = false;
   try {
+    providerRequestStarted = true;
     const providerResponse = await fetch(chatCompletionsUrl(provider.baseUrl), {
       method: "POST",
       headers: {
@@ -1349,6 +1420,11 @@ async function sendPanelChatToModel(input: PanelChatInput) {
     });
 
     if (!providerResponse.ok) {
+      await releaseModelCallSpendByIdempotency({
+        idempotencyKey: spendReservationKey,
+        note: `panel_provider_http_${providerResponse.status}`
+      });
+      spendResolved = true;
       throw new PanelChatError(
         502,
         "panel_agent_chat_failed",
@@ -1356,7 +1432,15 @@ async function sendPanelChatToModel(input: PanelChatInput) {
       );
     }
 
+    providerAccepted = true;
+
     const responseBody = await providerResponse.json();
+    await settleModelCallSpendByIdempotency({
+      idempotencyKey: spendReservationKey,
+      usage: extractPanelChatUsage(responseBody),
+      note: "panel_provider_response_settled"
+    });
+    spendResolved = true;
     const answer = extractPanelChatText(responseBody);
     if (!answer) {
       throw new PanelChatError(502, "panel_agent_empty_response", "Panel agent returned an empty response.");
@@ -1398,6 +1482,25 @@ async function sendPanelChatToModel(input: PanelChatInput) {
       warnings: orchestration.warnings
     };
   } catch (error) {
+    if (!spendResolved) {
+      if (providerAccepted) {
+        await settleModelCallSpendByIdempotency({
+          idempotencyKey: spendReservationKey,
+          usage: null,
+          note: "panel_provider_response_invalid_settled_from_reservation"
+        }).catch(() => undefined);
+      } else if (providerRequestStarted) {
+        await markModelCallSpendOutcomeUnknown({
+          idempotencyKey: spendReservationKey,
+          note: error instanceof Error ? error.message : "panel_provider_outcome_unknown"
+        }).catch(() => undefined);
+      } else {
+        await releaseModelCallSpendByIdempotency({
+          idempotencyKey: spendReservationKey,
+          note: "panel_request_not_dispatched"
+        }).catch(() => undefined);
+      }
+    }
     if (error instanceof PanelChatError) {
       throw error;
     }
@@ -1525,7 +1628,8 @@ const cancelJobSchema = z.object({
 const resumeJobSchema = z.object({
   reason: z.string().max(500).optional(),
   requesterId: z.string().max(200).optional(),
-  maxModelCalls: z.number().int().min(1).max(100).optional()
+  maxModelCalls: z.number().int().min(1).max(100).optional(),
+  maxCostUsd: z.number().min(0).max(1_000_000).optional()
 });
 
 const listExperiencesQuerySchema = z.object({
@@ -1784,6 +1888,19 @@ async function resolveUnknownOutcomeModelCall(input: {
   }
   if (!modelCall) {
     return null;
+  }
+
+  if (input.state.status === "confirmed_succeeded") {
+    await settleModelCallSpendByIdempotency({
+      idempotencyKey: modelCall.idempotencyKey,
+      usage: null,
+      note: "provider_reconciliation_confirmed_succeeded"
+    });
+  } else {
+    await releaseModelCallSpendByIdempotency({
+      idempotencyKey: modelCall.idempotencyKey,
+      note: `provider_reconciliation_${input.state.status}`
+    });
   }
 
   await setJobStatus(input.job.id, "waiting_for_human", {
@@ -2185,6 +2302,11 @@ async function main() {
         return;
       }
 
+      await markModelCallSpendOutcomeUnknown({
+        idempotencyKey: modelCall.idempotencyKey,
+        note: input.reason ?? "manually_marked_unknown_outcome"
+      });
+
       await appendJobEvent(input.jobId, "tool.openclaw_agent_failed_unknown_outcome", {
         modelCallId: modelCall.id,
         idempotencyKey: modelCall.idempotencyKey,
@@ -2224,6 +2346,24 @@ async function main() {
         count: modelCalls.length,
         canResume: modelCalls.length === 0,
         modelCalls: modelCalls.map(unknownOutcomeModelCallView)
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/jobs/:jobId/spend", async (request, response, next) => {
+    try {
+      const jobId = routeParameter(request.params.jobId);
+      const budget = await getJobSpendBudget(jobId);
+      if (!budget) {
+        response.status(404).json({ error: "job_not_found" });
+        return;
+      }
+      response.json({
+        jobId,
+        budget,
+        entries: await listModelCallSpendForJob(jobId)
       });
     } catch (error) {
       next(error);
@@ -4861,6 +5001,7 @@ async function main() {
         ingressOrigin: "http",
         routingMode: input.routingMode ?? source.routingMode,
         maxModelCalls: input.maxModelCalls ?? source.maxModelCalls,
+        maxCostUsd: input.maxCostUsd ?? source.maxCostUsd ?? undefined,
         classicFinalGateEnabled: input.classicFinalGateEnabled ?? source.classicFinalGateEnabled,
         discussionRounds: input.discussionRounds ?? source.discussionRounds,
         requesterId: input.requesterId ?? "session-fork"
@@ -5218,7 +5359,8 @@ async function main() {
         jobId: request.params.jobId,
         reason: input.reason,
         requesterId: input.requesterId,
-        maxModelCalls: input.maxModelCalls
+        maxModelCalls: input.maxModelCalls,
+        maxCostUsd: input.maxCostUsd
       });
 
       if (!resume.job) {
@@ -5266,6 +5408,8 @@ async function main() {
         heartbeatStatus: job?.heartbeatStatus ?? resume.job.heartbeatStatus,
         workflowId,
         maxModelCalls: job?.maxModelCalls ?? resume.maxModelCalls,
+        maxCostUsd: job?.maxCostUsd ?? resume.maxCostUsd,
+        spendBudget: job?.spendBudget ?? resume.job.spendBudget,
         preflight
       });
     } catch (error) {

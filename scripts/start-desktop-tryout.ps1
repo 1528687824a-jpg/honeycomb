@@ -2,7 +2,6 @@ $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $PSScriptRoot
 $dockerCli = "C:\Program Files\Docker\Docker\resources\bin\docker.exe"
-$dockerDesktop = "C:\Program Files\Docker\Docker\Docker Desktop.exe"
 $env:Path = "C:\Program Files\Docker\Docker\resources\bin;$env:Path"
 
 if (-not (Test-Path -LiteralPath $dockerCli)) {
@@ -32,24 +31,7 @@ function Test-HttpReady($Url) {
 }
 
 if (-not (Test-DockerReady)) {
-  if (-not (Test-Path -LiteralPath $dockerDesktop)) {
-    throw "Docker daemon is not ready and Docker Desktop was not found at $dockerDesktop"
-  }
-
-  Start-Process -FilePath $dockerDesktop -WindowStyle Hidden
-
-  $ready = $false
-  for ($i = 1; $i -le 100; $i++) {
-    Start-Sleep -Seconds 3
-    if (Test-DockerReady) {
-      $ready = $true
-      break
-    }
-  }
-
-  if (-not $ready) {
-    throw "Docker daemon did not become ready"
-  }
+  throw "Docker is not running. Honeycomb does not start Docker Desktop automatically. Start Docker Desktop explicitly, then retry npm run tryout:desktop."
 }
 
 Set-Location $root

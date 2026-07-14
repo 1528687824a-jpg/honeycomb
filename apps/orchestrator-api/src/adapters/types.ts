@@ -16,6 +16,7 @@ export type CreateJobForIngressInput = {
   workdir?: string;
   routingMode?: RoutingMode;
   maxModelCalls?: number;
+  maxCostUsd?: number;
   classicFinalGateEnabled?: boolean;
   discussionRounds?: number;
   requesterId?: string;

@@ -3,6 +3,8 @@ import { test } from "node:test";
 import {
   estimateUsageCostUsd,
   getProviderPricingRate,
+  getProviderSpendEstimate,
+  settleProviderSpendUsd,
   roundEstimatedUsd
 } from "../packages/db/src/pricing-policy";
 
@@ -57,4 +59,57 @@ test("provider pricing prefers model-specific rates case-insensitively", () => {
 test("provider pricing returns null when pricing metadata is incomplete", () => {
   assert.equal(getProviderPricingRate({}, "model"), null);
   assert.equal(getProviderPricingRate({ pricing: { inputPerMillionUsd: 1 } }, "model"), null);
+});
+
+test("spend reservation uses model-specific per-request caps for media", () => {
+  const estimate = getProviderSpendEstimate({
+    metadata: {
+      pricing: {
+        models: {
+          "image-model": { maxPerRequestUsd: 0.08 }
+        }
+      }
+    },
+    model: "IMAGE-MODEL",
+    kind: "image"
+  });
+  assert.equal(estimate?.amountUsd, 0.08);
+  assert.equal(estimate?.basis.billing, "request_cap");
+  assert.equal(settleProviderSpendUsd(estimate!.basis, null), 0.08);
+});
+
+test("token-priced calls reserve a bounded maximum then settle actual usage", () => {
+  const estimate = getProviderSpendEstimate({
+    metadata: {
+      pricing: {
+        inputPerMillionUsd: 1,
+        outputPerMillionUsd: 2
+      }
+    },
+    model: "chat-model",
+    kind: "chat",
+    inputTokenCeiling: 10_000,
+    outputTokenCeiling: 2_000
+  });
+  assert.equal(estimate?.amountUsd, 0.014);
+  assert.equal(estimate?.basis.billing, "token_bound");
+  assert.equal(settleProviderSpendUsd(estimate!.basis, {
+    promptTokens: 1_000,
+    completionTokens: 500
+  }), 0.002);
+});
+
+test("hard spend reservation fails closed when a charge bound is unavailable", () => {
+  assert.equal(getProviderSpendEstimate({
+    metadata: { pricing: { inputPerMillionUsd: 1, outputPerMillionUsd: 2 } },
+    model: "chat-model",
+    kind: "openclaw"
+  }), null);
+  assert.equal(getProviderSpendEstimate({
+    metadata: { pricing: { inputPerMillionUsd: 1, outputPerMillionUsd: 2 } },
+    model: "image-model",
+    kind: "image",
+    inputTokenCeiling: 1_000,
+    outputTokenCeiling: 1_000
+  }), null);
 });

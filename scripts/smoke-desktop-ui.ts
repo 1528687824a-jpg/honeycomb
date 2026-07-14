@@ -450,9 +450,10 @@ async function runUiFlow(page: CdpClient) {
 
       window.__agentOpenClawFetchUrls = [];
       window.__agentOpenClawJobRequests = [];
+      window.__agentOpenClawCreatedJobs = [];
       window.__honeycombRepairRequests = [];
       const originalFetch = window.fetch.bind(window);
-      window.fetch = (...args) => {
+      window.fetch = async (...args) => {
         const target = args[0];
         const url = typeof target === "string" ? target : target?.url ?? String(target);
         window.__agentOpenClawFetchUrls.push(url);
@@ -472,7 +473,13 @@ async function runUiFlow(page: CdpClient) {
             window.__honeycombRepairRequests.push({ parseFailed: true, body });
           }
         }
-        return originalFetch(...args);
+        const response = await originalFetch(...args);
+        if (url.endsWith("/jobs") && method === "POST") {
+          response.clone().json()
+            .then((job) => window.__agentOpenClawCreatedJobs.push(job))
+            .catch(() => undefined);
+        }
+        return response;
       };
 
       const englishButton = Array.from(document.querySelectorAll(".languageButton"))
@@ -515,12 +522,6 @@ async function runUiFlow(page: CdpClient) {
       const smartRoutingVisible = document.body.textContent.includes("Smart routing");
       const manualRoutingHidden = !document.querySelector("#routingMode");
 
-      const beforeJobIds = new Set(
-        Array.from(document.querySelectorAll(".jobRow strong"))
-          .map((node) => node.textContent?.trim() ?? "")
-          .filter((text) => text.startsWith("JOB-"))
-      );
-
       const prompt = document.querySelector("#prompt");
       setNativeValue(prompt, "Desktop UI smoke: create a cancellable mock job and show the timeline.");
       if (!smartRoutingVisible || !manualRoutingHidden) {
@@ -532,6 +533,11 @@ async function runUiFlow(page: CdpClient) {
       }, "start job button was not enabled");
       submitButton.click();
       await waitFor(() => window.__agentOpenClawJobRequests.length > 0, "job request body was not captured");
+      const createdJob = await waitFor(
+        () => window.__agentOpenClawCreatedJobs.at(-1),
+        "job response was not captured"
+      );
+      const jobId = createdJob.jobId;
       const jobRequest = window.__agentOpenClawJobRequests.at(-1) || {};
       const jobRequestIncludesWorkbench =
         jobRequest.workdir === "C:\\Users\\Administrator\\Desktop\\Smoke Workspace" &&
@@ -553,17 +559,11 @@ async function runUiFlow(page: CdpClient) {
       jobsTab.click();
       await waitFor(() => document.querySelector(".jobRow"), "job list missing after opening jobs");
 
-      const jobId = await waitFor(() => {
-        const rows = Array.from(document.querySelectorAll(".jobRow"));
-        for (const row of rows) {
-          const text = row.querySelector("strong")?.textContent?.trim() ?? "";
-          if (text.startsWith("JOB-") && !beforeJobIds.has(text)) {
-            row.click();
-            return text;
-          }
-        }
-        return "";
-      }, "newly created job did not appear in list");
+      const createdJobRow = await waitFor(
+        () => document.querySelector('.jobRow[data-job-id="' + jobId + '"]'),
+        "newly created job did not appear in list"
+      );
+      createdJobRow.click();
 
       await waitFor(() => document.body.textContent.includes(jobId), "created job was not selected");
 
@@ -605,7 +605,7 @@ async function runUiFlow(page: CdpClient) {
       await waitFor(() => {
         const rows = Array.from(document.querySelectorAll(".jobRow"));
         const statuses = rows.map((row) => row.querySelector(".jobStatus")?.textContent?.trim() ?? "");
-        return rows.some((row) => row.querySelector("strong")?.textContent?.trim() === jobId) &&
+        return rows.some((row) => row.dataset.jobId === jobId) &&
           statuses.length > 0 &&
           (terminalStatus !== "cancelled" || statuses.every((status) => status === "cancelled"));
       }, "search/status filters did not keep created job visible");
@@ -618,7 +618,7 @@ async function runUiFlow(page: CdpClient) {
 
       await waitFor(() => {
         const rows = Array.from(document.querySelectorAll(".jobRow"));
-        return rows.some((row) => row.querySelector("strong")?.textContent?.trim() === jobId);
+        return rows.some((row) => row.dataset.jobId === jobId);
       }, "24h time filter did not keep created job visible");
 
       const customFilter = await waitFor(
@@ -633,7 +633,7 @@ async function runUiFlow(page: CdpClient) {
 
       await waitFor(() => {
         const rows = Array.from(document.querySelectorAll(".jobRow"));
-        return rows.some((row) => row.querySelector("strong")?.textContent?.trim() === jobId);
+        return rows.some((row) => row.dataset.jobId === jobId);
       }, "custom since/until filter did not keep created job visible");
 
       await waitFor(() => {
@@ -654,7 +654,7 @@ async function runUiFlow(page: CdpClient) {
         manualRoutingHidden,
         statusVisible: document.body.textContent.includes(terminalStatus),
         filteredJobVisible: Array.from(document.querySelectorAll(".jobRow"))
-          .some((row) => row.querySelector("strong")?.textContent?.trim() === jobId),
+          .some((row) => row.dataset.jobId === jobId),
         filteredStatuses: Array.from(document.querySelectorAll(".jobRow .jobStatus"))
           .map((node) => node.textContent?.trim() ?? ""),
         timeFilterVisible: Boolean(document.querySelector('.filterSegment.active[data-time-filter="custom"]')),

@@ -28,6 +28,12 @@ import {
 import { parseTaskExecutionPreflight } from "../../shared/src/task-preflight-contract";
 import { parseTaskExecutionQueueState } from "../../shared/src/task-queue-contract";
 import { parseTaskExecutionRetryState } from "../../shared/src/task-retry-contract";
+import {
+  emptyJobSpendBudget,
+  optionalUsd,
+  parseJobSpendBudget,
+  roundUsd
+} from "../../shared/src/spend-policy";
 import { pool } from "./pool";
 import { appendAgentEvent } from "./session";
 
@@ -234,6 +240,7 @@ function currentExecutionQueue(value: unknown) {
 
 function toJobRecord(row: any): JobRecord {
   const orchestrationPlan = parseStoredTaskOrchestrationPlan(row.orchestration_plan);
+  const maxCostUsd = optionalUsd(row.max_cost_usd);
   return {
     id: row.id,
     sessionId: row.session_id ?? row.id,
@@ -253,6 +260,8 @@ function toJobRecord(row: any): JobRecord {
     executionRetry: parseTaskExecutionRetryState(row.execution_retry),
     routingMode: normalizeRoutingMode(row.routing_mode),
     maxModelCalls: row.max_model_calls ?? DEFAULT_MAX_MODEL_CALLS,
+    maxCostUsd,
+    spendBudget: parseJobSpendBudget(row.spend_budget, maxCostUsd),
     classicFinalGateEnabled: row.classic_final_gate_enabled ?? false,
     discussionRounds: row.discussion_rounds ?? DEFAULT_DISCUSSION_ROUNDS,
     status: row.status,
@@ -305,6 +314,9 @@ export async function createJob(input: CreateJobInput): Promise<JobRecord> {
     discussionRounds,
     classicFinalGateEnabled
   });
+  const maxCostUsd = optionalUsd(input.maxCostUsd) ??
+    optionalUsd(process.env.HONEYCOMB_DEFAULT_JOB_MAX_COST_USD);
+  const spendBudget = emptyJobSpendBudget(maxCostUsd);
 
   const client = await pool.connect();
   let createdRow: any;
@@ -372,13 +384,15 @@ export async function createJob(input: CreateJobInput): Promise<JobRecord> {
         workdir,
         routing_mode,
         max_model_calls,
+        max_cost_usd,
+        spend_budget,
         classic_final_gate_enabled,
         discussion_rounds,
         status,
         heartbeat_at,
         heartbeat_status,
         heartbeat_source
-      ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14, $15, $16, $17, 'created', now(), 'healthy', 'job.created')
+      ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14, $15, $16, $17::jsonb, $18, $19, 'created', now(), 'healthy', 'job.created')
       on conflict (source_message_id) where source_message_id is not null do nothing
       returning *`,
       [
@@ -397,6 +411,8 @@ export async function createJob(input: CreateJobInput): Promise<JobRecord> {
         input.workdir?.trim() || null,
         routingMode,
         maxModelCalls,
+        maxCostUsd,
+        JSON.stringify(spendBudget),
         classicFinalGateEnabled,
         discussionRounds
       ]
@@ -446,6 +462,7 @@ export async function createJob(input: CreateJobInput): Promise<JobRecord> {
     workdir: input.workdir?.trim() || null,
     routingMode,
     maxModelCalls,
+    maxCostUsd,
     requestedMaxModelCalls: input.maxModelCalls ?? null,
     classicFinalGateEnabled,
     discussionRounds
@@ -898,6 +915,7 @@ export async function requestJobResume(input: {
   reason?: string;
   requesterId?: string;
   maxModelCalls?: number;
+  maxCostUsd?: number;
 }) {
   const job = await getJob(input.jobId);
   if (!job) {
@@ -923,17 +941,54 @@ export async function requestJobResume(input: {
     discussionRounds: job.discussionRounds,
     classicFinalGateEnabled: job.classicFinalGateEnabled
   });
+  const nextMaxCostUsd = input.maxCostUsd === undefined
+    ? job.maxCostUsd ?? job.spendBudget.maxCostUsd
+    : optionalUsd(input.maxCostUsd);
+  if (
+    job.spendBudget.blockingScope === "job" &&
+    nextMaxCostUsd !== null &&
+    nextMaxCostUsd <= job.spendBudget.committedUsd
+  ) {
+    return {
+      job,
+      changed: false,
+      reason: "job_spend_limit_still_exhausted"
+    } as const;
+  }
+  const costLimitNowAllowsResume = nextMaxCostUsd === null ||
+    job.spendBudget.committedUsd <= nextMaxCostUsd;
+  const nextSpendBudget = {
+    ...job.spendBudget,
+    enabled: nextMaxCostUsd !== null || job.spendBudget.userDailyLimitUsd !== null ||
+      job.spendBudget.providerDailyLimitUsd !== null,
+    maxCostUsd: nextMaxCostUsd,
+    remainingUsd: nextMaxCostUsd === null
+      ? null
+      : roundUsd(Math.max(0, nextMaxCostUsd - job.spendBudget.committedUsd)),
+    blocked: job.spendBudget.blockingScope === "job" && costLimitNowAllowsResume
+      ? false
+      : job.spendBudget.blocked,
+    blockingScope: job.spendBudget.blockingScope === "job" && costLimitNowAllowsResume
+      ? null
+      : job.spendBudget.blockingScope,
+    blockingReason: job.spendBudget.blockingScope === "job" && costLimitNowAllowsResume
+      ? null
+      : job.spendBudget.blockingReason,
+    updatedAt: new Date().toISOString()
+  };
 
   const result = await pool.query(
     `update agent.jobs
      set max_model_calls = $2,
+         max_cost_usd = $3,
+         spend_budget = $4::jsonb,
          updated_at = now()
      where id = $1
        and status not in ('succeeded', 'failed', 'cancelled')
        and archived_at is null
        and (status = 'waiting_for_human' or heartbeat_status = 'stalled')
      returning *`,
-    [input.jobId, nextMaxModelCalls]
+    [input.jobId, nextMaxModelCalls, nextMaxCostUsd, JSON.stringify(nextSpendBudget)]
   );
   if (!result.rows[0]) {
     const latestJob = await getJob(input.jobId);
@@ -969,6 +1024,10 @@ export async function requestJobResume(input: {
       previousMaxModelCalls: job.maxModelCalls,
       maxModelCalls: nextMaxModelCalls,
       budgetChanged: nextMaxModelCalls !== job.maxModelCalls
+        || nextMaxCostUsd !== job.maxCostUsd,
+      requestedMaxCostUsd: input.maxCostUsd ?? null,
+      previousMaxCostUsd: job.maxCostUsd,
+      maxCostUsd: nextMaxCostUsd
     },
     {
       actor: "user"
@@ -979,7 +1038,8 @@ export async function requestJobResume(input: {
     job: resumedJob,
     changed: true,
     reason: eligibility.reason,
-    maxModelCalls: nextMaxModelCalls
+    maxModelCalls: nextMaxModelCalls,
+    maxCostUsd: nextMaxCostUsd
   } as const;
 }
 
