@@ -59,6 +59,7 @@ import {
   listToolApprovals,
   rejectExperience,
   rejectToolApproval,
+  resumeJob,
   runRuntimeRepairAction,
   saveAgentModelConfig as saveBackendAgentModelConfig,
   sendPanelChat,
@@ -84,7 +85,10 @@ import {
   inferJobDisplayTitle,
   userTaskPrompt
 } from "../../../packages/shared/src/job-title";
-import type { TaskOrchestrationPlan } from "../../../packages/shared/src/types";
+import type {
+  TaskExecutionPreflight,
+  TaskOrchestrationPlan
+} from "../../../packages/shared/src/types";
 import { FirstRunPanel, type FirstRunFlow } from "./firstRun";
 import { HoneycombLogo } from "./brand";
 import {
@@ -1141,6 +1145,13 @@ function isCancellable(job: JobRecord | null) {
   return job ? cancellableStatuses.includes(job.status) : false;
 }
 
+function isResumable(job: JobRecord | null) {
+  return Boolean(job && (
+    job.status === "waiting_for_human" ||
+    job.heartbeatStatus === "stalled"
+  ));
+}
+
 function statusTone(status: JobStatus) {
   if (status === "succeeded") return "success";
   if (status === "failed" || status === "cancelled") return "danger";
@@ -2076,6 +2087,15 @@ function friendlyApiErrorMessage(error: unknown, language: Language = "en") {
         ? `\u9762\u677f Agent \u7684\u6a21\u578b\u8fde\u63a5\u9a8c\u8bc1\u5931\u8d25${detail ? `\uff1a${detail}` : ""}\u3002\u8bf7\u68c0\u67e5\u6a21\u578b\u540d\u3001API Key \u548c\u670d\u52a1\u5546\u8d26\u53f7\u72b6\u6001\u3002`
         : `The panel agent model verification failed${detail ? `: ${detail}` : ""}. Check the model name, API Key, and provider account status.`;
     }
+    if (parsed.error === "execution_preflight_blocked") {
+      const detail = taskPreflightMessage(
+        parsed.preflight as TaskExecutionPreflight | null,
+        language
+      );
+      return language === "zh"
+        ? `\u4efb\u52a1\u4ecd\u672a\u5f00\u59cb\uff1a${detail}\u3002\u8bf7\u5148\u4fee\u6b63 Agent \u914d\u7f6e\uff0c\u518d\u70b9\u51fb\u201c\u6062\u590d\u4efb\u52a1\u201d\u3002`
+        : `The task is still blocked: ${detail}. Fix the agent configuration, then resume the task again.`;
+    }
     if (typeof parsed.error === "string" && parsed.error.trim()) {
       return parsed.error.trim();
     }
@@ -2083,6 +2103,36 @@ function friendlyApiErrorMessage(error: unknown, language: Language = "en") {
     // Keep the original error text.
   }
   return raw;
+}
+
+function taskPreflightMessage(preflight: TaskExecutionPreflight | null, language: Language) {
+  const issues = preflight?.blockingIssues ?? [];
+  if (!issues.length) {
+    return language === "zh" ? "子 Agent 的模型连接尚未准备好。" : "A child-agent model connection is not ready.";
+  }
+  const labels: Record<string, { zh: string; en: string }> = {
+    agent_config_not_found: { zh: "Agent 尚未注册", en: "agent is not registered" },
+    agent_disabled: { zh: "Agent 已停用", en: "agent is disabled" },
+    provider_not_bound: { zh: "未绑定模型服务商", en: "no model provider is assigned" },
+    provider_not_found: { zh: "模型服务商记录不存在", en: "model provider record is missing" },
+    provider_base_url_missing: { zh: "服务商接口地址缺失", en: "provider base URL is missing" },
+    provider_api_key_missing: { zh: "API Key 未保存或无法读取", en: "API key is missing or unreadable" },
+    model_not_configured: { zh: "模型名未配置", en: "model name is missing" },
+    provider_verification_failed: { zh: "最近一次模型连接验证失败", en: "latest provider verification failed" },
+    image_generation_model_required: { zh: "需要图片生成模型", en: "an image-generation model is required" },
+    video_generation_model_required: { zh: "需要视频生成模型", en: "a video-generation model is required" },
+    chat_model_required: { zh: "需要对话或文本模型", en: "a chat/text model is required" }
+  };
+  return issues
+    .filter((entry, index, entries) =>
+      entries.findIndex((candidate) => candidate.agentId === entry.agentId && candidate.code === entry.code) === index
+    )
+    .slice(0, 4)
+    .map((entry) => {
+      const label = labels[entry.code]?.[language] ?? entry.code;
+      return `${entry.agentId}${language === "zh" ? "：" : ": "}${label}`;
+    })
+    .join(language === "zh" ? "；" : "; ");
 }
 
 function App() {
@@ -2877,18 +2927,42 @@ function App() {
         routingMode: panelTaskPlan.routingMode,
         maxModelCalls: effectiveMaxModelCalls
       });
+      if (created.status === "waiting_for_human") {
+        const preflightDetail = taskPreflightMessage(created.preflight, language);
+        const blockedMessage = createConversationMessage(
+          "assistant",
+          language === "zh"
+            ? `任务“${panelTaskPlan.title}”已保存，但尚未开始执行。执行前检查发现：${preflightDetail}。请到 Agents 页面补全对应 Agent 的模型和 API Key，然后恢复任务。`
+            : `Task “${panelTaskPlan.title}” was saved but has not started. Preflight found: ${preflightDetail}. Configure the affected agent model and API key in Agents, then resume the task.`,
+          { jobId: created.jobId, status: "sent" }
+        );
+        appendMessagesToConversationState(
+          nextConversationState,
+          activeProject.id,
+          activeThread.id,
+          [blockedMessage]
+        );
+        await refreshAll(created.jobId);
+        setError(null);
+        return;
+      }
       const budgetNote =
         effectiveMaxModelCalls > maxModelCalls
           ? language === "zh"
             ? `\n\u5df2\u81ea\u52a8\u628a\u6a21\u578b\u8c03\u7528\u9884\u7b97\u4ece ${maxModelCalls} \u63d0\u9ad8\u5230 ${effectiveMaxModelCalls}\uff0c\u907f\u514d\u8be5\u6a21\u5f0f\u5728\u4e2d\u9014\u56e0\u9884\u7b97\u4e0d\u8db3\u505c\u4f4f\u3002`
             : `\nAutomatically raised the model-call budget from ${maxModelCalls} to ${effectiveMaxModelCalls} so this routing mode does not pause mid-run.`
           : "";
+      const simulationNote = created.preflight?.status === "simulation"
+        ? language === "zh"
+          ? "\n\u5f53\u524d\u540e\u7aef\u5904\u4e8e\u6a21\u62df\u6a21\u5f0f\uff1a\u672c\u6b21\u4f1a\u6f14\u7ec3\u4efb\u52a1\u6d41\u7a0b\uff0c\u4f46\u4e0d\u4f1a\u8c03\u7528\u5b50 Agent \u7684\u771f\u5b9e\u6a21\u578b\uff0c\u4e5f\u4e0d\u4f1a\u751f\u6210\u771f\u5b9e\u6587\u4ef6\u3002"
+          : "\nThe backend is in simulation mode. This run exercises the workflow but will not call child-agent models or create real files."
+        : "";
       const createdJobTitle = panelTaskPlan.title;
       const assistantMessage = createConversationMessage(
         "assistant",
         language === "zh"
-          ? `\u4efb\u52a1\u5df2\u6d3e\u53d1\uff1a${createdJobTitle}\u3002\u4f60\u53ef\u4ee5\u5728 Tasks \u9875\u67e5\u770b\u8fdb\u7a0b\u3002${budgetNote}`
-          : `Task dispatched: ${createdJobTitle}. You can inspect progress in Tasks.${budgetNote}`,
+          ? `\u4efb\u52a1\u5df2\u6d3e\u53d1\uff1a${createdJobTitle}\u3002\u4f60\u53ef\u4ee5\u5728 Tasks \u9875\u67e5\u770b\u8fdb\u7a0b\u3002${budgetNote}${simulationNote}`
+          : `Task dispatched: ${createdJobTitle}. You can inspect progress in Tasks.${budgetNote}${simulationNote}`,
         { jobId: created.jobId, status: "sent" }
       );
       appendMessagesToConversationState(nextConversationState, activeProject.id, activeThread.id, [assistantMessage]);
@@ -3130,6 +3204,21 @@ function App() {
     window.localStorage.setItem("honeycomb.panelOutputStyle", style);
     setOutputStyleMessage(copy.outputStyleSaved);
     window.setTimeout(() => setOutputStyleMessage(""), 2400);
+  }
+
+  async function resumeSelectedJob() {
+    if (!selectedJobId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await resumeJob(selectedJobId);
+      await refreshAll(selectedJobId);
+    } catch (caught) {
+      await refreshAll(selectedJobId).catch(() => undefined);
+      setError(friendlyApiErrorMessage(caught, language));
+    } finally {
+      setBusy(false);
+    }
   }
 
   function scrollConversationToBottom(behavior: ScrollBehavior = "auto") {
@@ -5027,14 +5116,27 @@ function App() {
                 <h2>{selectedFromList ? jobDisplayTitle(selectedFromList) : taskCopy.selectedRun}</h2>
                 <p>{selectedFromList ? `${selectedFromList.id} / ${selectedFromList.ingressOrigin} / ${routingLabel(selectedFromList.routingMode)}` : "-"}</p>
               </div>
-              <button
-                className="dangerButton"
-                type="button"
-                onClick={cancelSelectedJob}
-                disabled={!isCancellable(selectedFromList) || busy}
-              >
-                {selectedFromList?.status === "cancelled" ? copy.cancelled : copy.cancel}
-              </button>
+              <div className="detailActions">
+                {isResumable(selectedFromList) ? (
+                  <button
+                    className="primaryButton"
+                    type="button"
+                    onClick={resumeSelectedJob}
+                    disabled={busy}
+                  >
+                    <Play size={15} aria-hidden="true" />
+                    {language === "zh" ? "\u6062\u590d\u4efb\u52a1" : "Resume task"}
+                  </button>
+                ) : null}
+                <button
+                  className="dangerButton"
+                  type="button"
+                  onClick={cancelSelectedJob}
+                  disabled={!isCancellable(selectedFromList) || busy}
+                >
+                  {selectedFromList?.status === "cancelled" ? copy.cancelled : copy.cancel}
+                </button>
+              </div>
             </div>
 
             {selectedFromList ? (
@@ -5059,6 +5161,45 @@ function App() {
             ) : (
               <p className="emptyState">{copy.noJobLoaded}</p>
             )}
+
+            {selectedFromList?.executionPreflight?.status === "blocked" ? (
+              <section className="jobPreflightNotice" role="alert">
+                <AlertTriangle size={18} aria-hidden="true" />
+                <div>
+                  <h3>{language === "zh" ? "执行前检查未通过" : "Execution preflight blocked"}</h3>
+                  <p>{taskPreflightMessage(selectedFromList.executionPreflight, language)}</p>
+                  <div className="jobPreflightAgents">
+                    {selectedFromList.executionPreflight.agents
+                      .filter((agent) => !agent.ready)
+                      .map((agent) => (
+                        <span key={agent.agentId}>{agent.agentId}</span>
+                      ))}
+                  </div>
+                </div>
+                <button className="secondaryButton compactButton" type="button" onClick={() => setActiveView("agents")}>
+                  <Settings size={14} aria-hidden="true" />
+                  {language === "zh" ? "配置 Agent" : "Configure agents"}
+                </button>
+              </section>
+            ) : null}
+
+            {selectedFromList?.executionPreflight?.status === "simulation" ? (
+              <section className="jobPreflightNotice jobSimulationNotice" role="status">
+                <AlertTriangle size={18} aria-hidden="true" />
+                <div>
+                  <h3>{language === "zh" ? "\u5f53\u524d\u662f\u6a21\u62df\u6267\u884c" : "Simulation run"}</h3>
+                  <p>
+                    {language === "zh"
+                      ? "\u8fd9\u6b21\u4efb\u52a1\u4e0d\u4f1a\u8c03\u7528\u5b50 Agent \u7684\u771f\u5b9e\u6a21\u578b\uff0c\u4e5f\u4e0d\u4f1a\u751f\u6210\u771f\u5b9e\u6587\u4ef6\u3002\u8bf7\u786e\u8ba4 Agent \u6a21\u578b\u548c API Key \u5747\u5df2\u914d\u7f6e\uff0c\u7136\u540e\u91cd\u542f Honeycomb\u3002"
+                      : "This run will not call real child-agent models or create real files. Configure agent models and API keys, then restart Honeycomb."}
+                  </p>
+                </div>
+                <button className="secondaryButton compactButton" type="button" onClick={() => setActiveView("agents")}>
+                  <Settings size={14} aria-hidden="true" />
+                  {language === "zh" ? "\u68c0\u67e5 Agent" : "Check agents"}
+                </button>
+              </section>
+            ) : null}
 
             <div className="timelineHeader">
               <h3>{copy.timeline}</h3>

@@ -5,6 +5,7 @@ import type {
   ConversationWorkspaceSnapshot,
   OrchestrationPlanSource,
   PanelMessageIntent,
+  TaskExecutionPreflight,
   TaskOrchestrationPlan
 } from "../../../packages/shared/src/types";
 
@@ -1220,6 +1221,7 @@ export type JobRecord = {
   displayTitle: string;
   orchestrationPlan: TaskOrchestrationPlan | null;
   orchestrationSource: OrchestrationPlanSource | null;
+  executionPreflight: TaskExecutionPreflight | null;
   routingMode: RoutingMode;
   maxModelCalls: number;
   classicFinalGateEnabled: boolean;
@@ -1563,9 +1565,11 @@ export async function listJobs(input: number | ListJobsInput = 50) {
 export async function createJob(input: CreateJobInput) {
   return request<{
     jobId: string;
-    status: string;
+    status: JobStatus;
     routingMode: RoutingMode;
     ingressOrigin: string;
+    workflowId: string | null;
+    preflight: TaskExecutionPreflight | null;
   }>("/jobs", {
     method: "POST",
     body: JSON.stringify({
@@ -1702,6 +1706,26 @@ export async function scanStalledJobHeartbeats(input: {
   return request<JobHeartbeatScanResult>("/runtime/heartbeats/scan", {
     method: "POST",
     body: JSON.stringify(input)
+  });
+}
+
+export async function resumeJob(jobId: string) {
+  return request<{
+    ok: true;
+    changed: true;
+    reason: string;
+    jobId: string;
+    status: JobStatus;
+    heartbeatStatus: JobHeartbeatStatus;
+    workflowId: string;
+    maxModelCalls: number;
+    preflight: TaskExecutionPreflight;
+  }>(`/jobs/${jobId}/resume`, {
+    method: "POST",
+    body: JSON.stringify({
+      reason: "Configuration reviewed from desktop console",
+      requesterId: "desktop-app"
+    })
   });
 }
 

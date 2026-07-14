@@ -2058,13 +2058,28 @@ select {
 
 .jobDetail {
   min-width: 0;
-  display: grid;
-  grid-template-rows: auto auto auto 1fr;
+  display: flex;
+  flex-direction: column;
   background: #11151c;
 }
 
 .detailHeader {
   background: #151922;
+}
+
+.detailActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.detailActions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
 }
 
 .stats,
@@ -2107,6 +2122,64 @@ select {
   flex-wrap: wrap;
 }
 
+.jobPreflightNotice {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid #514723;
+  background: #1b1a15;
+  color: #f2ca64;
+}
+
+.jobPreflightNotice h3,
+.jobPreflightNotice p {
+  margin: 0;
+}
+
+.jobPreflightNotice h3 {
+  color: #fff4cf;
+  font-size: 14px;
+}
+
+.jobPreflightNotice p {
+  margin-top: 5px;
+  color: #d6c99f;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.jobPreflightAgents {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 9px;
+}
+
+.jobPreflightAgents span {
+  padding: 3px 6px;
+  border: 1px solid #66592c;
+  border-radius: 4px;
+  background: #242116;
+  color: #f7dc91;
+  font-size: 11px;
+}
+
+.jobSimulationNotice {
+  border-bottom-color: #30465b;
+  background: #151c23;
+  color: #8bc4eb;
+}
+
+.jobSimulationNotice h3 {
+  color: #d7efff;
+}
+
+.jobSimulationNotice p {
+  color: #acc5d7;
+}
+
 .timelineHeader {
   display: flex;
   justify-content: space-between;
@@ -2128,6 +2201,7 @@ select {
 }
 
 .timeline {
+  flex: 1;
   overflow: auto;
   min-height: 0;
   padding: 4px 0;
@@ -4517,6 +4591,7 @@ select {
   .composerControls,
   .customTimeFilters,
   .stats,
+  .jobPreflightNotice,
   .timelineItem,
   .firstRunHero,
   .firstRunGrid,

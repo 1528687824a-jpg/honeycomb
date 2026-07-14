@@ -1,3 +1,15 @@
+import {
+  isLikelyImageGenerationModel,
+  isLikelyMediaGenerationModel,
+  isLikelyVideoGenerationModel
+} from "../../../packages/shared/src/model-capabilities";
+
+export {
+  isLikelyImageGenerationModel,
+  isLikelyMediaGenerationModel,
+  isLikelyVideoGenerationModel
+};
+
 export type InferredModelProvider = {
   id: string;
   displayName: string;
@@ -126,20 +138,4 @@ function presetBaseUrl(preset: ProviderPreset) {
     .replace(/[^A-Z0-9]+/g, "_")}_BASE_URL`;
   const override = process.env[envKey]?.trim();
   return override || preset.baseUrl;
-}
-
-export function isLikelyImageGenerationModel(model: string) {
-  return /(dall-e|gpt-image-|imagen|cogview|wanx|seedream|doubao[-_]?seedream|doubao.*image|flux|stable-diffusion)/i.test(
-    model.trim()
-  );
-}
-
-export function isLikelyVideoGenerationModel(model: string) {
-  return /(seedance|doubao[-_]?seedance|sora|veo|video-generation|cogvideo|kling|wanx.*video)/i.test(
-    model.trim()
-  );
-}
-
-export function isLikelyMediaGenerationModel(model: string) {
-  return isLikelyImageGenerationModel(model) || isLikelyVideoGenerationModel(model);
 }

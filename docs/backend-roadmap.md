@@ -45,9 +45,33 @@ The structured conversation-to-task contract is implemented:
   now covers migration-backed snapshot persistence, job/message links, and
   duplicate-dispatch protection when the development backend is running.
 
-The next active backend stage is execution control: bounded concurrency,
-queue visibility, cancellation propagation, typed retry/backoff, provider
-preflight, and spend limits.
+### Windows Stage 2 Progress (2026-07-14)
+
+The first execution-control slice is implemented:
+
+- Every new or resumed job runs a shared execution preflight before DBOS starts.
+- Preflight checks every production agent, the test agent, and the discussion
+  synthesis agent when required.
+- It verifies the live local secret, provider/model/base URL, cached connection
+  status, enabled state, and chat/image/video capability.
+- All configured fallback routes are evaluated; a viable fallback can be
+  selected without hiding the failed primary route.
+- Results are stored on the job and recorded in its timeline. Blocking
+  configuration errors move the job to `waiting_for_human` before model calls.
+- HTTP, Feishu, schedules, session forks, resume, scheduler startup, and the
+  worker's last pre-call check use the same contract.
+- The desktop explains the blocking agent/configuration and now exposes a
+  resume action. Mock runs are visibly labeled as simulations that do not
+  produce real files.
+- Opaque media endpoint names use the verified API kind instead of unreliable
+  model-name guessing.
+- API startup ensures the built-in agent catalog exists in a fresh database.
+- `npm run check`, the desktop production build, and all 96 unit tests pass.
+
+Runtime database acceptance is pending while PostgreSQL and Docker Desktop are
+stopped. The next active Stage 2 slice is bounded global/provider/agent
+concurrency and visible queue state, followed by cancellation propagation,
+typed retry/backoff, unknown-outcome repair, and hard spend limits.
 
 ## Current Backend Status
 

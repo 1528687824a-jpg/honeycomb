@@ -14,6 +14,7 @@ import {
   type JobRecord,
   type OrchestrationPlanSource,
   type RoutingMode,
+  type TaskExecutionPreflight,
   type JobStatus
 } from "../../shared/src/types";
 import { normalizeJobModelCallBudget } from "../../shared/src/routing-budget";
@@ -22,6 +23,7 @@ import {
   buildDeterministicTaskPlan,
   parseStoredTaskOrchestrationPlan
 } from "../../shared/src/orchestration-contract";
+import { parseTaskExecutionPreflight } from "../../shared/src/task-preflight-contract";
 import { pool } from "./pool";
 import { appendAgentEvent } from "./session";
 
@@ -231,6 +233,7 @@ function toJobRecord(row: any): JobRecord {
     orchestrationPlan,
     orchestrationSource:
       normalizeOrchestrationSource(row.orchestration_source) ?? orchestrationPlan?.source ?? null,
+    executionPreflight: parseTaskExecutionPreflight(row.execution_preflight),
     routingMode: normalizeRoutingMode(row.routing_mode),
     maxModelCalls: row.max_model_calls ?? DEFAULT_MAX_MODEL_CALLS,
     classicFinalGateEnabled: row.classic_final_gate_enabled ?? false,
@@ -780,6 +783,18 @@ export async function getJobBySourceMessageId(sourceMessageId: string): Promise<
   const result = await pool.query(`select * from agent.jobs where source_message_id = $1`, [
     sourceMessageId
   ]);
+  return result.rows[0] ? toJobRecord(result.rows[0]) : null;
+}
+
+export async function setJobExecutionPreflight(jobId: string, preflight: TaskExecutionPreflight) {
+  const result = await pool.query(
+    `update agent.jobs
+     set execution_preflight = $2::jsonb,
+         updated_at = now()
+     where id = $1
+     returning *`,
+    [jobId, JSON.stringify(preflight)]
+  );
   return result.rows[0] ? toJobRecord(result.rows[0]) : null;
 }
 

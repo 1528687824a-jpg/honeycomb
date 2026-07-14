@@ -96,11 +96,14 @@ export const feishuIngressAdapter: ExpressIngressAdapter = {
 
         const existingJob = await deps.getJobByFeishuMessageId(message.message_id);
         if (existingJob) {
+          const started = await deps.startJob(existingJob);
           response.json({
             ok: true,
             duplicate: true,
             jobId: existingJob.id,
-            workflowId: existingJob.workflowId
+            status: started.status,
+            workflowId: started.workflowId,
+            preflight: started.preflight
           });
           return;
         }
@@ -118,7 +121,7 @@ export const feishuIngressAdapter: ExpressIngressAdapter = {
           feishuChatId: message.chat_id,
           feishuMessageId: message.message_id
         });
-        const workflowId = await deps.startJobWorkflow(job.id);
+        const started = await deps.startJob(job);
 
         response.status(201).json({
           ok: true,
@@ -128,7 +131,9 @@ export const feishuIngressAdapter: ExpressIngressAdapter = {
           maxModelCalls: job.maxModelCalls,
           classicFinalGateEnabled: job.classicFinalGateEnabled,
           discussionRounds: job.discussionRounds,
-          workflowId
+          status: started.status,
+          workflowId: started.workflowId,
+          preflight: started.preflight
         });
       } catch (error) {
         next(error);

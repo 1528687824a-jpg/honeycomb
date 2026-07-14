@@ -18,7 +18,9 @@ import {
   listJobs,
   requestJobResume,
   scanStalledJobHeartbeats,
-  restoreJobSession
+  restoreJobSession,
+  setJobExecutionPreflight,
+  setJobStatus
 } from "../../../packages/db/src/jobs";
 import {
   ConversationRecordConflictError,
@@ -78,6 +80,7 @@ import {
   listSessions
 } from "../../../packages/db/src/runtime";
 import {
+  ensureDefaultAgentConfigs,
   getAgentConfig,
   getModelProvider,
   listAgentConfigs,
@@ -174,6 +177,10 @@ import {
   parsePanelOrchestrationOutput
 } from "../../../packages/shared/src/orchestration-contract";
 import {
+  selectAgentModelVerificationKind,
+  type AgentModelVerificationKind
+} from "../../../packages/shared/src/agent-model-kind";
+import {
   normalizeOpenClawAgentRunner,
   resolveOpenClawAgentRunner
 } from "../../../packages/shared/src/openclaw-runner";
@@ -198,6 +205,7 @@ import {
   readProviderApiKey,
   saveProviderApiKey
 } from "../../../packages/runtime/src/local-secrets";
+import { preflightTaskExecution } from "../../../packages/runtime/src/task-preflight";
 import {
   verifyOpenAiCompatibleImageGenerationProvider,
   verifyOpenAiCompatibleProvider,
@@ -205,10 +213,7 @@ import {
   type ProviderVerificationResult
 } from "./provider-verification";
 import {
-  inferOpenAiCompatibleProviderForModel,
-  isLikelyImageGenerationModel,
-  isLikelyMediaGenerationModel,
-  isLikelyVideoGenerationModel
+  inferOpenAiCompatibleProviderForModel
 } from "./provider-inference";
 import {
   withLiveProviderSecretStatus,
@@ -1381,70 +1386,6 @@ function providerVerificationFailureCode(verification: ProviderVerificationResul
   return "provider_verification_failed";
 }
 
-type AgentModelVerificationKind = "chat" | "image_generation" | "video_generation";
-
-function selectAgentModelVerificationKind(agent: { agentRole: string }, model: string): {
-  kind: AgentModelVerificationKind;
-  mismatch: null;
-} | {
-  kind: null;
-  mismatch: {
-    reason: "agent_model_kind_mismatch";
-    message: string;
-  };
-} {
-  const role = agent.agentRole;
-  const imageModel = isLikelyImageGenerationModel(model);
-  const videoModel = isLikelyVideoGenerationModel(model);
-
-  if (role === "image") {
-    if (videoModel) {
-      return {
-        kind: null,
-        mismatch: {
-          reason: "agent_model_kind_mismatch",
-          message: "Video generation models should be configured on the video agent."
-        }
-      };
-    }
-    return {
-      kind: imageModel ? "image_generation" : "chat",
-      mismatch: null
-    };
-  }
-
-  if (role === "video") {
-    if (imageModel) {
-      return {
-        kind: null,
-        mismatch: {
-          reason: "agent_model_kind_mismatch",
-          message: "Image generation models should be configured on the image agent."
-        }
-      };
-    }
-    return {
-      kind: videoModel ? "video_generation" : "chat",
-      mismatch: null
-    };
-  }
-
-  if (isLikelyMediaGenerationModel(model)) {
-    return {
-      kind: null,
-      mismatch: {
-        reason: "agent_model_kind_mismatch",
-        message: "Media generation models can only be configured on the image or video agent."
-      }
-    };
-  }
-
-  return {
-    kind: "chat",
-    mismatch: null
-  };
-}
-
 async function verifyAgentModelProvider(input: {
   kind: AgentModelVerificationKind;
   baseUrl: string;
@@ -1608,9 +1549,64 @@ async function respondWithExperienceStatus(
   response.json(result);
 }
 
+async function runJobExecutionPreflight(job: Awaited<ReturnType<typeof createJob>>) {
+  if (!job.orchestrationPlan) {
+    throw new Error("job_orchestration_plan_missing");
+  }
+
+  const preflight = await preflightTaskExecution({ plan: job.orchestrationPlan });
+  await setJobExecutionPreflight(job.id, preflight);
+  await appendJobEvent(job.id, "job.execution_preflight_completed", {
+    status: preflight.status,
+    mode: preflight.mode,
+    runner: preflight.runner,
+    agentCount: preflight.agents.length,
+    blockingIssues: preflight.blockingIssues,
+    warnings: preflight.warnings
+  });
+  return preflight;
+}
+
+async function preflightAndStartJob(job: Awaited<ReturnType<typeof createJob>>) {
+  if (
+    job.workflowId ||
+    job.status === "succeeded" ||
+    job.status === "failed" ||
+    job.status === "cancelled"
+  ) {
+    return {
+      status: job.status,
+      workflowId: job.workflowId,
+      preflight: job.executionPreflight
+    };
+  }
+
+  const preflight = await runJobExecutionPreflight(job);
+
+  if (preflight.status === "blocked") {
+    await setJobStatus(job.id, "waiting_for_human", {
+      source: "job.execution_preflight",
+      reason: "agent_runtime_configuration_blocked",
+      blockingIssues: preflight.blockingIssues
+    });
+    return {
+      status: "waiting_for_human" as const,
+      workflowId: null,
+      preflight
+    };
+  }
+
+  return {
+    status: "queued" as const,
+    workflowId: await startJobWorkflow(job.id),
+    preflight
+  };
+}
+
 async function main() {
   const app = express();
   await launchDbos();
+  await ensureDefaultAgentConfigs();
   const port = Number(process.env.ORCHESTRATOR_PORT ?? 3000);
   const host = process.env.ORCHESTRATOR_HOST?.trim() || "127.0.0.1";
   const corsOrigins = getCorsOrigins();
@@ -1891,7 +1887,7 @@ async function main() {
       adapter.mount(app, {
         createJob,
         getJobByFeishuMessageId,
-        startJobWorkflow
+        startJob: preflightAndStartJob
       });
     }
   }
@@ -3188,8 +3184,15 @@ async function main() {
       );
 
       let workflowId: string | null = null;
+      let executionPreflight = job.executionPreflight;
+      let startStatus: "idle" | "queued" | "failed" = "idle";
       try {
-        workflowId = input.startWorkflow ? await startJobWorkflow(job.id) : null;
+        if (input.startWorkflow) {
+          const started = await preflightAndStartJob(job);
+          workflowId = started.workflowId;
+          executionPreflight = started.preflight;
+          startStatus = started.status === "queued" ? "queued" : "failed";
+        }
       } catch (error) {
         await markScheduledTaskTriggered({
           scheduleId: schedule.id,
@@ -3203,14 +3206,17 @@ async function main() {
       const updatedSchedule = await markScheduledTaskTriggered({
         scheduleId: schedule.id,
         jobId: job.id,
-        status: input.startWorkflow ? "queued" : "idle"
+        status: startStatus,
+        error: startStatus === "failed" ? "execution_preflight_blocked" : undefined
       });
+      const currentJob = input.startWorkflow ? await getJob(job.id) : job;
 
       response.status(201).json({
         ok: true,
         schedule: updatedSchedule,
-        job,
-        workflowId
+        job: currentJob ?? job,
+        workflowId,
+        preflight: executionPreflight
       });
     } catch (error) {
       next(error);
@@ -4296,13 +4302,15 @@ async function main() {
       }, {
         actor: "session-ledger"
       });
-      const workflowId = input.startWorkflow ? await startJobWorkflow(forked.id) : null;
+      const started = input.startWorkflow ? await preflightAndStartJob(forked) : null;
+      const currentFork = started ? await getJob(forked.id) : forked;
       response.status(201).json({
         ok: true,
         sourceSessionId: source.sessionId,
         sessionId: forked.sessionId,
-        job: forked,
-        workflowId
+        job: currentFork ?? forked,
+        workflowId: started?.workflowId ?? null,
+        preflight: started?.preflight ?? null
       });
     } catch (error) {
       next(error);
@@ -4617,6 +4625,22 @@ async function main() {
         return;
       }
 
+      const preflight = await runJobExecutionPreflight(resume.job);
+      if (preflight.status === "blocked") {
+        await setJobStatus(resume.job.id, "waiting_for_human", {
+          source: "job.execution_preflight",
+          reason: "agent_runtime_configuration_blocked",
+          blockingIssues: preflight.blockingIssues
+        });
+        response.status(409).json({
+          error: "execution_preflight_blocked",
+          jobId: resume.job.id,
+          status: "waiting_for_human",
+          preflight
+        });
+        return;
+      }
+
       const stamp = new Date().toISOString().replace(/[^0-9]/g, "").slice(0, 14);
       const workflowId = await startJobWorkflow(request.params.jobId, `job-${request.params.jobId}-resume-${stamp}`);
       const job = await getJob(request.params.jobId);
@@ -4629,7 +4653,8 @@ async function main() {
         status: job?.status ?? resume.job.status,
         heartbeatStatus: job?.heartbeatStatus ?? resume.job.heartbeatStatus,
         workflowId,
-        maxModelCalls: job?.maxModelCalls ?? resume.maxModelCalls
+        maxModelCalls: job?.maxModelCalls ?? resume.maxModelCalls,
+        preflight
       });
     } catch (error) {
       await appendJobEvent(

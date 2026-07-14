@@ -1,6 +1,8 @@
 import {
   appendJobEvent,
-  createJob
+  createJob,
+  setJobExecutionPreflight,
+  setJobStatus
 } from "../../../packages/db/src/jobs";
 import {
   claimDueScheduledTasks,
@@ -14,6 +16,7 @@ import {
   resolveScheduleMaxConsecutiveFailures
 } from "../../../packages/db/src/schedule-policy";
 import type { ScheduledTaskRecord } from "../../../packages/shared/src/types";
+import { preflightTaskExecution } from "../../../packages/runtime/src/task-preflight";
 import { startJobWorkflow } from "./dbos-runtime";
 
 type SchedulerResult = {
@@ -86,7 +89,30 @@ export async function runDueSchedulesOnce(input: {
         }
       );
 
-      const workflowId = startWorkflow ? await startJobWorkflow(job.id) : null;
+      let workflowId: string | null = null;
+      if (startWorkflow) {
+        if (!job.orchestrationPlan) {
+          throw new Error("job_orchestration_plan_missing");
+        }
+        const preflight = await preflightTaskExecution({ plan: job.orchestrationPlan });
+        await setJobExecutionPreflight(job.id, preflight);
+        await appendJobEvent(job.id, "job.execution_preflight_completed", {
+          status: preflight.status,
+          mode: preflight.mode,
+          runner: preflight.runner,
+          blockingIssues: preflight.blockingIssues,
+          warnings: preflight.warnings
+        });
+        if (preflight.status === "blocked") {
+          await setJobStatus(job.id, "waiting_for_human", {
+            source: "job.execution_preflight",
+            reason: "agent_runtime_configuration_blocked",
+            blockingIssues: preflight.blockingIssues
+          });
+          throw new Error("execution_preflight_blocked");
+        }
+        workflowId = await startJobWorkflow(job.id);
+      }
       await markScheduledTaskTriggered({
         scheduleId: schedule.id,
         jobId: job.id,

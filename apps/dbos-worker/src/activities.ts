@@ -6,6 +6,7 @@ import {
   archiveJobSession,
   getJob,
   recordJobHeartbeat,
+  setJobExecutionPreflight,
   setJobFinalOutput,
   setJobStatus,
   setJobWorkdir
@@ -55,6 +56,7 @@ import {
   DEFAULT_ROUTING_MODE
 } from "../../../packages/shared/src/types";
 import { inferFallbackStages } from "../../../packages/shared/src/orchestration-contract";
+import { preflightTaskExecution } from "../../../packages/runtime/src/task-preflight";
 import {
   redactAgentRuntime,
   resolveAgentRuntimeCandidates,
@@ -524,6 +526,37 @@ export async function enforceModelCallBudget(input: {
     maxModelCalls,
     nextActionType: input.nextActionType,
     nextAgentId: input.nextAgentId
+  };
+}
+
+export async function ensureJobExecutionReady(jobId: string) {
+  const job = await getJob(jobId);
+  if (!job) {
+    throw new Error(`Job not found: ${jobId}`);
+  }
+  if (!job.orchestrationPlan) {
+    throw new Error("job_orchestration_plan_missing");
+  }
+
+  const preflight = await preflightTaskExecution({ plan: job.orchestrationPlan });
+  await setJobExecutionPreflight(job.id, preflight);
+  await appendJobEvent(job.id, "job.execution_preflight_rechecked", {
+    status: preflight.status,
+    mode: preflight.mode,
+    runner: preflight.runner,
+    blockingIssues: preflight.blockingIssues,
+    warnings: preflight.warnings
+  });
+  if (preflight.status === "blocked") {
+    await setJobStatus(job.id, "waiting_for_human", {
+      source: "job.execution_preflight_rechecked",
+      reason: "agent_runtime_configuration_blocked",
+      blockingIssues: preflight.blockingIssues
+    });
+  }
+  return {
+    ready: preflight.status !== "blocked",
+    preflight
   };
 }
 

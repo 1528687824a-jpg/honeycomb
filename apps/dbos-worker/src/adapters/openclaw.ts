@@ -8,6 +8,10 @@ import {
   type OpenClawAgentRunner,
   type OpenClawEffectiveRunner
 } from "../../../../packages/shared/src/openclaw-runner";
+import {
+  isLikelyImageGenerationModel,
+  isLikelyVideoGenerationModel
+} from "../../../../packages/shared/src/model-capabilities";
 
 const execFileAsync = promisify(execFile);
 
@@ -264,18 +268,6 @@ function stringValue(value: unknown) {
 function numberValue(value: unknown) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-}
-
-function isLikelyImageGenerationModel(model: string | null | undefined) {
-  return Boolean(
-    model?.match(/(dall-e|gpt-image-|imagen|cogview|wanx|seedream|doubao[-_]?seedream|doubao.*image|flux|stable-diffusion)/i)
-  );
-}
-
-function isLikelyVideoGenerationModel(model: string | null | undefined) {
-  return Boolean(
-    model?.match(/(seedance|doubao[-_]?seedance|sora|veo|video-generation|cogvideo|kling|wanx.*video)/i)
-  );
 }
 
 export function selectProviderDirectKind(provider?: OpenClawProviderRuntime | null): "chat" | "image" | "video" {

@@ -54,6 +54,10 @@ const markJobWaitingForHuman = DBOS.registerStep(activities.markJobWaitingForHum
   name: "markJobWaitingForHuman",
   ...retryingStepConfig
 });
+const ensureJobExecutionReady = DBOS.registerStep(activities.ensureJobExecutionReady, {
+  name: "ensureJobExecutionReady",
+  ...retryingStepConfig
+});
 const ensureJobWaitingForHuman = DBOS.registerStep(activities.ensureJobWaitingForHuman, {
   name: "ensureJobWaitingForHuman",
   ...retryingStepConfig
@@ -342,6 +346,14 @@ async function runJobPipelineWorkflow(input: JobWorkflowInput) {
     return {
       jobId: input.jobId,
       status: "cancelled"
+    };
+  }
+
+  const executionReadiness = await ensureJobExecutionReady(input.jobId);
+  if (!executionReadiness.ready) {
+    return {
+      jobId: input.jobId,
+      status: "waiting_for_human"
     };
   }
 

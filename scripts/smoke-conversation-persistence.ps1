@@ -118,6 +118,10 @@ $jobRequest = @{
 $firstJob = Invoke-JsonPost -Uri "$apiBaseUrl/jobs" -Body $jobRequest
 $duplicateJob = Invoke-JsonPost -Uri "$apiBaseUrl/jobs" -Body $jobRequest
 Assert-Equal -Actual $duplicateJob.jobId -Expected $firstJob.jobId -Message "source message idempotency"
+Assert-Equal -Actual $firstJob.preflight.status -Expected "simulation" -Message "mock preflight status"
+$preflightAgentIds = @($firstJob.preflight.agents | ForEach-Object { $_.agentId })
+Assert-True -Condition ($preflightAgentIds -contains "image-agent") -Message "image agent preflight missing"
+Assert-True -Condition ($preflightAgentIds -contains "test-agent") -Message "test agent preflight missing"
 
 $job = Invoke-RestMethod -Uri "$apiBaseUrl/jobs/$($firstJob.jobId)" -Headers $apiHeaders
 Assert-Equal -Actual $job.conversationId -Expected $conversationId -Message "job conversation link"
@@ -125,6 +129,7 @@ Assert-Equal -Actual $job.sourceMessageId -Expected $messageId -Message "job sou
 Assert-Equal -Actual $job.displayTitle -Expected "Tea ceremony poster" -Message "persisted job title"
 Assert-Equal -Actual $job.orchestrationPlan.selectedAgents.Count -Expected 1 -Message "minimum agent count"
 Assert-Equal -Actual $job.orchestrationPlan.selectedAgents[0] -Expected "image-agent" -Message "image agent selection"
+Assert-Equal -Actual $job.executionPreflight.status -Expected "simulation" -Message "persisted execution preflight"
 
 $workspace = Invoke-RestMethod -Uri "$apiBaseUrl/conversation-workspace" -Headers $apiHeaders
 $savedProject = @($workspace.projects | Where-Object { $_.id -eq $projectId })
@@ -155,6 +160,7 @@ Assert-True `
     "job_source_message_link",
     "source_message_idempotency",
     "persisted_orchestration_plan",
+    "execution_preflight",
     "message_job_back_link",
     "soft_delete_visibility"
   )

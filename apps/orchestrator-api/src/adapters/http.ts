@@ -44,7 +44,7 @@ export const httpIngressAdapter: ExpressIngressAdapter = {
           discussionRounds: input.discussionRounds,
           requesterId: input.requesterId
         });
-        const workflowId = job.workflowId ?? await deps.startJobWorkflow(job.id);
+        const started = await deps.startJob(job);
 
         response.status(201).json({
           jobId: job.id,
@@ -55,8 +55,9 @@ export const httpIngressAdapter: ExpressIngressAdapter = {
           maxModelCalls: job.maxModelCalls,
           classicFinalGateEnabled: job.classicFinalGateEnabled,
           discussionRounds: job.discussionRounds,
-          status: "queued",
-          workflowId
+          status: started.status,
+          workflowId: started.workflowId,
+          preflight: started.preflight
         });
       } catch (error) {
         next(error);

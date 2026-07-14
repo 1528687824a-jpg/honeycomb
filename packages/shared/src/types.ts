@@ -184,6 +184,54 @@ export type ConversationWorkspaceSnapshot = {
   generatedAt: string;
 };
 
+export const TASK_PREFLIGHT_STATUSES = ["ready", "blocked", "simulation"] as const;
+export type TaskPreflightStatus = (typeof TASK_PREFLIGHT_STATUSES)[number];
+
+export const TASK_PREFLIGHT_SEVERITIES = ["blocking", "warning"] as const;
+export type TaskPreflightSeverity = (typeof TASK_PREFLIGHT_SEVERITIES)[number];
+
+export type TaskPreflightIssue = {
+  code: string;
+  severity: TaskPreflightSeverity;
+  agentId: string;
+  providerId: string | null;
+  model: string | null;
+  message: string;
+};
+
+export type TaskPreflightRoute = {
+  routeIndex: number;
+  source: "primary" | "agent_metadata" | "provider_metadata";
+  providerId: string | null;
+  providerDisplayName: string | null;
+  providerBaseUrl: string | null;
+  providerVerificationStatus: string | null;
+  verificationKind: string | null;
+  model: string | null;
+  ready: boolean;
+  issues: TaskPreflightIssue[];
+};
+
+export type TaskPreflightAgent = {
+  agentId: string;
+  purpose: "production" | "quality_gate" | "synthesis";
+  stageTypes: string[];
+  ready: boolean;
+  selectedRouteIndex: number | null;
+  routes: TaskPreflightRoute[];
+};
+
+export type TaskExecutionPreflight = {
+  version: "honeycomb.task-preflight.v1";
+  status: TaskPreflightStatus;
+  mode: "mock" | "real";
+  runner: "mock" | "wsl" | "native" | "provider-direct";
+  checkedAt: string;
+  agents: TaskPreflightAgent[];
+  blockingIssues: TaskPreflightIssue[];
+  warnings: TaskPreflightIssue[];
+};
+
 export const INGRESS_ORIGINS = ["http", "feishu", "slack", "cli"] as const;
 
 export type IngressOrigin = (typeof INGRESS_ORIGINS)[number];
@@ -198,6 +246,7 @@ export type JobRecord = {
   displayTitle: string;
   orchestrationPlan: TaskOrchestrationPlan | null;
   orchestrationSource: OrchestrationPlanSource | null;
+  executionPreflight: TaskExecutionPreflight | null;
   routingMode: RoutingMode;
   maxModelCalls: number;
   classicFinalGateEnabled: boolean;

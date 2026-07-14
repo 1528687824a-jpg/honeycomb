@@ -421,3 +421,12 @@ export async function seedDefaultAgentConfigs(input: {
   }
   return records;
 }
+
+export async function ensureDefaultAgentConfigs(): Promise<AgentConfigRecord[]> {
+  const existing = await listAgentConfigs();
+  const existingIds = new Set(existing.map((agent) => agent.id));
+  if (defaultAgentCatalog.every((agent) => existingIds.has(agent.id))) {
+    return existing;
+  }
+  return seedDefaultAgentConfigs();
+}

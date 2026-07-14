@@ -3,6 +3,7 @@ import type {
   IngressAdapter,
   JobRecord,
   RoutingMode,
+  TaskExecutionPreflight,
   TaskOrchestrationPlan
 } from "../../../../packages/shared/src/types";
 
@@ -25,7 +26,11 @@ export type CreateJobForIngressInput = {
 export type IngressDeps = {
   createJob(input: CreateJobForIngressInput & { ingressOrigin: "http" | "feishu" }): Promise<JobRecord>;
   getJobByFeishuMessageId(feishuMessageId: string): Promise<JobRecord | null>;
-  startJobWorkflow(jobId: string): Promise<string>;
+  startJob(job: JobRecord): Promise<{
+    status: JobRecord["status"];
+    workflowId: string | null;
+    preflight: TaskExecutionPreflight | null;
+  }>;
 };
 
 export type ExpressIngressAdapter = IngressAdapter<express.Express, IngressDeps>;
