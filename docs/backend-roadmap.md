@@ -187,6 +187,29 @@ Runtime database acceptance is pending while PostgreSQL and Docker Desktop are
 stopped. Stage 2 is complete in code; the next active slice is Stage 3 durable
 artifact persistence, asynchronous media completion, and destination delivery.
 
+### Windows Stage 3 Progress (2026-07-14)
+
+The first artifact-delivery guard is implemented:
+
+- Finalization now reads every required image/video deliverable from the
+  persisted orchestration plan and matches it to a unique generated media file.
+- A provider URL, task ID, text receipt, zero-byte file, or path outside the job
+  workspace cannot satisfy delivery. Missing files leave the job paused instead
+  of recording false success.
+- Requested image formats and exact dimensions are checked from the actual local
+  file. PNG IHDR and JPEG start-of-frame headers are inspected without trusting
+  the filename or provider text.
+- The desktop exporter now prefers Honeycomb's authenticated local artifact
+  download route. Base64-generated or already-downloaded files therefore reach
+  the Windows desktop even when no external provider URL exists.
+- Duplicate artifact references to the same local media path are exported once.
+- The task page explains that a media file, format, or dimensions failed the
+  delivery gate.
+
+This is not the full Stage 3 delivery protocol yet. Asynchronous video polling,
+durable delivery attempts/acknowledgements, workspace/custom targets, and a
+post-write success transition remain next.
+
 ## Current Backend Status
 
 ### Done Enough For Product Integration

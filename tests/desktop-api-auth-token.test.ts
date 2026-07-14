@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import {
   __apiAuthTokenTestInternals,
-  listJobs
+  listJobs,
+  resolveArtifactDownloadRequest
 } from "../apps/desktop-app/src/api";
 
 class MemoryStorage {
@@ -108,4 +109,30 @@ test("desktop API auth refreshes the token and retries once after invalid_api_to
 
   assert.deepEqual(seenAuthHeaders, ["Bearer runtime-old-token", "Bearer runtime-fresh-token"]);
   assert.equal(storage.getItem("honeycomb.apiToken"), "runtime-fresh-token");
+});
+
+test("desktop artifact delivery prefers the authenticated Honeycomb file endpoint", async () => {
+  const storage = new MemoryStorage();
+  installWindow(storage);
+  __apiAuthTokenTestInternals.setRuntimeTokenLoaderForTests(async () => "runtime-file-token");
+
+  const request = await resolveArtifactDownloadRequest({
+    index: 2,
+    label: "generated-image",
+    kind: "image",
+    mimeType: "image/png",
+    sizeBytes: 128,
+    source: "base64",
+    filePath: "/app/data/jobs/poster.png",
+    fileName: "poster.png",
+    externalUrl: null,
+    note: null,
+    downloadable: true,
+    downloadUrl: "/jobs/JOB-1/artifacts/ART-1/files/2"
+  });
+
+  assert.deepEqual(request, {
+    url: "http://127.0.0.1:3000/jobs/JOB-1/artifacts/ART-1/files/2",
+    authorization: "Bearer runtime-file-token"
+  });
 });

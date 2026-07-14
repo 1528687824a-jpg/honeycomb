@@ -49,6 +49,7 @@ import {
   getHealth,
   getJob,
   getJobArtifacts,
+  resolveArtifactDownloadRequest,
   getJobTimeline,
   listJobUnknownOutcomes,
   getRuntimeDiagnostics,
@@ -2676,17 +2677,17 @@ function App() {
 
     try {
       const artifacts = await getJobArtifacts(job.id);
-      const seenMediaUrls = new Set<string>();
+      const seenMediaSources = new Set<string>();
       const mediaFiles = artifacts.artifacts
         .flatMap((artifact) => artifact.files)
         .filter((file) => {
           const kind = (file.kind ?? "").toLowerCase();
-          const url = file.externalUrl;
+          const source = file.filePath ?? file.downloadUrl ?? file.externalUrl;
           const isMedia = kind === "image" || kind === "video" || /^image\//i.test(file.mimeType ?? "") || /^video\//i.test(file.mimeType ?? "");
-          if (!url || !isMedia || seenMediaUrls.has(url)) {
+          if (!file.downloadable || !source || !isMedia || seenMediaSources.has(source)) {
             return false;
           }
-          seenMediaUrls.add(url);
+          seenMediaSources.add(source);
           return true;
         });
 
@@ -2696,8 +2697,8 @@ function App() {
 
       const title = jobDisplayTitle(job);
       for (const [index, file] of mediaFiles.entries()) {
-        const url = file.externalUrl;
-        if (!url) {
+        const download = await resolveArtifactDownloadRequest(file);
+        if (!download) {
           continue;
         }
         const suffix = mediaFiles.length > 1 ? `-${index + 1}` : "";
@@ -2705,8 +2706,9 @@ function App() {
         const fileName = `${title}${suffix}${extensionFromFileName(file.fileName, fallbackExtension)}`;
         const result = await invokeDesktopCommand<DesktopDownloadResult>("download_url_to_desktop", {
           payload: {
-            url,
-            fileName
+            url: download.url,
+            fileName,
+            authorization: download.authorization
           }
         });
         if (result.error || !result.available) {
@@ -5435,6 +5437,21 @@ function App() {
                       <span>USD</span>
                     </label>
                   ) : null}
+                </div>
+              </section>
+            ) : null}
+
+            {selectedFromList?.status === "waiting_for_human" &&
+            selectedFromList.heartbeatNote === "required_media_delivery_missing" ? (
+              <section className="jobPreflightNotice" role="alert">
+                <AlertTriangle size={18} aria-hidden="true" />
+                <div>
+                  <h3>{language === "zh" ? "真实媒体文件尚未达到交付标准" : "The media file is not ready for delivery"}</h3>
+                  <p>
+                    {language === "zh"
+                      ? "Honeycomb 没有找到可下载的本地图片或视频，或者文件格式、尺寸与任务要求不一致，因此没有把任务标记为成功。"
+                      : "Honeycomb did not find a downloadable local image or video, or its format or dimensions do not match the task. The task was not marked successful."}
+                  </p>
                 </div>
               </section>
             ) : null}

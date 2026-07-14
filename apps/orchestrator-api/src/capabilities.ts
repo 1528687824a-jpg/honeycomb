@@ -51,6 +51,7 @@ const capabilities: RuntimeCapability[] = [
       "DBOS workflow launch path",
       "Task artifact listing",
       "Safe local artifact file download",
+      "Required media file, format, and image-dimension completion gate",
       "Waiting/stalled job resume path",
       "Atomic task/user/provider spend reservation and settlement ledger for panel and child agents",
       "Session archive/restore/fork/compress"

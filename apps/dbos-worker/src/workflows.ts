@@ -480,7 +480,19 @@ async function runJobPipelineWorkflow(input: JobWorkflowInput) {
     };
   }
 
-  await finalizeJob(input.jobId);
+  const finalized = await finalizeJob(input.jobId);
+  if (finalized.status === "waiting_for_human") {
+    return {
+      jobId: input.jobId,
+      status: "waiting_for_human"
+    };
+  }
+  if (finalized.status === "cancelled") {
+    return {
+      jobId: input.jobId,
+      status: "cancelled"
+    };
+  }
 
   return {
     jobId: input.jobId,

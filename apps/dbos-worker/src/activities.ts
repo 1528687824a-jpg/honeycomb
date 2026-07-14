@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import {
@@ -78,6 +78,11 @@ import {
 import { parseTaskExecutionRetryState } from "../../../packages/shared/src/task-retry-contract";
 import type { ModelCallRequestReference } from "../../../packages/shared/src/model-reconciliation";
 import { inferFallbackStages } from "../../../packages/shared/src/orchestration-contract";
+import {
+  assessRequiredMediaDeliverables,
+  type GeneratedMediaDeliveryCandidate
+} from "../../../packages/shared/src/artifact-delivery-policy";
+import { inspectImageFile } from "../../../packages/shared/src/image-file-inspection";
 import { preflightTaskExecution } from "../../../packages/runtime/src/task-preflight";
 import {
   redactAgentRuntime,
@@ -2697,6 +2702,12 @@ function parseArtifactJson(artifact: ArtifactRecord | null): Record<string, unkn
 }
 
 function extractGeneratedArtifactRefs(parsed: Record<string, unknown> | null) {
+  return extractGeneratedMediaArtifacts(parsed)
+    .map((artifact) => artifact.filePath ?? artifact.url)
+    .filter((value): value is string => Boolean(value));
+}
+
+function extractGeneratedMediaArtifacts(parsed: Record<string, unknown> | null) {
   const openclaw = parsed?.openclaw;
   const openclawArtifacts =
     openclaw && typeof openclaw === "object" && !Array.isArray(openclaw)
@@ -2707,20 +2718,80 @@ function extractGeneratedArtifactRefs(parsed: Record<string, unknown> | null) {
     ...(Array.isArray(openclawArtifacts) ? openclawArtifacts : []),
     ...(Array.isArray(generatedArtifacts) ? generatedArtifacts : [])
   ];
-  const refs = new Set<string>();
+  const artifacts: Array<{
+    kind: "image" | "video";
+    filePath: string | null;
+    url: string | null;
+    mimeType: string | null;
+    sizeBytes: number | null;
+    downloadError: string | null;
+  }> = [];
+  const seen = new Set<string>();
 
   for (const artifact of artifactInputs) {
     if (!artifact || typeof artifact !== "object" || Array.isArray(artifact)) {
       continue;
     }
     const item = artifact as Record<string, unknown>;
-    const ref = asString(item.filePath) ?? asString(item.url);
-    if (ref) {
-      refs.add(ref);
-    }
+    const kind = item.kind === "image" || item.kind === "video" ? item.kind : null;
+    if (!kind) continue;
+    const filePath = asString(item.filePath);
+    const url = asString(item.url);
+    const key = `${kind}:${filePath ?? ""}:${url ?? ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    artifacts.push({
+      kind,
+      filePath,
+      url,
+      mimeType: asString(item.mimeType),
+      sizeBytes: asNumber(item.sizeBytes),
+      downloadError: asString(item.downloadError)
+    });
   }
 
-  return [...refs];
+  return artifacts;
+}
+
+function isInsideDirectory(root: string, candidate: string) {
+  const relative = path.relative(path.resolve(root), path.resolve(candidate));
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+async function mediaDeliveryCandidate(
+  workdir: string,
+  artifact: ReturnType<typeof extractGeneratedMediaArtifacts>[number]
+): Promise<GeneratedMediaDeliveryCandidate> {
+  let localAvailable = false;
+  let actualSize = artifact.sizeBytes;
+  let width: number | null = null;
+  let height: number | null = null;
+  let detectedFormat: string | null | undefined = artifact.kind === "image" ? null : undefined;
+  if (artifact.filePath && isInsideDirectory(workdir, artifact.filePath)) {
+    try {
+      const fileStat = await stat(artifact.filePath);
+      localAvailable = fileStat.isFile() && fileStat.size > 0;
+      actualSize = fileStat.size;
+      if (localAvailable && artifact.kind === "image") {
+        const inspection = inspectImageFile(await readFile(artifact.filePath));
+        detectedFormat = inspection?.format ?? null;
+        width = inspection?.width ?? null;
+        height = inspection?.height ?? null;
+      }
+    } catch {
+      localAvailable = false;
+    }
+  }
+  return {
+    kind: artifact.kind,
+    filePath: artifact.filePath,
+    mimeType: artifact.mimeType,
+    detectedFormat,
+    sizeBytes: actualSize,
+    width,
+    height,
+    localAvailable
+  };
 }
 
 async function getArtifactOrNull(artifactId: string | null) {
@@ -3088,11 +3159,42 @@ export async function finalizeJob(jobId: string) {
         stage,
         summary: (asString(parsed?.summary) ?? parseArtifactSummary(outputArtifact)) || "No summary recorded.",
         artifactPath: asString(parsed?.artifact_path) ?? outputArtifact?.uri ?? null,
-        generatedArtifacts: extractGeneratedArtifactRefs(parsed)
+        generatedArtifacts: extractGeneratedMediaArtifacts(parsed)
       };
     })
   );
   const workdir = job.workdir ?? path.resolve(process.env.JOB_DATA_DIR ?? "data/jobs", jobId);
+  const generatedMedia = stageSummaries.flatMap((stage) => stage.generatedArtifacts);
+  const mediaAssessment = assessRequiredMediaDeliverables({
+    deliverables: job.orchestrationPlan?.deliverables ?? [],
+    candidates: await Promise.all(
+      generatedMedia.map((artifact) => mediaDeliveryCandidate(workdir, artifact))
+    )
+  });
+  if (!mediaAssessment.ok) {
+    await setJobStatus(jobId, "waiting_for_human", {
+      reason: "required_media_delivery_missing",
+      issues: mediaAssessment.issues
+    });
+    await appendJobEvent(jobId, "final.delivery_blocked", {
+      reason: "required_media_delivery_missing",
+      issues: mediaAssessment.issues,
+      generatedMedia: generatedMedia.map((artifact) => ({
+        kind: artifact.kind,
+        filePath: artifact.filePath,
+        url: artifact.url,
+        mimeType: artifact.mimeType,
+        sizeBytes: artifact.sizeBytes,
+        downloadError: artifact.downloadError
+      }))
+    });
+    return {
+      status: "waiting_for_human" as const,
+      finalOutput: "",
+      finalArtifactId: null,
+      finalPath: null
+    };
+  }
   const finalPath = path.join(workdir, "final", "final-answer.md");
   const discussionSynthesis =
     job.routingMode === "master_slave_discussion"
@@ -3106,7 +3208,10 @@ export async function finalizeJob(jobId: string) {
     `  Status: ${stage.status}`,
     `  Summary: ${compactMultiline(summary, 500)}`,
     artifactPath ? `  Artifact: ${artifactPath}` : "",
-    ...generatedArtifacts.map((artifact, index) => `  Generated artifact ${index + 1}: ${artifact}`)
+    ...generatedArtifacts
+      .map((artifact) => artifact.filePath ?? artifact.url)
+      .filter((artifact): artifact is string => Boolean(artifact))
+      .map((artifact, index) => `  Generated artifact ${index + 1}: ${artifact}`)
   ]).filter(Boolean);
   const finalOutput = [
     `# ${jobId} Final Output`,
@@ -3139,6 +3244,7 @@ export async function finalizeJob(jobId: string) {
   const finalized = await setJobFinalOutput(jobId, finalOutput);
   if (!finalized) {
     return {
+      status: "cancelled" as const,
       finalOutput: "",
       finalArtifactId: artifact.id,
       finalPath
@@ -3202,6 +3308,7 @@ export async function finalizeJob(jobId: string) {
   });
 
   return {
+    status: "succeeded" as const,
     finalOutput,
     finalArtifactId: artifact.id,
     finalPath

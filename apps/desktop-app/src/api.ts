@@ -1770,6 +1770,19 @@ export async function getJobArtifacts(jobId: string) {
   return request<JobArtifactsResponse>(`/jobs/${jobId}/artifacts`);
 }
 
+export async function resolveArtifactDownloadRequest(file: JobArtifactFile) {
+  if (file.downloadUrl) {
+    const token = await getApiAuthToken();
+    return {
+      url: new URL(file.downloadUrl, API_BASE).toString(),
+      authorization: token ? `Bearer ${token}` : null
+    };
+  }
+  return file.externalUrl
+    ? { url: file.externalUrl, authorization: null }
+    : null;
+}
+
 export async function cancelJob(jobId: string) {
   return request<{
     ok: boolean;
