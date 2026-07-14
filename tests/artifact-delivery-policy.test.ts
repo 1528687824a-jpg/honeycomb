@@ -121,6 +121,58 @@ test("required image dimensions must be readable and exact", () => {
   assert.equal(wrongDimensions.issues[0]?.reason, "dimension_mismatch");
 });
 
+test("required video format and dimensions come from inspected file metadata", () => {
+  const passed = assessRequiredMediaDeliverables({
+    deliverables: [deliverable({ kind: "video", format: "mp4" })],
+    candidates: [{
+      kind: "video",
+      filePath: "/jobs/video.mp4",
+      mimeType: "application/octet-stream",
+      detectedFormat: "mp4",
+      sizeBytes: 100,
+      width: 1080,
+      height: 1920,
+      localAvailable: true
+    }]
+  });
+  assert.equal(passed.ok, true);
+
+  const misleadingExtension = assessRequiredMediaDeliverables({
+    deliverables: [deliverable({ kind: "video", format: "mp4" })],
+    candidates: [{
+      kind: "video",
+      filePath: "/jobs/video.mp4",
+      mimeType: "video/mp4",
+      detectedFormat: "mov",
+      sizeBytes: 100,
+      width: 1080,
+      height: 1920,
+      localAvailable: true
+    }]
+  });
+  assert.equal(misleadingExtension.issues[0]?.reason, "format_mismatch");
+
+  const unrecognizedFile = assessRequiredMediaDeliverables({
+    deliverables: [deliverable({
+      kind: "video",
+      format: null,
+      width: null,
+      height: null
+    })],
+    candidates: [{
+      kind: "video",
+      filePath: "/jobs/video.mp4",
+      mimeType: "video/mp4",
+      detectedFormat: null,
+      sizeBytes: 100,
+      width: null,
+      height: null,
+      localAvailable: true
+    }]
+  });
+  assert.equal(unrecognizedFile.issues[0]?.reason, "format_mismatch");
+});
+
 test("optional and non-media deliverables do not create a media completion gate", () => {
   const assessment = assessRequiredMediaDeliverables({
     deliverables: [

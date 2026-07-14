@@ -19,6 +19,7 @@ export type ModelCallRequestReference = {
   version: "honeycomb.model-request-reference.v1";
   requestId: string;
   providerRequestId: string | null;
+  providerTaskId: string | null;
   providerId: string;
   model: string | null;
   kind: ModelCallRequestKind;
@@ -57,6 +58,7 @@ export const modelCallRequestReferenceSchema = z.object({
   version: z.literal("honeycomb.model-request-reference.v1"),
   requestId: z.string().trim().min(1).max(200),
   providerRequestId: z.string().trim().min(1).max(500).nullable(),
+  providerTaskId: z.string().trim().min(1).max(500).nullable().optional().default(null),
   providerId: z.string().trim().min(1).max(200),
   model: z.string().trim().min(1).max(500).nullable(),
   kind: z.enum(MODEL_CALL_REQUEST_KINDS),

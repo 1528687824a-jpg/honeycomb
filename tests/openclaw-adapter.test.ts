@@ -15,6 +15,7 @@ import {
   extractProviderDirectChatText,
   persistMediaCandidates,
   ProviderDirectResponseError,
+  ProviderVideoPendingError,
   resolveOpenClawAgentRunner,
   runOpenClawAgent,
   selectProviderDirectKind,
@@ -211,31 +212,54 @@ test("selectProviderDirectKind routes specialist agents to media endpoints", () 
 test("provider-direct video requests use Volcengine content payloads", async () => {
   let capturedBody: Record<string, unknown> | null = null;
   const providerRequestIds: string[] = [];
+  const providerTaskIds: string[] = [];
+  const taskUpdates: Array<{ phase: string; status: string }> = [];
+  let baseUrl = "";
   const server = http.createServer(async (request, response) => {
-    assert.equal(request.method, "POST");
-    assert.equal(request.url, "/contents/generations/tasks");
-
-    const chunks: Buffer[] = [];
-    for await (const chunk of request) {
-      chunks.push(Buffer.from(chunk));
+    if (request.method === "POST") {
+      assert.equal(request.url, "/contents/generations/tasks");
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) {
+        chunks.push(Buffer.from(chunk));
+      }
+      capturedBody = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+      response.writeHead(200, {
+        "content-type": "application/json",
+        "x-request-id": "provider-http-request-1"
+      });
+      response.end(JSON.stringify({ id: "video-task-1", status: "queued" }));
+      return;
     }
-    capturedBody = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
-
-    response.writeHead(200, {
-      "content-type": "application/json",
-      "x-request-id": "provider-http-request-1"
-    });
-    response.end(JSON.stringify({ id: "video-task-1", status: "queued" }));
+    if (request.method === "GET" && request.url === "/contents/generations/tasks/video-task-1") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        id: "video-task-1",
+        status: "succeeded",
+        content: { video_url: `${baseUrl}/result.mp4` },
+        usage: { completion_tokens: 12, total_tokens: 12 }
+      }));
+      return;
+    }
+    if (request.method === "GET" && request.url === "/result.mp4") {
+      response.writeHead(200, { "content-type": "video/mp4" });
+      response.end(Buffer.from("test-mp4-result"));
+      return;
+    }
+    response.writeHead(404).end();
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 
   const previousMode = process.env.OPENCLAW_AGENT_MODE;
   const previousRunner = process.env.OPENCLAW_AGENT_RUNNER;
+  const previousPollInterval = process.env.OPENCLAW_VIDEO_POLL_INTERVAL_MS;
+  const outputDir = await mkdtemp(path.join(os.tmpdir(), "honeycomb-video-provider-"));
   try {
     const address = server.address();
     assert.ok(address && typeof address === "object");
+    baseUrl = `http://127.0.0.1:${address.port}`;
     process.env.OPENCLAW_AGENT_MODE = "real";
     process.env.OPENCLAW_AGENT_RUNNER = "provider-direct";
+    process.env.OPENCLAW_VIDEO_POLL_INTERVAL_MS = "10";
 
     const result = await runOpenClawAgent({
       agentId: "video-agent",
@@ -243,14 +267,21 @@ test("provider-direct video requests use Volcengine content payloads", async () 
       message: "Generate a five-second product teaser video.",
       provider: {
         providerId: "volcengine",
-        baseUrl: `http://127.0.0.1:${address.port}`,
+        baseUrl,
         model: "doubao-seedance-2-0",
         apiKey: "test-key",
         agentRole: "video"
       },
+      outputDir,
       timeoutSeconds: 5,
       onProviderRequestId: async (providerRequestId) => {
         providerRequestIds.push(providerRequestId);
+      },
+      onProviderTaskId: async (providerTaskId) => {
+        providerTaskIds.push(providerTaskId);
+      },
+      onProviderTaskUpdate: async (update) => {
+        taskUpdates.push({ phase: update.phase, status: update.status });
       }
     });
 
@@ -262,7 +293,19 @@ test("provider-direct video requests use Volcengine content payloads", async () 
       }
     ]);
     assert.equal("prompt" in (capturedBody ?? {}), false);
-    assert.deepEqual(providerRequestIds, ["provider-http-request-1", "video-task-1"]);
+    assert.deepEqual(providerRequestIds, ["provider-http-request-1"]);
+    assert.deepEqual(providerTaskIds, ["video-task-1"]);
+    assert.deepEqual(taskUpdates.map((update) => update.phase), [
+      "submitted",
+      "polling",
+      "downloading",
+      "completed"
+    ]);
+    assert.equal(result?.artifacts?.length, 1);
+    assert.equal(
+      await readFile(result?.artifacts?.[0]?.filePath ?? "", "utf8"),
+      "test-mp4-result"
+    );
   } finally {
     if (previousMode === undefined) {
       delete process.env.OPENCLAW_AGENT_MODE;
@@ -274,6 +317,169 @@ test("provider-direct video requests use Volcengine content payloads", async () 
     } else {
       process.env.OPENCLAW_AGENT_RUNNER = previousRunner;
     }
+    if (previousPollInterval === undefined) {
+      delete process.env.OPENCLAW_VIDEO_POLL_INTERVAL_MS;
+    } else {
+      process.env.OPENCLAW_VIDEO_POLL_INTERVAL_MS = previousPollInterval;
+    }
+    await rm(outputDir, { recursive: true, force: true });
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("provider-direct video polling resumes a persisted task without another POST", async () => {
+  let postCount = 0;
+  let getCount = 0;
+  let returnSuccess = false;
+  let baseUrl = "";
+  const server = http.createServer((request, response) => {
+    if (request.method === "POST" && request.url === "/contents/generations/tasks") {
+      postCount += 1;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ id: "video-task-resume", status: "queued" }));
+      return;
+    }
+    if (request.method === "GET" && request.url === "/contents/generations/tasks/video-task-resume") {
+      getCount += 1;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify(returnSuccess
+        ? {
+            id: "video-task-resume",
+            status: "succeeded",
+            content: { video_url: `${baseUrl}/resume.mp4` }
+          }
+        : { id: "video-task-resume", status: "running" }));
+      return;
+    }
+    if (request.method === "GET" && request.url === "/resume.mp4") {
+      response.writeHead(200, { "content-type": "video/mp4" });
+      response.end(Buffer.from("resumed-video"));
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+  const previousMode = process.env.OPENCLAW_AGENT_MODE;
+  const previousRunner = process.env.OPENCLAW_AGENT_RUNNER;
+  const previousPollInterval = process.env.OPENCLAW_VIDEO_POLL_INTERVAL_MS;
+  const previousPollWindow = process.env.OPENCLAW_VIDEO_POLL_WINDOW_MS;
+  const outputDir = await mkdtemp(path.join(os.tmpdir(), "honeycomb-video-resume-"));
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    baseUrl = `http://127.0.0.1:${address.port}`;
+    process.env.OPENCLAW_AGENT_MODE = "real";
+    process.env.OPENCLAW_AGENT_RUNNER = "provider-direct";
+    process.env.OPENCLAW_VIDEO_POLL_INTERVAL_MS = "10";
+    process.env.OPENCLAW_VIDEO_POLL_WINDOW_MS = "60";
+    const providerTaskIds: string[] = [];
+    const common = {
+      agentId: "video-agent",
+      sessionId: "job:video-resume/stage",
+      message: "Generate a short video.",
+      provider: {
+        providerId: "volcengine",
+        baseUrl,
+        model: "doubao-seedance-2-0",
+        apiKey: "test-key",
+        agentRole: "video"
+      },
+      outputDir,
+      timeoutSeconds: 5
+    } as const;
+
+    await assert.rejects(runOpenClawAgent({
+      ...common,
+      onProviderTaskId: async (providerTaskId) => {
+        providerTaskIds.push(providerTaskId);
+      }
+    }), (error: unknown) => {
+      assert.ok(error instanceof ProviderVideoPendingError);
+      assert.equal(error.taskId, "video-task-resume");
+      return true;
+    });
+    assert.equal(postCount, 1);
+    assert.deepEqual(providerTaskIds, ["video-task-resume"]);
+
+    returnSuccess = true;
+    const resumed = await runOpenClawAgent({
+      ...common,
+      resumeProviderTaskId: "video-task-resume"
+    });
+    assert.equal(postCount, 1, "resume must never submit a second provider task");
+    assert.ok(getCount > 0);
+    assert.equal(await readFile(resumed?.artifacts?.[0]?.filePath ?? "", "utf8"), "resumed-video");
+  } finally {
+    if (previousMode === undefined) delete process.env.OPENCLAW_AGENT_MODE;
+    else process.env.OPENCLAW_AGENT_MODE = previousMode;
+    if (previousRunner === undefined) delete process.env.OPENCLAW_AGENT_RUNNER;
+    else process.env.OPENCLAW_AGENT_RUNNER = previousRunner;
+    if (previousPollInterval === undefined) delete process.env.OPENCLAW_VIDEO_POLL_INTERVAL_MS;
+    else process.env.OPENCLAW_VIDEO_POLL_INTERVAL_MS = previousPollInterval;
+    if (previousPollWindow === undefined) delete process.env.OPENCLAW_VIDEO_POLL_WINDOW_MS;
+    else process.env.OPENCLAW_VIDEO_POLL_WINDOW_MS = previousPollWindow;
+    await rm(outputDir, { recursive: true, force: true });
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("provider-direct video cancellation requests remote task cancellation", async () => {
+  let deleteCount = 0;
+  const server = http.createServer((request, response) => {
+    if (request.method === "POST") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ id: "video-task-cancel", status: "queued" }));
+      return;
+    }
+    if (request.method === "DELETE" && request.url === "/contents/generations/tasks/video-task-cancel") {
+      deleteCount += 1;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end("{}");
+      return;
+    }
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ id: "video-task-cancel", status: "running" }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+  const previousMode = process.env.OPENCLAW_AGENT_MODE;
+  const previousRunner = process.env.OPENCLAW_AGENT_RUNNER;
+  const previousPollInterval = process.env.OPENCLAW_VIDEO_POLL_INTERVAL_MS;
+  const outputDir = await mkdtemp(path.join(os.tmpdir(), "honeycomb-video-cancel-"));
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    process.env.OPENCLAW_AGENT_MODE = "real";
+    process.env.OPENCLAW_AGENT_RUNNER = "provider-direct";
+    process.env.OPENCLAW_VIDEO_POLL_INTERVAL_MS = "1000";
+    const controller = new AbortController();
+    const pending = runOpenClawAgent({
+      agentId: "video-agent",
+      sessionId: "job:video-cancel/stage",
+      message: "Generate a video that will be cancelled.",
+      provider: {
+        providerId: "volcengine",
+        baseUrl: `http://127.0.0.1:${address.port}`,
+        model: "doubao-seedance-2-0",
+        apiKey: "test-key",
+        agentRole: "video"
+      },
+      outputDir,
+      timeoutSeconds: 5,
+      signal: controller.signal
+    });
+    setTimeout(() => controller.abort(), 25);
+    await assert.rejects(pending, { message: "job_cancelled" });
+    assert.equal(deleteCount, 1);
+  } finally {
+    if (previousMode === undefined) delete process.env.OPENCLAW_AGENT_MODE;
+    else process.env.OPENCLAW_AGENT_MODE = previousMode;
+    if (previousRunner === undefined) delete process.env.OPENCLAW_AGENT_RUNNER;
+    else process.env.OPENCLAW_AGENT_RUNNER = previousRunner;
+    if (previousPollInterval === undefined) delete process.env.OPENCLAW_VIDEO_POLL_INTERVAL_MS;
+    else process.env.OPENCLAW_VIDEO_POLL_INTERVAL_MS = previousPollInterval;
+    await rm(outputDir, { recursive: true, force: true });
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });

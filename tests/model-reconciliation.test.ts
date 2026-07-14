@@ -21,6 +21,7 @@ const reference: ModelCallRequestReference = {
   version: "honeycomb.model-request-reference.v1",
   requestId: "local-request-1",
   providerRequestId: "provider/request-42",
+  providerTaskId: null,
   providerId: "provider-1",
   model: "model-1",
   kind: "chat",
@@ -45,6 +46,9 @@ const policy: ProviderUnknownOutcomePolicy = {
 
 test("model reconciliation contracts reject malformed and ambiguous configuration", () => {
   assert.deepEqual(parseModelCallRequestReference(reference), reference);
+  const legacyReference = { ...reference } as Partial<ModelCallRequestReference>;
+  delete legacyReference.providerTaskId;
+  assert.deepEqual(parseModelCallRequestReference(legacyReference), reference);
   assert.equal(parseModelCallRequestReference({ ...reference, requestId: "" }), null);
 
   const state = {

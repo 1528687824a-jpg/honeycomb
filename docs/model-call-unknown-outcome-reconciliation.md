@@ -25,13 +25,18 @@ Before provider dispatch, `agent.model_calls.request_reference` stores:
 
 - a stable local route request ID, also sent as `idempotency-key`;
 - provider, model, request kind, runner, route, and attempt;
-- the provider request ID when it appears in response headers or a video task
-  response;
+- the provider request ID when it appears in response headers;
+- a separate provider task ID for asynchronous video generation;
 - the preparation time.
 
 `agent.model_calls.reconciliation` stores the latest provider/manual check,
 HTTP/provider status, reason, timestamps, and whether resuming is safe. Checks
 and resolutions also produce task timeline events.
+
+An asynchronous video call with a persisted task ID is not treated as an
+unknown outcome. Worker recovery resumes the provider's read-only status API
+automatically. It enters manual unknown-outcome handling only if task creation
+may have been accepted but no reliable task ID was persisted.
 
 ## Provider Configuration
 

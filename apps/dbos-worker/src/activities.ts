@@ -39,7 +39,8 @@ import {
   markModelCallRetryWaiting,
   markModelCallStarted,
   markModelCallSucceeded,
-  setModelCallRequestReference
+  setModelCallRequestReference,
+  updateModelCallProviderTaskProgress
 } from "../../../packages/db/src/model-calls";
 import {
   markModelCallSpendOutcomeUnknown,
@@ -89,6 +90,8 @@ import {
   type GeneratedMediaDeliveryCandidate
 } from "../../../packages/shared/src/artifact-delivery-policy";
 import { inspectImageFile } from "../../../packages/shared/src/image-file-inspection";
+import { inspectVideoFile } from "../../../packages/shared/src/video-file-inspection";
+import { resolveProviderVideoResumeReference } from "../../../packages/shared/src/provider-video-resume";
 import { preflightTaskExecution } from "../../../packages/runtime/src/task-preflight";
 import {
   redactAgentRuntime,
@@ -98,10 +101,12 @@ import {
 } from "./agent-runtime";
 import {
   getOpenClawAgentRunner,
+  ProviderVideoPendingError,
   resolveOpenClawAgentRunner,
   runOpenClawAgent,
   selectProviderDirectKind,
-  type OpenClawRunResult
+  type OpenClawRunResult,
+  type ProviderVideoTaskUpdate
 } from "./adapters/openclaw";
 import { loadClusterConfig, type LoadedClusterConfig } from "./config/cluster";
 import { deliverOutboundMessage } from "./egress/dispatcher";
@@ -328,6 +333,19 @@ async function runOpenClawAgentIdempotent(input: {
   const primaryRoute = routes[0];
   const redactedPrimaryRoute = redactAgentRuntime(primaryRoute);
   const redactedRouteCandidates = routes.map(redactAgentRuntime);
+  const currentRunner = isOpenClawRealMode()
+    ? resolveOpenClawAgentRunner({ runner: getOpenClawAgentRunner() })
+    : null;
+  const existingReference = existing?.requestReference ?? null;
+  const resumableVideoReference = resolveProviderVideoResumeReference({
+    modelCallStatus: existing?.status,
+    currentRunner,
+    reference: existingReference,
+    routes
+  });
+  const referencedRoute = resumableVideoReference
+    ? routes[resumableVideoReference.routeIndex]
+    : null;
 
   if (existing?.status === "succeeded") {
     await settleModelCallSpendByIdempotency({
@@ -365,7 +383,7 @@ async function runOpenClawAgentIdempotent(input: {
     return getModelCallResult(existing.responsePayload);
   }
 
-  if (existing?.status === "started") {
+  if (existing?.status === "started" && !resumableVideoReference) {
     const message = `model_call_started_outcome_unknown: ${idempotencyKey}`;
     const decision = unknownOutcomeDecision(message);
     await markModelCallFailedUnknownOutcome({
@@ -402,6 +420,29 @@ async function runOpenClawAgentIdempotent(input: {
       failure: decision
     });
     throw new ModelCallExecutionError(message, decision);
+  }
+
+  if (resumableVideoReference) {
+    await heartbeat(
+      input.jobId,
+      `openclaw.${input.actionType}.provider_video_resumed`,
+      resumableVideoReference.providerTaskId,
+      input.stageId ?? null
+    );
+    await appendJobEvent(input.jobId, "provider.video_task_resumed", {
+      stageId: input.stageId ?? null,
+      actionType: input.actionType,
+      agentId: referencedRoute!.honeycombAgentId,
+      providerId: resumableVideoReference.providerId,
+      model: resumableVideoReference.model,
+      routeIndex: resumableVideoReference.routeIndex,
+      routeAttemptNo: resumableVideoReference.routeAttemptNo,
+      taskId: resumableVideoReference.providerTaskId,
+      idempotencyKey
+    }, {
+      actor: referencedRoute!.honeycombAgentId,
+      stageId: input.stageId ?? null
+    });
   }
 
   if (existing?.status === "failed_unknown_outcome") {
@@ -462,7 +503,7 @@ async function runOpenClawAgentIdempotent(input: {
     throw new ModelCallExecutionError(message, decision);
   }
 
-  if (!recoveredRetryState) {
+  if (!recoveredRetryState && !resumableVideoReference) {
     await heartbeat(
       input.jobId,
       `openclaw.${input.actionType}.starting`,
@@ -494,8 +535,8 @@ async function runOpenClawAgentIdempotent(input: {
     );
   }
 
-  const storedRouteAttempts = existing?.status === "retry_waiting"
-    ? existing.responsePayload?.routeAttempts
+  const storedRouteAttempts = existing?.status === "retry_waiting" || resumableVideoReference
+    ? existing?.responsePayload?.routeAttempts
     : null;
   const routeAttempts: ReturnType<typeof routeAttemptPayload>[] = Array.isArray(storedRouteAttempts)
     ? storedRouteAttempts as ReturnType<typeof routeAttemptPayload>[]
@@ -503,21 +544,35 @@ async function runOpenClawAgentIdempotent(input: {
   const retryPolicy = resolveModelRetryPolicy();
   let lastError: string | null = null;
   let lastDecision: ModelCallFailureDecision | null = null;
-  let modelCallStarted = false;
-  let modelCallRecorded = existing?.status === "retry_waiting";
+  let modelCallStarted = Boolean(resumableVideoReference);
+  let modelCallRecorded = existing?.status === "retry_waiting" || Boolean(resumableVideoReference);
   let cancellationWatcher: Awaited<ReturnType<typeof watchJobCancellation>> | null = null;
   let userActionFailure: {
     decision: ModelCallFailureDecision;
     error: string;
     route: AgentRuntimeRoute;
   } | null = null;
+  const storedProviderTask = existing?.responsePayload?.providerTask;
+  const storedProviderTaskRecord = storedProviderTask && typeof storedProviderTask === "object"
+    ? storedProviderTask as Record<string, unknown>
+    : null;
+  const seenProviderTaskEventKeys = new Set<string>();
+  if (storedProviderTaskRecord) {
+    seenProviderTaskEventKeys.add(
+      `${asString(storedProviderTaskRecord.phase) ?? ""}:${asString(storedProviderTaskRecord.status) ?? ""}`
+    );
+  }
+  let latestProviderTaskUpdate: ProviderVideoTaskUpdate | null = null;
 
   try {
     cancellationWatcher = await watchJobCancellation({ jobId: input.jobId });
 
     let startRouteIndex = 0;
     let startRouteAttemptNo = 1;
-    if (recoveredRetryState) {
+    if (resumableVideoReference) {
+      startRouteIndex = resumableVideoReference.routeIndex;
+      startRouteAttemptNo = resumableVideoReference.routeAttemptNo;
+    } else if (recoveredRetryState) {
       if (recoveredRetryState.routeIndex >= routes.length) {
         throw new ModelCallExecutionError(
           "model_call_retry_route_missing",
@@ -554,12 +609,18 @@ async function runOpenClawAgentIdempotent(input: {
     for (let routeIndex = startRouteIndex; routeIndex < routes.length; routeIndex++) {
       const route = routes[routeIndex];
       const redactedRoute = redactAgentRuntime(route);
+      const resumingVideoRoute = Boolean(
+        resumableVideoReference && routeIndex === resumableVideoReference.routeIndex
+      );
       const maxRouteAttempts = recoveredRetryState && routeIndex === recoveredRetryState.routeIndex
         ? recoveredRetryState.maxAttempts
-        : retryPolicy.maxAttempts;
-      const firstRouteAttemptNo = recoveredRetryState && routeIndex === recoveredRetryState.routeIndex
-        ? startRouteAttemptNo
-        : 1;
+        : resumingVideoRoute
+          ? Math.max(retryPolicy.maxAttempts, startRouteAttemptNo)
+          : retryPolicy.maxAttempts;
+      const firstRouteAttemptNo =
+        (recoveredRetryState && routeIndex === recoveredRetryState.routeIndex) || resumingVideoRoute
+          ? startRouteAttemptNo
+          : 1;
       const readinessError = routeReadinessError(route);
       if (readinessError) {
         const decision = classifyModelCallError(Object.assign(new Error(readinessError), {
@@ -611,6 +672,11 @@ async function runOpenClawAgentIdempotent(input: {
 
       for (let routeAttemptNo = firstRouteAttemptNo; routeAttemptNo <= maxRouteAttempts; routeAttemptNo++) {
         const startedAt = Date.now();
+        const resumingProviderVideoTask = Boolean(
+          resumableVideoReference &&
+          routeIndex === resumableVideoReference.routeIndex &&
+          routeAttemptNo === resumableVideoReference.routeAttemptNo
+        );
         let slotLease: ModelCallSlotLease | null = null;
         let slotReleaseReason: string | null = null;
         let retryState: TaskExecutionRetryState | null = null;
@@ -727,37 +793,43 @@ async function runOpenClawAgentIdempotent(input: {
           let requestId: string | null = null;
           if (isOpenClawRealMode()) {
             const runner = resolveOpenClawAgentRunner({ runner: getOpenClawAgentRunner() });
-            requestId = sha256(`${idempotencyKey}:route:${routeIndex}`);
-            requestReference = {
-              version: "honeycomb.model-request-reference.v1",
-              requestId,
-              providerRequestId: null,
-              providerId: route.providerId!,
-              model: route.model,
-              kind: runner === "provider-direct"
-                ? selectProviderDirectKind({
-                    providerId: route.providerId,
-                    baseUrl: route.providerBaseUrl,
-                    model: route.model,
-                    apiKey: route.apiKey,
-                    agentRole: route.agentRole
-                  })
-                : "openclaw",
-              runner,
-              routeIndex,
-              routeAttemptNo,
-              preparedAt: nowIso()
-            };
-            const referencedCall = await setModelCallRequestReference({
-              idempotencyKey,
-              requestReference
-            });
-            if (!referencedCall) {
-              const latestCall = await getModelCallByKey(idempotencyKey);
-              if (latestCall?.status === "cancelled") {
-                throw new JobCancelledError();
+            if (resumingProviderVideoTask) {
+              requestId = resumableVideoReference!.requestId;
+              requestReference = resumableVideoReference;
+            } else {
+              requestId = sha256(`${idempotencyKey}:route:${routeIndex}`);
+              requestReference = {
+                version: "honeycomb.model-request-reference.v1",
+                requestId,
+                providerRequestId: null,
+                providerTaskId: null,
+                providerId: route.providerId!,
+                model: route.model,
+                kind: runner === "provider-direct"
+                  ? selectProviderDirectKind({
+                      providerId: route.providerId,
+                      baseUrl: route.providerBaseUrl,
+                      model: route.model,
+                      apiKey: route.apiKey,
+                      agentRole: route.agentRole
+                    })
+                  : "openclaw",
+                runner,
+                routeIndex,
+                routeAttemptNo,
+                preparedAt: nowIso()
+              };
+              const referencedCall = await setModelCallRequestReference({
+                idempotencyKey,
+                requestReference
+              });
+              if (!referencedCall) {
+                const latestCall = await getModelCallByKey(idempotencyKey);
+                if (latestCall?.status === "cancelled") {
+                  throw new JobCancelledError();
+                }
+                throw new Error("model_call_request_reference_not_persisted");
               }
-              throw new Error("model_call_request_reference_not_persisted");
             }
           }
 
@@ -782,6 +854,65 @@ async function runOpenClawAgentIdempotent(input: {
             }
           };
 
+          const recordProviderTaskId = async (providerTaskId: string) => {
+            if (!requestReference) {
+              throw new Error("model_call_provider_task_reference_missing");
+            }
+            requestReference = {
+              ...requestReference,
+              providerTaskId: providerTaskId.trim().slice(0, 500)
+            };
+            const referencedCall = await setModelCallRequestReference({
+              idempotencyKey,
+              requestReference
+            });
+            if (!referencedCall) {
+              const latestCall = await getModelCallByKey(idempotencyKey);
+              if (latestCall?.status === "cancelled") {
+                throw new JobCancelledError();
+              }
+              throw new Error("model_call_provider_task_id_not_persisted");
+            }
+          };
+
+          const recordProviderTaskUpdate = async (update: ProviderVideoTaskUpdate) => {
+            latestProviderTaskUpdate = update;
+            const updatedCall = await updateModelCallProviderTaskProgress({
+              idempotencyKey,
+              providerTask: update
+            });
+            if (!updatedCall) {
+              const latestCall = await getModelCallByKey(idempotencyKey);
+              if (latestCall?.status === "cancelled") {
+                throw new JobCancelledError();
+              }
+              throw new Error("model_call_provider_task_progress_not_persisted");
+            }
+            await heartbeat(
+              input.jobId,
+              `provider.video.${update.phase}`,
+              `${update.status}; poll ${update.pollCount}`,
+              input.stageId ?? null
+            );
+            const eventKey = `${update.phase}:${update.status}`;
+            if (!seenProviderTaskEventKeys.has(eventKey)) {
+              seenProviderTaskEventKeys.add(eventKey);
+              await appendJobEvent(input.jobId, "provider.video_task_status", {
+                stageId: input.stageId ?? null,
+                actionType: input.actionType,
+                agentId: route.honeycombAgentId,
+                providerId: route.providerId,
+                model: route.model,
+                routeIndex,
+                routeAttemptNo,
+                ...update
+              }, {
+                actor: route.honeycombAgentId,
+                stageId: input.stageId ?? null
+              });
+            }
+          };
+
           let result: OpenClawRunResult | null = null;
           let providerFailure: { message: string; decision: ModelCallFailureDecision } | null = null;
           try {
@@ -790,6 +921,12 @@ async function runOpenClawAgentIdempotent(input: {
               sessionId: input.sessionId,
               message: input.message,
               requestId,
+              resumeProviderTaskId: resumingProviderVideoTask
+                ? resumableVideoReference!.providerTaskId
+                : null,
+              resumeProviderTaskStatus: resumingProviderVideoTask
+                ? asString(storedProviderTaskRecord?.status)
+                : null,
               providerDirectMessage: input.providerDirectMessage,
               provider: {
                 providerId: route.providerId,
@@ -801,12 +938,18 @@ async function runOpenClawAgentIdempotent(input: {
               outputDir: input.outputDir,
               timeoutSeconds: input.timeoutSeconds,
               signal: cancellationWatcher.signal,
-              onProviderRequestId: recordProviderRequestId
+              onProviderRequestId: recordProviderRequestId,
+              onProviderTaskId: recordProviderTaskId,
+              onProviderTaskUpdate: recordProviderTaskUpdate
             });
           } catch (error) {
             const cancelled = isJobCancellationError(error) || toSafeErrorMessage(error) === "job_cancelled";
             if (cancelled) {
               throw new JobCancelledError();
+            }
+            if (error instanceof ProviderVideoPendingError) {
+              slotReleaseReason = error.message;
+              throw error;
             }
             providerFailure = {
               message: toSafeErrorMessage(error).slice(0, 500),
@@ -979,7 +1122,8 @@ async function runOpenClawAgentIdempotent(input: {
                 result,
                 route: redactedRoute,
                 routeAttempts,
-                routeSelection
+                routeSelection,
+                ...(latestProviderTaskUpdate ? { providerTask: latestProviderTaskUpdate } : {})
               }
             });
             const settledSpend = reservationKey
@@ -1133,6 +1277,7 @@ async function runOpenClawAgentIdempotent(input: {
 
     const failurePayload = {
       routeAttempts,
+      ...(latestProviderTaskUpdate ? { providerTask: latestProviderTaskUpdate } : {}),
       finalFailure: {
         error: safeError,
         ...error.decision
@@ -2784,7 +2929,7 @@ async function mediaDeliveryCandidate(
   let actualSize = artifact.sizeBytes;
   let width: number | null = null;
   let height: number | null = null;
-  let detectedFormat: string | null | undefined = artifact.kind === "image" ? null : undefined;
+  let detectedFormat: string | null = null;
   let checksumSha256: string | null = null;
   if (artifact.filePath && isInsideDirectory(workdir, artifact.filePath)) {
     try {
@@ -2799,6 +2944,10 @@ async function mediaDeliveryCandidate(
         height = inspection?.height ?? null;
         checksumSha256 = createHash("sha256").update(bytes).digest("hex");
       } else if (localAvailable) {
+        const inspection = await inspectVideoFile(artifact.filePath);
+        detectedFormat = inspection?.format ?? null;
+        width = inspection?.width ?? null;
+        height = inspection?.height ?? null;
         checksumSha256 = await sha256File(artifact.filePath);
       }
     } catch {

@@ -364,6 +364,23 @@ export async function setModelCallRequestReference(input: {
   return result.rows[0] ? toModelCallRecord(result.rows[0]) : null;
 }
 
+export async function updateModelCallProviderTaskProgress(input: {
+  idempotencyKey: string;
+  providerTask: Record<string, unknown>;
+}): Promise<ModelCallRecord | null> {
+  const result = await pool.query(
+    `update agent.model_calls
+     set response_payload = coalesce(response_payload, '{}'::jsonb)
+           || jsonb_build_object('providerTask', $2::jsonb),
+         updated_at = now()
+     where idempotency_key = $1
+       and status = 'started'
+     returning *`,
+    [input.idempotencyKey, JSON.stringify(input.providerTask)]
+  );
+  return result.rows[0] ? toModelCallRecord(result.rows[0]) : null;
+}
+
 export async function recordModelCallReconciliation(input: {
   jobId: string;
   modelCallId: string;

@@ -227,11 +227,33 @@ The media success gate and durable Windows desktop delivery loop are implemented
 - `npm run smoke:artifact-delivery` covers the PostgreSQL claim, mismatch,
   retry, finalization, and terminal-state concurrency invariants when the
   backend database is running.
+- Provider-direct video generation now follows the asynchronous provider
+  contract: one `POST` creates the task, authenticated `GET` requests poll the
+  persisted task ID, and only a terminal `succeeded` payload with a media URL
+  proceeds to result download.
+- HTTP request IDs and provider video task IDs are persisted separately. A
+  restarted DBOS step validates the original provider, model, route, and
+  attempt, then resumes that exact task without issuing another `POST` or
+  reserving spend twice.
+- Queued/running states, status-query retries, download retries, completion,
+  and cancellation are persisted in model-call progress and task timeline
+  events. Repeated identical polling states do not flood the timeline.
+- Status-read failures and polling-window expiry are continuation conditions,
+  not provider failover. DBOS releases the concurrency lease and resumes the
+  same task in its next infrastructure attempt.
+- Job cancellation sends the provider's task `DELETE` request on a best-effort
+  basis before completing local cancellation.
+- A video model call succeeds only after the provider's MP4 has been downloaded
+  into the job workspace. The final media gate reads ISO BMFF/MP4 track metadata
+  directly to verify the real container format and display dimensions, including
+  rotated tracks.
+- All 151 unit tests, TypeScript build/check, Compose configuration validation,
+  package-layout check, no-secrets check, and diff whitespace check pass.
 
-Stage 3 still needs asynchronous video polling and result download,
-workspace/custom target authorization, image conversion/resizing, and document
-artifact normalization. PostgreSQL and Docker Desktop remained stopped, so the
-new migration-backed smoke script has not yet been executed.
+Stage 3 still needs workspace/custom target authorization, image
+conversion/resizing, and document artifact normalization. PostgreSQL and Docker
+Desktop remained stopped, so the migration-backed smoke scripts have not yet
+been executed.
 
 ## Current Backend Status
 

@@ -17,6 +17,7 @@ request is safe. It does not infer retryability from every generic error.
 | Invalid request | No | Yes | Wait for human if no route succeeds |
 | Invalid model output | No | Yes | Fail if no route succeeds |
 | Timeout or disconnect after dispatch | No | No | Wait for human as unknown outcome |
+| Video task queued/running or status read timeout | Query the same task only | No | Keep running and recover by task ID |
 | User cancellation | No | No | Cancelled |
 
 The default policy is three attempts per route with exponential backoff,
@@ -54,6 +55,15 @@ own route policy finishes. DBOS must not repeat the whole model-calling step for
 those errors. Infrastructure failures that happen before a classified provider
 result remain eligible for DBOS step retry.
 
+Provider-direct video is a special long-running continuation, not a repeated
+model request. Once task creation returns a provider task ID, Honeycomb stores
+that ID separately from response-header request IDs. Poll-window expiry raises
+a DBOS-retryable continuation while the model call remains `started`; the next
+step attempt validates the recorded provider/model/route/attempt and calls only
+`GET /contents/generations/tasks/{id}`. It never sends another create request.
+The spend reservation is reused and the provider concurrency lease is released
+between DBOS attempts.
+
 ## Unknown Outcomes
 
 A request that may have reached the provider is never retried or failed over
@@ -80,6 +90,9 @@ HONEYCOMB_MODEL_RETRY_MAX_ATTEMPTS=3
 HONEYCOMB_MODEL_RETRY_BASE_DELAY_MS=1000
 HONEYCOMB_MODEL_RETRY_MAX_DELAY_MS=60000
 HONEYCOMB_MODEL_RETRY_JITTER_RATIO=0.2
+OPENCLAW_VIDEO_POLL_INTERVAL_MS=10000
+OPENCLAW_VIDEO_POLL_WINDOW_MS=
+OPENCLAW_VIDEO_STATUS_REQUEST_TIMEOUT_MS=30000
 ```
 
 The product bounds attempts to 1-5, delay to 100-300000 ms, and jitter to

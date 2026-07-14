@@ -206,6 +206,10 @@ test("DBOS retries infrastructure failures but not classified model failures", (
   assert.equal(shouldRetryModelCallStep(new ModelCallExecutionError("invalid key", decision)), false);
   assert.equal(shouldRetryModelCallStep(new Error("job_cancelled")), false);
   assert.equal(shouldRetryModelCallStep(new Error("postgres connection interrupted")), true);
+  assert.equal(shouldRetryModelCallStep(Object.assign(
+    new Error("provider video task remains queued"),
+    { name: "ProviderVideoPendingError", dbosRetryable: true }
+  )), true);
 });
 
 test("retry waits can be interrupted by job cancellation", async () => {

@@ -50,6 +50,27 @@ export type OpenClawTokenUsage = {
   totalTokens: number;
 };
 
+export type ProviderVideoTaskPhase =
+  | "submitted"
+  | "resumed"
+  | "polling"
+  | "query_retry"
+  | "downloading"
+  | "download_retry"
+  | "completed"
+  | "cancel_requested"
+  | "cancel_failed";
+
+export type ProviderVideoTaskUpdate = {
+  version: "honeycomb.provider-video-task.v1";
+  taskId: string;
+  status: string;
+  phase: ProviderVideoTaskPhase;
+  pollCount: number;
+  checkedAt: string;
+  error: string | null;
+};
+
 export type OpenClawProviderRuntime = {
   providerId: string | null;
   baseUrl: string | null;
@@ -95,6 +116,19 @@ export class OpenClawProcessError extends Error {
   ) {
     super(message);
     this.name = "OpenClawProcessError";
+  }
+}
+
+export class ProviderVideoPendingError extends Error {
+  readonly dbosRetryable = true;
+
+  constructor(
+    readonly taskId: string,
+    readonly providerStatus: string,
+    readonly pollCount: number
+  ) {
+    super(`provider_video_task_pending: ${taskId} (${providerStatus})`);
+    this.name = "ProviderVideoPendingError";
   }
 }
 
@@ -443,7 +477,8 @@ async function fetchProviderJson(input: {
   url: string;
   apiKey: string;
   requestId?: string | null;
-  body: Record<string, unknown>;
+  method?: "GET" | "POST" | "DELETE";
+  body?: Record<string, unknown>;
   timeoutMs: number;
   signal?: AbortSignal;
   onProviderRequestId?: (providerRequestId: string) => Promise<void>;
@@ -454,14 +489,17 @@ async function fetchProviderJson(input: {
     timeoutReason: "provider_direct_timeout"
   });
   try {
+    const method = input.method ?? "POST";
     const response = await fetch(input.url, {
-      method: "POST",
+      method,
       headers: {
         "content-type": "application/json",
         authorization: `Bearer ${input.apiKey}`,
-        ...(input.requestId ? { "idempotency-key": input.requestId.slice(0, 200) } : {})
+        ...(method === "POST" && input.requestId
+          ? { "idempotency-key": input.requestId.slice(0, 200) }
+          : {})
       },
-      body: JSON.stringify(input.body),
+      ...(input.body ? { body: JSON.stringify(input.body) } : {}),
       signal: abort.signal
     });
 
@@ -509,6 +547,144 @@ async function fetchProviderJson(input: {
     );
   } finally {
     abort.dispose();
+  }
+}
+
+const VIDEO_PENDING_STATUSES = new Set(["queued", "running", "processing", "pending"]);
+const VIDEO_FAILED_STATUSES = new Set(["failed", "cancelled", "canceled", "expired"]);
+
+function boundedMilliseconds(value: unknown, fallback: number, min: number, max: number) {
+  if (value === null || value === undefined || (typeof value === "string" && !value.trim())) {
+    return fallback;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed)
+    ? Math.max(min, Math.min(max, Math.floor(parsed)))
+    : fallback;
+}
+
+function videoPollIntervalMs() {
+  return boundedMilliseconds(process.env.OPENCLAW_VIDEO_POLL_INTERVAL_MS, 10_000, 10, 60_000);
+}
+
+function videoPollWindowMs(timeoutSeconds: number) {
+  return boundedMilliseconds(
+    process.env.OPENCLAW_VIDEO_POLL_WINDOW_MS,
+    providerTimeoutMs(timeoutSeconds),
+    25,
+    3_600_000
+  );
+}
+
+function videoStatusRequestTimeoutMs() {
+  return boundedMilliseconds(
+    process.env.OPENCLAW_VIDEO_STATUS_REQUEST_TIMEOUT_MS,
+    30_000,
+    250,
+    120_000
+  );
+}
+
+function normalizedVideoTaskStatus(raw: unknown, fallback = "queued") {
+  const status =
+    stringValue(recordValue(raw)?.status) ??
+    stringValue(recordValue(recordValue(raw)?.data)?.status) ??
+    fallback;
+  return status.trim().toLowerCase().replace(/[\s-]+/g, "_").slice(0, 100);
+}
+
+function providerVideoTaskId(raw: unknown) {
+  const value = recordValue(raw);
+  const data = recordValue(value?.data);
+  return (
+    stringValue(value?.id) ??
+    stringValue(value?.task_id) ??
+    stringValue(value?.taskId) ??
+    stringValue(data?.id) ??
+    stringValue(data?.task_id) ??
+    stringValue(data?.taskId)
+  );
+}
+
+function providerVideoTaskError(raw: unknown) {
+  const value = recordValue(raw);
+  const error = recordValue(value?.error) ?? recordValue(recordValue(value?.data)?.error);
+  return (
+    stringValue(error?.message) ??
+    stringValue(value?.message) ??
+    stringValue(error?.code) ??
+    "provider_video_task_failed"
+  ).slice(0, 300);
+}
+
+function providerVideoCandidates(raw: unknown) {
+  const value = recordValue(raw);
+  const nested = recordValue(value?.content) ??
+    recordValue(recordValue(value?.data)?.content) ??
+    recordValue(value?.result) ??
+    recordValue(value?.output);
+  return collectMediaCandidates(nested ?? raw, "video")
+    .filter((candidate) => Boolean(candidate.url || candidate.b64Json));
+}
+
+function waitForProviderPoll(delayMs: number, signal?: AbortSignal) {
+  throwIfJobCancelled(signal);
+  return new Promise<void>((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new JobCancelledError());
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, Math.max(0, Math.floor(delayMs)));
+    timer.unref?.();
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) onAbort();
+  });
+}
+
+async function notifyProviderVideoTask(
+  callback: ((update: ProviderVideoTaskUpdate) => Promise<void>) | undefined,
+  input: Omit<ProviderVideoTaskUpdate, "version" | "checkedAt">
+) {
+  if (!callback) return;
+  await callback({
+    version: "honeycomb.provider-video-task.v1",
+    ...input,
+    checkedAt: new Date().toISOString()
+  });
+}
+
+async function cancelProviderVideoTask(input: {
+  baseUrl: string;
+  apiKey: string;
+  taskId: string;
+  pollCount: number;
+  onProviderTaskUpdate?: (update: ProviderVideoTaskUpdate) => Promise<void>;
+}) {
+  await notifyProviderVideoTask(input.onProviderTaskUpdate, {
+    taskId: input.taskId,
+    status: "cancelling",
+    phase: "cancel_requested",
+    pollCount: input.pollCount,
+    error: null
+  }).catch(() => undefined);
+  try {
+    await fetchProviderJson({
+      url: `${videoTasksUrl(input.baseUrl)}/${encodeURIComponent(input.taskId)}`,
+      apiKey: input.apiKey,
+      method: "DELETE",
+      timeoutMs: 10_000
+    });
+  } catch (error) {
+    await notifyProviderVideoTask(input.onProviderTaskUpdate, {
+      taskId: input.taskId,
+      status: "cancel_unknown",
+      phase: "cancel_failed",
+      pollCount: input.pollCount,
+      error: error instanceof Error ? error.message.slice(0, 300) : "provider_video_cancel_failed"
+    }).catch(() => undefined);
   }
 }
 
@@ -1050,67 +1226,212 @@ async function runProviderDirectVideo(input: {
   sessionId: string;
   message: string;
   requestId?: string | null;
+  resumeProviderTaskId?: string | null;
+  resumeProviderTaskStatus?: string | null;
   outputDir?: string | null;
   provider: OpenClawProviderRuntime & { baseUrl: string; model: string; apiKey: string };
   timeoutSeconds: number;
   signal?: AbortSignal;
   onProviderRequestId?: (providerRequestId: string) => Promise<void>;
+  onProviderTaskId?: (providerTaskId: string) => Promise<void>;
+  onProviderTaskUpdate?: (update: ProviderVideoTaskUpdate) => Promise<void>;
 }): Promise<OpenClawRunResult> {
-  const raw = await fetchProviderJson({
-    url: videoTasksUrl(input.provider.baseUrl),
-    apiKey: input.provider.apiKey,
-    requestId: input.requestId,
-    timeoutMs: providerTimeoutMs(input.timeoutSeconds),
-    signal: input.signal,
-    onProviderRequestId: input.onProviderRequestId,
-    body: {
-      model: input.provider.model,
-      content: [
-        {
-          type: "text",
-          text: input.message
+  let taskId = input.resumeProviderTaskId?.trim().slice(0, 500) || null;
+  let raw: unknown = null;
+  let status = taskId
+    ? input.resumeProviderTaskStatus?.trim().toLowerCase().slice(0, 100) || "queued"
+    : "submitting";
+  let pollCount = 0;
+  const deadline = Date.now() + videoPollWindowMs(input.timeoutSeconds);
+
+  try {
+    if (!taskId) {
+      raw = await fetchProviderJson({
+        url: videoTasksUrl(input.provider.baseUrl),
+        apiKey: input.provider.apiKey,
+        requestId: input.requestId,
+        timeoutMs: providerTimeoutMs(input.timeoutSeconds),
+        signal: input.signal,
+        onProviderRequestId: input.onProviderRequestId,
+        body: {
+          model: input.provider.model,
+          content: [
+            {
+              type: "text",
+              text: input.message
+            }
+          ]
         }
-      ]
+      });
+      taskId = providerVideoTaskId(raw)?.slice(0, 500) ?? null;
+      if (!taskId) {
+        throw new OpenClawOutputError(
+          "Provider direct video generation did not return a task ID.",
+          JSON.stringify(raw).slice(0, 2000)
+        );
+      }
+      await notifyProviderRequestId(input.onProviderTaskId, taskId);
+      status = normalizedVideoTaskStatus(raw);
+      await notifyProviderVideoTask(input.onProviderTaskUpdate, {
+        taskId,
+        status,
+        phase: "submitted",
+        pollCount,
+        error: null
+      });
+    } else {
+      await notifyProviderVideoTask(input.onProviderTaskUpdate, {
+        taskId,
+        status,
+        phase: "resumed",
+        pollCount,
+        error: null
+      });
     }
-  });
-  const artifacts = await persistMediaCandidates({
-    candidates: collectMediaCandidates(raw, "video"),
-    outputDir: input.outputDir,
-    sessionId: input.sessionId,
-    signal: input.signal
-  });
-  const taskId =
-    stringValue(recordValue(raw)?.id) ??
-    stringValue(recordValue(raw)?.task_id) ??
-    stringValue(recordValue(raw)?.taskId);
-  if (taskId) {
-    await notifyProviderRequestId(input.onProviderRequestId, taskId.slice(0, 500));
+
+    for (;;) {
+      throwIfJobCancelled(input.signal);
+      status = normalizedVideoTaskStatus(raw, status);
+
+      if (status === "succeeded") {
+        const candidates = providerVideoCandidates(raw);
+        if (candidates.length > 0) {
+          await notifyProviderVideoTask(input.onProviderTaskUpdate, {
+            taskId,
+            status,
+            phase: "downloading",
+            pollCount,
+            error: null
+          });
+          const artifacts = await persistMediaCandidates({
+            candidates,
+            outputDir: input.outputDir,
+            sessionId: input.sessionId,
+            signal: input.signal
+          });
+          const locallyAvailable = artifacts.some((artifact) =>
+            Boolean(artifact.filePath && !artifact.downloadError)
+          );
+          if (locallyAvailable) {
+            await notifyProviderVideoTask(input.onProviderTaskUpdate, {
+              taskId,
+              status,
+              phase: "completed",
+              pollCount,
+              error: null
+            });
+            return {
+              mode: "provider-direct",
+              sessionId: toOpenClawSessionId(input.sessionId),
+              text: [
+                "Provider direct video generation completed.",
+                `Task ID: ${taskId}`,
+                providerDirectText({ kind: "video", raw, artifacts })
+              ].filter(Boolean).join("\n"),
+              textSource: "provider:video",
+              usage: extractOpenClawUsage(raw),
+              artifacts,
+              raw
+            };
+          }
+          const downloadError = artifacts
+            .map((artifact) => artifact.downloadError)
+            .find(Boolean) ?? "provider_video_result_not_saved";
+          status = "download_pending";
+          await notifyProviderVideoTask(input.onProviderTaskUpdate, {
+            taskId,
+            status,
+            phase: "download_retry",
+            pollCount,
+            error: downloadError.slice(0, 300)
+          });
+        } else {
+          status = "result_pending";
+          await notifyProviderVideoTask(input.onProviderTaskUpdate, {
+            taskId,
+            status,
+            phase: "polling",
+            pollCount,
+            error: "provider_video_url_missing"
+          });
+        }
+      } else if (VIDEO_FAILED_STATUSES.has(status)) {
+        throw new ProviderDirectResponseError(
+          `provider_video_task_${status}: ${providerVideoTaskError(raw)}`,
+          null,
+          "output_invalid",
+          status,
+          null,
+          null,
+          taskId
+        );
+      }
+
+      if (Date.now() >= deadline) {
+        throw new ProviderVideoPendingError(taskId, status, pollCount);
+      }
+      await waitForProviderPoll(Math.min(videoPollIntervalMs(), deadline - Date.now()), input.signal);
+
+      try {
+        raw = await fetchProviderJson({
+          url: `${videoTasksUrl(input.provider.baseUrl)}/${encodeURIComponent(taskId)}`,
+          apiKey: input.provider.apiKey,
+          method: "GET",
+          timeoutMs: videoStatusRequestTimeoutMs(),
+          signal: input.signal
+        });
+        pollCount += 1;
+        status = normalizedVideoTaskStatus(raw, "unknown");
+        await notifyProviderVideoTask(input.onProviderTaskUpdate, {
+          taskId,
+          status,
+          phase: "polling",
+          pollCount,
+          error: null
+        });
+      } catch (error) {
+        if (isJobCancellationError(error) || input.signal?.aborted) {
+          throw new JobCancelledError();
+        }
+        pollCount += 1;
+        status = VIDEO_PENDING_STATUSES.has(status) ? status : "query_pending";
+        await notifyProviderVideoTask(input.onProviderTaskUpdate, {
+          taskId,
+          status,
+          phase: "query_retry",
+          pollCount,
+          error: error instanceof Error ? error.message.slice(0, 300) : "provider_video_query_failed"
+        });
+      }
+    }
+  } catch (error) {
+    if (taskId && (isJobCancellationError(error) || input.signal?.aborted)) {
+      await cancelProviderVideoTask({
+        baseUrl: input.provider.baseUrl,
+        apiKey: input.provider.apiKey,
+        taskId,
+        pollCount,
+        onProviderTaskUpdate: input.onProviderTaskUpdate
+      });
+      throw new JobCancelledError();
+    }
+    throw error;
   }
-  const text = [
-    "Provider direct video generation task submitted.",
-    taskId ? `Task ID: ${taskId}` : "",
-    providerDirectText({ kind: "video", raw, artifacts })
-  ].filter(Boolean).join("\n");
-  return {
-    mode: "provider-direct",
-    sessionId: toOpenClawSessionId(input.sessionId),
-    text,
-    textSource: "provider:video",
-    usage: extractOpenClawUsage(raw),
-    artifacts,
-    raw
-  };
 }
 
 async function runProviderDirectAgent(input: {
   sessionId: string;
   message: string;
   requestId?: string | null;
+  resumeProviderTaskId?: string | null;
+  resumeProviderTaskStatus?: string | null;
   provider?: OpenClawProviderRuntime | null;
   outputDir?: string | null;
   timeoutSeconds: number;
   signal?: AbortSignal;
   onProviderRequestId?: (providerRequestId: string) => Promise<void>;
+  onProviderTaskId?: (providerTaskId: string) => Promise<void>;
+  onProviderTaskUpdate?: (update: ProviderVideoTaskUpdate) => Promise<void>;
 }) {
   const provider = sanitizeProviderForDirectRun(input.provider);
   const kind = selectProviderDirectKind(provider);
@@ -1237,12 +1558,16 @@ export async function runOpenClawAgent(input: {
   sessionId: string;
   message: string;
   requestId?: string | null;
+  resumeProviderTaskId?: string | null;
+  resumeProviderTaskStatus?: string | null;
   providerDirectMessage?: string | null;
   provider?: OpenClawProviderRuntime | null;
   outputDir?: string | null;
   timeoutSeconds?: number;
   signal?: AbortSignal;
   onProviderRequestId?: (providerRequestId: string) => Promise<void>;
+  onProviderTaskId?: (providerTaskId: string) => Promise<void>;
+  onProviderTaskUpdate?: (update: ProviderVideoTaskUpdate) => Promise<void>;
 }): Promise<OpenClawRunResult | null> {
   throwIfJobCancelled(input.signal);
   if (!openClawRealMode()) {
@@ -1255,11 +1580,15 @@ export async function runOpenClawAgent(input: {
       sessionId: input.sessionId,
       message: input.providerDirectMessage ?? input.message,
       requestId: input.requestId,
+      resumeProviderTaskId: input.resumeProviderTaskId,
+      resumeProviderTaskStatus: input.resumeProviderTaskStatus,
       provider: input.provider,
       outputDir: input.outputDir,
       timeoutSeconds,
       signal: input.signal,
-      onProviderRequestId: input.onProviderRequestId
+      onProviderRequestId: input.onProviderRequestId,
+      onProviderTaskId: input.onProviderTaskId,
+      onProviderTaskUpdate: input.onProviderTaskUpdate
     });
   }
 

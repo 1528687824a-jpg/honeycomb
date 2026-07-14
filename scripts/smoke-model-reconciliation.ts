@@ -65,6 +65,7 @@ async function main() {
     version: "honeycomb.model-request-reference.v1",
     requestId: `${idempotencyKey}:route:0`,
     providerRequestId: "provider-request-smoke",
+    providerTaskId: null,
     providerId: "provider-smoke",
     model: "image-model-smoke",
     kind: "image",

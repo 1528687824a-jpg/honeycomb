@@ -892,6 +892,22 @@ OPENCLAW_CLI=/home/administrator/.npm-global/bin/openclaw
 OPENCLAW_AGENT_TIMEOUT_SECONDS=600
 ```
 
+Provider-direct video generation is asynchronous. Honeycomb stores the returned
+task ID, polls the same task, and downloads its MP4 before the model stage can
+complete. Optional tuning values are:
+
+```text
+OPENCLAW_VIDEO_POLL_INTERVAL_MS=10000
+# Blank means the same duration as OPENCLAW_AGENT_TIMEOUT_SECONDS.
+OPENCLAW_VIDEO_POLL_WINDOW_MS=
+OPENCLAW_VIDEO_STATUS_REQUEST_TIMEOUT_MS=30000
+OPENCLAW_MEDIA_DOWNLOAD_TIMEOUT_MS=60000
+OPENCLAW_MEDIA_DOWNLOAD_MAX_BYTES=262144000
+```
+
+After a task ID exists, timeout or worker restart never creates a replacement
+video task. Recovery only queries the original task ID.
+
 ## Session Archive And Cleanup
 
 Completed jobs are archived and retained before heavy intermediate cleanup:

@@ -39,7 +39,7 @@ function normalizedFormat(value: string | null | undefined) {
 }
 
 function candidateFormat(candidate: GeneratedMediaDeliveryCandidate) {
-  if (candidate.kind === "image" && candidate.detectedFormat !== undefined) {
+  if (candidate.detectedFormat !== undefined) {
     return normalizedFormat(candidate.detectedFormat);
   }
   const normalizedMimeType = candidate.mimeType?.split(";")[0]?.trim().toLowerCase() ?? "";
@@ -72,9 +72,10 @@ export function assessRequiredMediaDeliverables(input: {
         candidate.localAvailable &&
         !usedCandidates.has(candidateIndex)
       );
-    const formatMatches = availableOfKind.filter(({ candidate }) =>
-      requiredFormat === null || candidateFormat(candidate) === requiredFormat
-    );
+    const formatMatches = availableOfKind.filter(({ candidate }) => {
+      const actualFormat = candidateFormat(candidate);
+      return actualFormat !== null && (requiredFormat === null || actualFormat === requiredFormat);
+    });
     const dimensionsRequired = deliverable.width !== null || deliverable.height !== null;
     const measurable = formatMatches.filter(({ candidate }) =>
       !dimensionsRequired || (candidate.width !== null && candidate.height !== null)
