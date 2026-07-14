@@ -24,6 +24,31 @@ Current order:
 5. A Windows runtime and installer path that does not require ordinary users to operate Docker Desktop.
 6. Release hardening; only then resume macOS.
 
+### Windows Stage 1 Progress (2026-07-14)
+
+The structured conversation-to-task contract is implemented:
+
+- Projects, conversations, drafts, attachments, and messages have PostgreSQL
+  records plus snapshot/CRUD APIs and desktop synchronization.
+- Jobs persist a user-facing title, the validated orchestration plan, its
+  source, the originating conversation, and the originating user message.
+- The panel agent returns a validated JSON plan and may select only enabled
+  registered child agents. Every accepted task plan uses `test-agent` as its
+  quality gate.
+- The desktop no longer performs a second task/routing decision. The worker
+  executes the persisted plan and uses keyword inference only for legacy jobs.
+- Source-message locking and a unique index make repeated task submission
+  idempotent.
+- `npm run check`, the desktop production build, and all 90 unit tests pass.
+- Runtime database acceptance is pending because PostgreSQL and Docker Desktop
+  were intentionally left stopped. `npm run smoke:conversation-persistence`
+  now covers migration-backed snapshot persistence, job/message links, and
+  duplicate-dispatch protection when the development backend is running.
+
+The next active backend stage is execution control: bounded concurrency,
+queue visibility, cancellation propagation, typed retry/backoff, provider
+preflight, and spend limits.
+
 ## Current Backend Status
 
 ### Done Enough For Product Integration

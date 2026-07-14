@@ -17,6 +17,9 @@ const statements = [
   `alter table agent.jobs add column if not exists workdir text`,
   `alter table agent.jobs add column if not exists session_id text`,
   `alter table agent.jobs add column if not exists ingress_origin text not null default 'http'`,
+  `alter table agent.jobs add column if not exists display_title text`,
+  `alter table agent.jobs add column if not exists orchestration_plan jsonb not null default '{}'`,
+  `alter table agent.jobs add column if not exists orchestration_source text`,
   `alter table agent.jobs add column if not exists routing_mode text not null default 'supervisor_pipeline'`,
   `alter table agent.jobs add column if not exists max_model_calls int not null default 20`,
   `alter table agent.jobs add column if not exists classic_final_gate_enabled boolean not null default false`,
@@ -31,6 +34,9 @@ const statements = [
   `alter table agent.jobs add column if not exists heartbeat_source text`,
   `alter table agent.jobs add column if not exists heartbeat_note text`,
   `alter table agent.jobs add column if not exists stalled_at timestamptz`,
+  `update agent.jobs
+   set display_title = left(regexp_replace(raw_prompt, '\\s+', ' ', 'g'), 120)
+   where display_title is null or btrim(display_title) = ''`,
   `update agent.jobs set session_id = id where session_id is null`,
   `update agent.jobs
    set heartbeat_at = coalesce(heartbeat_at, updated_at, created_at),
@@ -323,6 +329,52 @@ const statements = [
     updated_at timestamptz not null default now(),
     last_used_at timestamptz
   )`,
+  `create table if not exists agent.conversation_projects (
+    id text primary key,
+    name text not null,
+    workspace_path text,
+    pinned boolean not null default false,
+    archived_at timestamptz,
+    deleted_at timestamptz,
+    metadata jsonb not null default '{}',
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now()
+  )`,
+  `create table if not exists agent.conversations (
+    id text primary key,
+    project_id text not null references agent.conversation_projects(id) on delete cascade,
+    title text not null,
+    draft text not null default '',
+    attachments jsonb not null default '[]',
+    pinned boolean not null default false,
+    unread boolean not null default false,
+    archived_at timestamptz,
+    deleted_at timestamptz,
+    metadata jsonb not null default '{}',
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now()
+  )`,
+  `create table if not exists agent.conversation_messages (
+    id text primary key,
+    conversation_id text not null references agent.conversations(id) on delete cascade,
+    role text not null,
+    body text not null,
+    status text not null default 'sent',
+    job_id text references agent.jobs(id) on delete set null,
+    attachments jsonb not null default '[]',
+    metadata jsonb not null default '{}',
+    deleted_at timestamptz,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now()
+  )`,
+  `alter table agent.jobs
+    add column if not exists conversation_id text references agent.conversations(id) on delete set null`,
+  `alter table agent.jobs
+    add column if not exists source_message_id text references agent.conversation_messages(id) on delete set null`,
+  `alter table agent.conversation_projects add column if not exists deleted_at timestamptz`,
+  `alter table agent.conversations add column if not exists deleted_at timestamptz`,
+  `alter table agent.conversations add column if not exists attachments jsonb not null default '[]'`,
+  `alter table agent.conversation_messages add column if not exists deleted_at timestamptz`,
   `create table if not exists agent.scheduled_tasks (
     id text primary key,
     title text not null,
@@ -434,6 +486,24 @@ const statements = [
     on agent.agent_mcp_policies(mcp_server_id, enabled, updated_at desc)`,
   `create index if not exists registered_workspaces_enabled_idx
     on agent.registered_workspaces(enabled, updated_at desc)`,
+  `create index if not exists conversation_projects_active_updated_idx
+    on agent.conversation_projects(archived_at, pinned desc, updated_at desc)
+    where deleted_at is null`,
+  `create index if not exists conversations_project_updated_idx
+    on agent.conversations(project_id, archived_at, pinned desc, updated_at desc)
+    where deleted_at is null`,
+  `create index if not exists conversation_messages_conversation_created_idx
+    on agent.conversation_messages(conversation_id, created_at, id)
+    where deleted_at is null`,
+  `create index if not exists conversation_messages_job_idx
+    on agent.conversation_messages(job_id)
+    where job_id is not null`,
+  `create index if not exists jobs_conversation_created_idx
+    on agent.jobs(conversation_id, created_at desc)
+    where conversation_id is not null`,
+  `create unique index if not exists jobs_source_message_id_idx
+    on agent.jobs(source_message_id)
+    where source_message_id is not null`,
   `create index if not exists scheduled_tasks_enabled_next_run_idx
     on agent.scheduled_tasks(enabled, next_run_at)
     where next_run_at is not null`,

@@ -40,6 +40,7 @@
     "smoke:job-heartbeats": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-with-smoke-lock.ps1 dev-stack scripts/smoke-job-heartbeats.ps1",
     "smoke:web-search-browser": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-with-smoke-lock.ps1 dev-stack scripts/smoke-web-search-browser.ps1",
     "smoke:list-jobs": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-with-smoke-lock.ps1 dev-stack scripts/smoke-list-jobs.ps1",
+    "smoke:conversation-persistence": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-with-smoke-lock.ps1 dev-stack scripts/smoke-conversation-persistence.ps1",
     "smoke:experience-memory": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-with-smoke-lock.ps1 dev-stack scripts/smoke-experience-memory.ps1",
     "smoke:repair-cancelled-archives": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-with-smoke-lock.ps1 dev-stack scripts/smoke-repair-cancelled-archives.ps1",
     "smoke:openclaw-real": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-with-smoke-lock.ps1 dev-stack scripts/smoke-openclaw-real.ps1",

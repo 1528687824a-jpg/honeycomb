@@ -46,6 +46,144 @@ export const DEFAULT_ROUTING_MODE: RoutingMode = "supervisor_pipeline";
 export const DEFAULT_MAX_MODEL_CALLS = 20;
 export const DEFAULT_DISCUSSION_ROUNDS = 2;
 
+export const PANEL_MESSAGE_INTENTS = ["chat", "task"] as const;
+export type PanelMessageIntent = (typeof PANEL_MESSAGE_INTENTS)[number];
+
+export const ORCHESTRATION_PLAN_SOURCES = [
+  "panel-agent",
+  "deterministic-fallback",
+  "legacy-fallback"
+] as const;
+export type OrchestrationPlanSource = (typeof ORCHESTRATION_PLAN_SOURCES)[number];
+
+export const TASK_DELIVERABLE_KINDS = ["text", "image", "video", "code", "file", "other"] as const;
+export type TaskDeliverableKind = (typeof TASK_DELIVERABLE_KINDS)[number];
+
+export const TASK_DELIVERY_TARGETS = ["conversation", "desktop", "workspace", "custom"] as const;
+export type TaskDeliveryTarget = (typeof TASK_DELIVERY_TARGETS)[number];
+
+export type TaskOrchestrationStage = {
+  stageType: string;
+  agentId: string;
+  name: string;
+  objective: string;
+  acceptanceCriteria: string[];
+  maxRetries: number;
+};
+
+export type TaskSkippedAgent = {
+  agentId: string;
+  reason: string;
+};
+
+export type TaskDeliverable = {
+  kind: TaskDeliverableKind;
+  description: string;
+  required: boolean;
+  format: string | null;
+  width: number | null;
+  height: number | null;
+  target: TaskDeliveryTarget;
+  targetPath: string | null;
+};
+
+export type TaskQualityGate = {
+  enabled: boolean;
+  agentId: string | null;
+  acceptanceCriteria: string[];
+};
+
+export type TaskOrchestrationPlan = {
+  version: "honeycomb.task-orchestration.v1";
+  title: string;
+  summary: string;
+  routingMode: RoutingMode;
+  selectedAgents: string[];
+  skippedAgents: TaskSkippedAgent[];
+  stages: TaskOrchestrationStage[];
+  qualityGate: TaskQualityGate;
+  deliverables: TaskDeliverable[];
+  maxModelCalls: number;
+  blockingQuestions: string[];
+  rationale: string;
+  source: OrchestrationPlanSource;
+  generatedAt: string;
+};
+
+export type PanelOrchestrationResult = {
+  intent: PanelMessageIntent;
+  reply: string;
+  plan: TaskOrchestrationPlan | null;
+  source: OrchestrationPlanSource;
+  degraded: boolean;
+  warnings: string[];
+};
+
+export const CONVERSATION_MESSAGE_ROLES = ["user", "assistant", "system"] as const;
+export type ConversationMessageRole = (typeof CONVERSATION_MESSAGE_ROLES)[number];
+
+export const CONVERSATION_MESSAGE_STATUSES = [
+  "pending",
+  "sent",
+  "failed",
+  "offline"
+] as const;
+export type ConversationMessageStatus = (typeof CONVERSATION_MESSAGE_STATUSES)[number];
+
+export type ConversationAttachment = {
+  id: string;
+  name: string;
+  path: string;
+  addedAt: string;
+};
+
+export type ConversationProjectRecord = {
+  id: string;
+  name: string;
+  workspacePath: string | null;
+  pinned: boolean;
+  archivedAt: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ConversationRecord = {
+  id: string;
+  projectId: string;
+  title: string;
+  draft: string;
+  attachments: ConversationAttachment[];
+  pinned: boolean;
+  unread: boolean;
+  archivedAt: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ConversationMessageRecord = {
+  id: string;
+  conversationId: string;
+  role: ConversationMessageRole;
+  body: string;
+  status: ConversationMessageStatus;
+  jobId: string | null;
+  attachments: ConversationAttachment[];
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ConversationProjectWithThreads = ConversationProjectRecord & {
+  conversations: Array<ConversationRecord & { messages: ConversationMessageRecord[] }>;
+};
+
+export type ConversationWorkspaceSnapshot = {
+  projects: ConversationProjectWithThreads[];
+  generatedAt: string;
+};
+
 export const INGRESS_ORIGINS = ["http", "feishu", "slack", "cli"] as const;
 
 export type IngressOrigin = (typeof INGRESS_ORIGINS)[number];
@@ -53,8 +191,13 @@ export type IngressOrigin = (typeof INGRESS_ORIGINS)[number];
 export type JobRecord = {
   id: string;
   sessionId: string;
+  conversationId: string | null;
+  sourceMessageId: string | null;
   ingressOrigin: IngressOrigin;
   rawPrompt: string;
+  displayTitle: string;
+  orchestrationPlan: TaskOrchestrationPlan | null;
+  orchestrationSource: OrchestrationPlanSource | null;
   routingMode: RoutingMode;
   maxModelCalls: number;
   classicFinalGateEnabled: boolean;
@@ -334,6 +477,10 @@ export type ExperienceRecord = {
 
 export type CreateJobInput = {
   rawPrompt: string;
+  displayTitle?: string;
+  orchestrationPlan?: TaskOrchestrationPlan;
+  conversationId?: string;
+  sourceMessageId?: string;
   workdir?: string;
   ingressOrigin?: IngressOrigin;
   routingMode?: RoutingMode;

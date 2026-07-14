@@ -54,7 +54,7 @@ import {
   DEFAULT_MAX_MODEL_CALLS,
   DEFAULT_ROUTING_MODE
 } from "../../../packages/shared/src/types";
-import { userTaskPrompt } from "../../../packages/shared/src/job-title";
+import { inferFallbackStages } from "../../../packages/shared/src/orchestration-contract";
 import {
   redactAgentRuntime,
   resolveAgentRuntimeCandidates,
@@ -667,96 +667,7 @@ export async function prepareJobWorkspace(jobId: string) {
 }
 
 export function inferStagesFromPrompt(rawPrompt: string): StageDefinition[] {
-  const prompt = userTaskPrompt(rawPrompt);
-  const needsResearch =
-    /研究|调研|资料|网上|搜索|查询|查一下|最新|现状|竞品|事实|数据|来源|research|search|latest|current/i.test(
-      prompt
-    );
-  const needsWriting =
-    /文案|文章|脚本|故事|标题|邮件|公告|推文|方案|报告|总结|润色|写|copy|story|script|write|writing|content/i.test(
-      prompt
-    );
-  const needsImage =
-    /图片|图像|插画|海报|封面|配图|视觉|生成图|image|picture|illustration|poster|visual/i.test(
-      prompt
-    );
-  const needsVideo =
-    /视频|短片|动画|分镜|镜头|运镜|动态画面|生成视频|video|movie|clip|animation|animate|storyboard/i.test(
-      prompt
-    );
-
-  const shouldRunResearch =
-    needsResearch ||
-    /\u7814\u7a76|\u8c03\u7814|\u8d44\u6599|\u7f51\u4e0a|\u641c\u7d22|\u67e5\u8be2|\u6700\u65b0|\u73b0\u72b6|\u7ade\u54c1|\u4e8b\u5b9e|\u6570\u636e|\u6765\u6e90/i.test(prompt);
-  const shouldRunWriting =
-    needsWriting ||
-    /\u6587\u6848|\u6587\u7ae0|\u811a\u672c|\u6545\u4e8b|\u6807\u9898|\u90ae\u4ef6|\u516c\u544a|\u63a8\u6587|\u65b9\u6848|\u62a5\u544a|\u603b\u7ed3|\u6da6\u8272|\u5199/i.test(prompt);
-  const shouldRunImage =
-    needsImage ||
-    /\u56fe\u7247|\u56fe\u50cf|\u63d2\u753b|\u6d77\u62a5|\u5c01\u9762|\u914d\u56fe|\u89c6\u89c9|\u5ba3\u4f20\u56fe|\u751f\u6210\u56fe/i.test(prompt);
-  const shouldRunVideo =
-    needsVideo ||
-    /\u89c6\u9891|\u77ed\u7247|\u52a8\u753b|\u5206\u955c|\u955c\u5934|\u8fd0\u955c|\u52a8\u6001\u753b\u9762|\u751f\u6210\u89c6\u9891/i.test(prompt);
-
-  const stages: StageDefinition[] = [];
-
-  if (shouldRunResearch) {
-    stages.push({
-      stageType: "research",
-      agentId: "research-agent",
-      name: "Collect task context",
-      acceptanceCriteria: [
-        "Gather relevant sources or context when external facts are needed",
-        "Summarize facts, assumptions, risks, and useful constraints",
-        "Provide a handoff that the next child agent or main-agent can consume"
-      ],
-      maxRetries: 3
-    });
-  }
-
-  if (shouldRunWriting || (!shouldRunResearch && !shouldRunImage && !shouldRunVideo)) {
-    stages.push({
-      stageType: "write",
-      agentId: "writer-agent",
-      name: "Write requested content",
-      acceptanceCriteria: [
-        "Use the user request and upstream artifact as input",
-        "Produce the requested copy, article, script, story, summary, or written content",
-        "Include a handoff note if a later stage needs to use this text"
-      ],
-      maxRetries: 3
-    });
-  }
-
-  if (shouldRunImage) {
-    stages.push({
-      stageType: "image",
-      agentId: "image-agent",
-      name: "Generate requested image output",
-      acceptanceCriteria: [
-        "Use the user request and upstream artifact as input",
-        "Produce an image brief, image prompt, or image artifact path according to the task",
-        "Preserve important constraints, style, subject, and usage requirements"
-      ],
-      maxRetries: 3
-    });
-  }
-
-  if (shouldRunVideo) {
-    stages.push({
-      stageType: "video",
-      agentId: "video-agent",
-      name: "Generate requested video output",
-      acceptanceCriteria: [
-        "Use the user request and upstream artifact as input",
-        "Produce a video brief, storyboard, video prompt, or video artifact path according to the task",
-        "Preserve important constraints, style, subject, motion, timing, and usage requirements"
-      ],
-      maxRetries: 3
-    });
-  }
-
-  return stages;
+  return inferFallbackStages(rawPrompt);
 }
 
 export function mergePromptStagesWithClusterStages(
@@ -992,14 +903,47 @@ export async function createPipelinePlan(input: {
   const planPath = path.join(workdir, "plan", "pipeline-plan.json");
   const rawPrompt = job.rawPrompt;
   const clusterConfig = await loadClusterConfig();
-  const promptStages = inferStagesFromPrompt(rawPrompt);
+  const persistedPlan = job.orchestrationPlan;
+  const promptStages: StageDefinition[] = persistedPlan?.stages.length
+    ? persistedPlan.stages.map((stage) => ({
+        stageType: stage.stageType,
+        agentId: stage.agentId,
+        name: stage.name,
+        acceptanceCriteria: stage.acceptanceCriteria,
+        maxRetries: stage.maxRetries
+      }))
+    : inferStagesFromPrompt(rawPrompt);
   const mergedStages = mergePromptStagesWithClusterStages(clusterConfig?.stages, promptStages);
   const stages = executablePipelineStages(mergedStages);
-  const orchestrationDecision = describeStageSelection({
+  const inferredDecision = describeStageSelection({
     promptStages,
     selectedStages: mergedStages,
     clusterStages: clusterConfig?.stages
   });
+  const orchestrationDecision = persistedPlan
+    ? {
+        policy: [
+          "Execute the validated orchestration plan persisted when the job was created.",
+          "Cluster config may enrich matching stage settings but cannot add unselected production agents.",
+          "Use the persisted quality gate and deliverable requirements as the completion contract."
+        ],
+        selectedStages: inferredDecision.selectedStages.map((stage) => ({
+          ...stage,
+          reason:
+            persistedPlan.stages.find(
+              (candidate) =>
+                candidate.agentId === stage.agentId && candidate.stageType === stage.stageType
+            )?.objective ?? stage.reason,
+          source: "panel-plan" as const
+        })),
+        skippedClusterStages: persistedPlan.skippedAgents.map((entry) => ({
+          stageType: "skipped",
+          agentId: entry.agentId,
+          name: entry.agentId,
+          reason: entry.reason
+        }))
+      }
+    : inferredDecision;
   const selectedAgents = orchestrationDecision.selectedStages.map((stage) => stage.agentId);
   const skippedClusterAgents = orchestrationDecision.skippedClusterStages.map((stage) => stage.agentId);
   const skippedClusterStageCount = orchestrationDecision.skippedClusterStages.length;
@@ -1009,6 +953,11 @@ export async function createPipelinePlan(input: {
     sourceArtifactId: input.userRequestArtifactId,
     planningAgentId: "main-agent",
     routingMode: job.routingMode ?? clusterConfig?.defaultRoutingMode ?? DEFAULT_ROUTING_MODE,
+    orchestrationSource: persistedPlan?.source ?? "legacy-fallback",
+    displayTitle: job.displayTitle,
+    qualityGate: persistedPlan?.qualityGate ?? null,
+    deliverables: persistedPlan?.deliverables ?? [],
+    blockingQuestions: persistedPlan?.blockingQuestions ?? [],
     orchestrationDecision,
     clusterConfig: clusterConfig
       ? {
@@ -1035,6 +984,8 @@ export async function createPipelinePlan(input: {
   await appendJobEvent(input.jobId, "main.pipeline_planned", {
     planPath,
     routingMode: plan.routingMode,
+    orchestrationSource: plan.orchestrationSource,
+    displayTitle: plan.displayTitle,
     stageCount: plan.stages.length,
     clusterId: clusterConfig?.clusterId ?? null,
     filteredStageCount: mergedStages.length - stages.length,
@@ -1042,6 +993,8 @@ export async function createPipelinePlan(input: {
     skippedClusterStageCount,
     selectedAgents,
     skippedClusterAgents,
+    qualityGate: plan.qualityGate,
+    deliverables: plan.deliverables,
     stageSelectionReasons: orchestrationDecision.selectedStages.map((stage) => ({
       agentId: stage.agentId,
       stageType: stage.stageType,

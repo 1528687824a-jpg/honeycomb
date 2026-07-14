@@ -44,6 +44,8 @@ import {
   approveToolApproval,
   cancelJob,
   createJob,
+  deleteConversationProject as deleteBackendConversationProject,
+  deleteConversationRecord as deleteBackendConversation,
   getHealth,
   getJob,
   getJobArtifacts,
@@ -60,6 +62,7 @@ import {
   runRuntimeRepairAction,
   saveAgentModelConfig as saveBackendAgentModelConfig,
   sendPanelChat,
+  syncConversationWorkspace,
   type PanelOutputStyle,
   type ExperienceListResponse,
   type ExperienceRecord,
@@ -74,12 +77,14 @@ import {
   type RuntimeRepairActionId,
   type RoutingMode,
   type ModelProviderRecord,
-  type ToolApprovalRecord
+  type ToolApprovalRecord,
+  type ConversationWorkspaceSnapshot
 } from "./api";
 import {
   inferJobDisplayTitle,
   userTaskPrompt
 } from "../../../packages/shared/src/job-title";
+import type { TaskOrchestrationPlan } from "../../../packages/shared/src/types";
 import { FirstRunPanel, type FirstRunFlow } from "./firstRun";
 import { HoneycombLogo } from "./brand";
 import {
@@ -382,9 +387,9 @@ function isNewForDesktopNotification(timestamp: string | null | undefined, monit
   return Number.isFinite(parsed) && parsed >= monitorStartedAt - 5000;
 }
 
-function jobDisplayTitle(job: Pick<JobRecord, "id" | "rawPrompt"> | null | undefined) {
+function jobDisplayTitle(job: Pick<JobRecord, "id" | "rawPrompt" | "displayTitle"> | null | undefined) {
   if (!job) return "";
-  return inferJobDisplayTitle(job.rawPrompt || "") || job.id;
+  return job.displayTitle?.trim() || inferJobDisplayTitle(job.rawPrompt || "") || job.id;
 }
 
 function jobDesktopNotification(
@@ -1195,23 +1200,6 @@ function compactJson(value: Record<string, unknown>) {
   return JSON.stringify(value, null, 2);
 }
 
-function inferRoutingModeForTask(task: string): RoutingMode {
-  const value = task.toLowerCase();
-  if (/review|test|verify|qa|quality|audit|check|审核|审查|检查|测试|质检|验收|合规/.test(value)) {
-    return "supervisor_pipeline";
-  }
-  if (/compare|debate|strategy|option|tradeoff|ambiguous|brainstorm|讨论|比较|取舍|策略|方案|头脑风暴|不确定|模糊/.test(value)) {
-    return "master_slave_discussion";
-  }
-  if (/step|pipeline|process|workflow|draft.*then|先.*再|流程|步骤|分阶段|依次|先.*后/.test(value)) {
-    return "pipeline";
-  }
-  if (/delegate|parallel|many|multiple|research.*write|分工|并行|多个|多项|调研.*写/.test(value)) {
-    return "classic_master_slave";
-  }
-  return "supervisor_pipeline";
-}
-
 function localDateTimeToIso(value: string) {
   if (!value) return undefined;
   const date = new Date(value);
@@ -1838,6 +1826,87 @@ function saveConversationWorkspaceState(state: ConversationWorkspaceState) {
   window.localStorage.setItem("honeycomb.conversationWorkspace", JSON.stringify(state));
 }
 
+function conversationWorkspaceSnapshotFromState(
+  state: ConversationWorkspaceState
+): ConversationWorkspaceSnapshot {
+  const generatedAt = new Date().toISOString();
+  return {
+    generatedAt,
+    projects: state.projects.map((project) => ({
+      id: project.id,
+      name: project.name,
+      workspacePath: project.path.trim() || null,
+      pinned: project.pinned ?? false,
+      archivedAt: project.archivedAt ?? null,
+      metadata: {},
+      createdAt: project.updatedAt || generatedAt,
+      updatedAt: project.updatedAt || generatedAt,
+      conversations: project.threads.map((thread) => ({
+        id: thread.id,
+        projectId: project.id,
+        title: thread.title,
+        draft: thread.draft,
+        attachments: thread.attachments ?? [],
+        pinned: thread.pinned ?? false,
+        unread: thread.unread ?? false,
+        archivedAt: thread.archivedAt ?? null,
+        metadata: {},
+        createdAt: thread.updatedAt || generatedAt,
+        updatedAt: thread.updatedAt || generatedAt,
+        messages: (thread.messages ?? []).map((message) => ({
+          id: message.id,
+          conversationId: thread.id,
+          role: message.role,
+          body: message.body,
+          status: message.status ?? "sent",
+          jobId: message.jobId ?? null,
+          attachments: message.attachments ?? [],
+          metadata: {},
+          createdAt: message.createdAt,
+          updatedAt: message.createdAt
+        }))
+      }))
+    }))
+  };
+}
+
+function conversationWorkspaceStateFromSnapshot(
+  snapshot: ConversationWorkspaceSnapshot,
+  current: ConversationWorkspaceState
+) {
+  return normalizeConversationWorkspaceState({
+    projects: snapshot.projects.map((project) => ({
+      id: project.id,
+      name: project.name,
+      path: project.workspacePath ?? "",
+      pinned: project.pinned || undefined,
+      archivedAt: project.archivedAt ?? undefined,
+      updatedAt: project.updatedAt,
+      threads: project.conversations.map((conversation) => ({
+        id: conversation.id,
+        title: conversation.title,
+        draft: conversation.draft,
+        attachments: conversation.attachments,
+        pinned: conversation.pinned || undefined,
+        unread: conversation.unread || undefined,
+        archivedAt: conversation.archivedAt ?? undefined,
+        updatedAt: conversation.updatedAt,
+        messages: conversation.messages.map((message) => ({
+          id: message.id,
+          role: message.role,
+          body: message.body,
+          status: message.status === "pending" ? "sent" : message.status,
+          jobId: message.jobId ?? undefined,
+          attachments: message.attachments,
+          createdAt: message.createdAt
+        }))
+      }))
+    })),
+    activeProjectId: current.activeProjectId,
+    activeThreadId: current.activeThreadId
+  });
+}
+
 function activeConversationDraft(state: ConversationWorkspaceState) {
   const activeProject = state.projects.find((project) => project.id === state.activeProjectId) ?? state.projects[0];
   if (!activeProject) return "";
@@ -1966,41 +2035,6 @@ function conversationMessagesForPanelChat(messages: ConversationMessage[]) {
       body: message.body
     }))
     .filter((message) => message.body.trim());
-}
-
-function looksLikeTaskRequest(value: string) {
-  const trimmed = value.trim();
-  if (!trimmed) return false;
-  const englishTaskPattern = /\b(build|create|fix|repair|implement|generate|write|run|test|deploy|debug|analy[sz]e|summari[sz]e|refactor|update|delete|configure|connect|design|make)\b/i;
-  const chineseTaskPattern = /(\u5e2e\u6211|\u7ed9\u6211|\u4e3a\u6211|\u9700\u8981\u4f60|\u521b\u5efa|\u65b0\u5efa|\u751f\u6210|\u8bbe\u8ba1|\u5199(\u4e00\u4e2a|\u4e00\u4efd|\u4e00\u4e0b|\u4e2a|\u7bc7|\u6bb5|\u811a\u672c|\u4ee3\u7801|\u6587\u6848)|\u5b9e\u73b0|\u4fee\u6539|\u4fee\u590d|\u6392\u67e5|\u68c0\u67e5|\u8fd0\u884c|\u6d4b\u8bd5|\u90e8\u7f72|\u6574\u7406|\u5206\u6790|\u603b\u7ed3|\u63d0\u53d6|\u8f6c\u6362|\u4f18\u5316|\u63a5\u5165|\u914d\u7f6e|\u5220\u9664|\u66f4\u65b0|\u505a(\u4e00\u4e2a|\u4e00\u4e0b|\u4e2a)|\u4efb\u52a1)/;
-  return englishTaskPattern.test(trimmed) || chineseTaskPattern.test(trimmed);
-}
-
-const DEFAULT_EXECUTABLE_STAGE_COUNT = 4;
-const DEFAULT_DISCUSSION_ROUNDS_FOR_BUDGET = 2;
-const MIN_CONVERSATION_TASK_MODEL_CALLS = 20;
-
-function minimumModelCallsForRoutingMode(mode: RoutingMode) {
-  switch (mode) {
-    case "pipeline":
-      return DEFAULT_EXECUTABLE_STAGE_COUNT + 1;
-    case "supervisor_pipeline":
-      return DEFAULT_EXECUTABLE_STAGE_COUNT * 2;
-    case "classic_master_slave":
-      return DEFAULT_EXECUTABLE_STAGE_COUNT;
-    case "master_slave_discussion":
-      return DEFAULT_EXECUTABLE_STAGE_COUNT * DEFAULT_DISCUSSION_ROUNDS_FOR_BUDGET + 2;
-    default:
-      return MIN_CONVERSATION_TASK_MODEL_CALLS;
-  }
-}
-
-function effectiveConversationTaskModelCalls(mode: RoutingMode, requested: number) {
-  return Math.max(
-    requested,
-    minimumModelCallsForRoutingMode(mode),
-    MIN_CONVERSATION_TASK_MODEL_CALLS
-  );
 }
 
 function providerVerificationErrorDetail(parsed: Record<string, unknown>) {
@@ -2176,7 +2210,7 @@ function App() {
   const runningJobCount = jobs.filter((job) => ["queued", "planning", "running", "testing", "fixing"].includes(job.status)).length;
   const latestJob = jobs[0] ?? null;
   const tourStep = copy.tourSteps[tourIndex];
-  const inferredRoutingMode = useMemo(() => inferRoutingModeForTask(prompt), [prompt]);
+  const displayedRoutingMode = latestJob?.routingMode ?? "supervisor_pipeline";
   const [firstRunPreview, setFirstRunPreview] = useState<FirstRunPreview | null>(loadFirstRunPreview);
   const [backendPanelSupervisorName, setBackendPanelSupervisorName] = useState("");
   const configuredProvider = configuredProviderLabel(firstRunPreview, language);
@@ -2760,11 +2794,17 @@ function App() {
     }
     setBusy(true);
     let nextConversationState = stateWithUserMessage;
-    const taskIntent = looksLikeTaskRequest(trimmedPrompt);
     const messageWithAttachments = buildPromptWithConversationAttachments(trimmedPrompt, outgoingAttachments, language);
     try {
+      await syncConversationWorkspace(conversationWorkspaceSnapshotFromState(stateWithUserMessage));
+      let panelTaskPlan: TaskOrchestrationPlan | null = null;
+      let panelIntent: "chat" | "task" = "chat";
       try {
-        await ensurePanelAgentBackendConfig();
+        try {
+          await ensurePanelAgentBackendConfig();
+        } catch {
+          // The backend panel endpoint reports a structured degraded plan when model setup is unavailable.
+        }
         const panelResponse = await sendPanelChat({
           message: messageWithAttachments,
           messages: conversationMessagesForPanelChat([...(activeThread.messages ?? []), userMessage]),
@@ -2772,9 +2812,12 @@ function App() {
           projectPath: activeWorkspacePath,
           projectName: activeProject.name,
           latestJobId: latestJob?.id,
+          maxModelCalls,
           outputStyle: panelOutputStyle,
           language
         });
+        panelIntent = panelResponse.intent;
+        panelTaskPlan = panelResponse.taskPlan;
         const assistantMessage = createConversationMessage("assistant", panelResponse.message, { status: "sent" });
         nextConversationState = appendMessagesToConversationState(
           nextConversationState,
@@ -2784,41 +2827,33 @@ function App() {
         );
       } catch (chatError) {
         const chatErrorMessage = friendlyApiErrorMessage(chatError, language);
-        if (!taskIntent) {
-          const failedChatMessage = createConversationMessage(
-            "system",
-            language === "zh"
-              ? `\u9762\u677f Agent \u6682\u65f6\u65e0\u6cd5\u76f4\u63a5\u56de\u590d\uff1a${chatErrorMessage}`
-              : `The panel agent cannot reply yet: ${chatErrorMessage}`,
-            { status: "failed" }
-          );
-          appendMessagesToConversationState(
-            nextConversationState,
-            activeProject.id,
-            activeThread.id,
-            [failedChatMessage]
-          );
-          setError(chatErrorMessage);
-          return;
-        }
-        const fallbackMessage = createConversationMessage(
+        const failedChatMessage = createConversationMessage(
           "system",
           language === "zh"
-            ? `\u9762\u677f Agent \u6682\u65f6\u65e0\u6cd5\u76f4\u63a5\u56de\u590d\uff1a${chatErrorMessage}\u3002\u5c06\u7ee7\u7eed\u628a\u8fd9\u6761\u5185\u5bb9\u4f5c\u4e3a\u4efb\u52a1\u53d1\u9001\u7ed9 Agent \u56e2\u961f\u3002`
-            : `The panel agent cannot reply yet: ${chatErrorMessage}. I will still send this as a task to the agent team.`,
+            ? `面板 Agent 暂时无法处理这条消息：${chatErrorMessage}`
+            : `The panel agent could not process this message: ${chatErrorMessage}`,
           { status: "failed" }
         );
-        nextConversationState = appendMessagesToConversationState(
+        appendMessagesToConversationState(
           nextConversationState,
           activeProject.id,
           activeThread.id,
-          [fallbackMessage]
+          [failedChatMessage]
         );
+        setError(chatErrorMessage);
+        return;
       }
 
-      if (!taskIntent) {
+      if (panelIntent !== "task") {
         setError(null);
         return;
+      }
+      if (!panelTaskPlan) {
+        throw new Error(
+          language === "zh"
+            ? "面板 Agent 没有返回可执行的任务计划。"
+            : "The panel agent did not return an executable task plan."
+        );
       }
 
       const effectiveWorkbenchConfig = {
@@ -2831,11 +2866,15 @@ function App() {
         panelSupervisorDisplayName,
         language
       );
-      const effectiveMaxModelCalls = effectiveConversationTaskModelCalls(inferredRoutingMode, maxModelCalls);
+      const effectiveMaxModelCalls = panelTaskPlan.maxModelCalls;
       const created = await createJob({
         prompt: promptWithWorkbenchContext,
+        displayTitle: panelTaskPlan.title,
+        orchestrationPlan: panelTaskPlan,
+        conversationId: activeThread.id,
+        sourceMessageId: userMessage.id,
         workdir: activeWorkspacePath.trim() || undefined,
-        routingMode: inferredRoutingMode,
+        routingMode: panelTaskPlan.routingMode,
         maxModelCalls: effectiveMaxModelCalls
       });
       const budgetNote =
@@ -2844,7 +2883,7 @@ function App() {
             ? `\n\u5df2\u81ea\u52a8\u628a\u6a21\u578b\u8c03\u7528\u9884\u7b97\u4ece ${maxModelCalls} \u63d0\u9ad8\u5230 ${effectiveMaxModelCalls}\uff0c\u907f\u514d\u8be5\u6a21\u5f0f\u5728\u4e2d\u9014\u56e0\u9884\u7b97\u4e0d\u8db3\u505c\u4f4f\u3002`
             : `\nAutomatically raised the model-call budget from ${maxModelCalls} to ${effectiveMaxModelCalls} so this routing mode does not pause mid-run.`
           : "";
-      const createdJobTitle = inferJobDisplayTitle(messageWithAttachments);
+      const createdJobTitle = panelTaskPlan.title;
       const assistantMessage = createConversationMessage(
         "assistant",
         language === "zh"
@@ -3423,7 +3462,17 @@ function App() {
     });
   }
 
-  function deleteConversationPermanently(projectId: string, threadId: string) {
+  async function deleteConversationPermanently(projectId: string, threadId: string) {
+    if (apiState !== "online") {
+      setError(language === "zh" ? "后端离线，暂时不能永久删除对话。" : "The backend is offline, so this conversation cannot be permanently deleted yet.");
+      return false;
+    }
+    try {
+      await deleteBackendConversation(threadId);
+    } catch (caught) {
+      setError(friendlyApiErrorMessage(caught, language));
+      return false;
+    }
     const nextState = persistConversationState({
       ...conversationState,
       projects: conversationState.projects.map((project) =>
@@ -3433,6 +3482,7 @@ function App() {
       )
     });
     syncPromptFromConversationState(nextState);
+    return true;
   }
 
   function toggleProjectPinned(projectId: string) {
@@ -3507,23 +3557,35 @@ function App() {
     setConversationContextMenu(null);
   }
 
-  function deleteProjectPermanently(projectId: string) {
+  async function deleteProjectPermanently(projectId: string) {
+    if (apiState !== "online") {
+      setError(language === "zh" ? "后端离线，暂时不能永久删除项目。" : "The backend is offline, so this project cannot be permanently deleted yet.");
+      return false;
+    }
+    try {
+      await deleteBackendConversationProject(projectId);
+    } catch (caught) {
+      setError(friendlyApiErrorMessage(caught, language));
+      return false;
+    }
     const nextState = persistConversationState({
       ...conversationState,
       projects: conversationState.projects.filter((project) => project.id !== projectId)
     });
     syncPromptFromConversationState(nextState);
     setOpenProjectMenuId("");
+    return true;
   }
 
-  function confirmArchiveDelete() {
+  async function confirmArchiveDelete() {
     if (!archiveDeleteTarget) return;
+    let deleted = false;
     if (archiveDeleteTarget.kind === "conversation") {
-      deleteConversationPermanently(archiveDeleteTarget.projectId, archiveDeleteTarget.threadId);
+      deleted = await deleteConversationPermanently(archiveDeleteTarget.projectId, archiveDeleteTarget.threadId);
     } else {
-      deleteProjectPermanently(archiveDeleteTarget.projectId);
+      deleted = await deleteProjectPermanently(archiveDeleteTarget.projectId);
     }
-    setArchiveDeleteTarget(null);
+    if (deleted) setArchiveDeleteTarget(null);
   }
 
   async function openProjectInExplorer(projectId: string) {
@@ -3656,6 +3718,30 @@ function App() {
       window.clearInterval(interval);
     };
   }, []);
+
+  useEffect(() => {
+    if (apiState !== "online") return;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      const submittedState = conversationState;
+      void syncConversationWorkspace(conversationWorkspaceSnapshotFromState(submittedState))
+        .then((result) => {
+          if (cancelled) return;
+          const nextState = conversationWorkspaceStateFromSnapshot(result.snapshot, submittedState);
+          if (JSON.stringify(nextState) === JSON.stringify(submittedState)) return;
+          saveConversationWorkspaceState(nextState);
+          setConversationState(nextState);
+          setPrompt(activeConversationDraft(nextState));
+        })
+        .catch(() => {
+          // Local state remains available and will be retried after the next state or API change.
+        });
+    }, 400);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [apiState, conversationState]);
 
   useEffect(() => {
     if (apiState !== "online") return;
@@ -4557,7 +4643,7 @@ function App() {
                 <li>
                   <strong>{copy.smartRouting}</strong>
                   <p>
-                    {copy.smartRoutingHint} <code>{routingLabel(inferredRoutingMode)}</code>
+                    {copy.smartRoutingHint} <code>{routingLabel(displayedRoutingMode)}</code>
                   </p>
                 </li>
                 <li>

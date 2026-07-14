@@ -12,10 +12,16 @@ import {
   type IngressOrigin,
   type JobHeartbeatStatus,
   type JobRecord,
+  type OrchestrationPlanSource,
   type RoutingMode,
   type JobStatus
 } from "../../shared/src/types";
 import { normalizeJobModelCallBudget } from "../../shared/src/routing-budget";
+import { inferJobDisplayTitle } from "../../shared/src/job-title";
+import {
+  buildDeterministicTaskPlan,
+  parseStoredTaskOrchestrationPlan
+} from "../../shared/src/orchestration-contract";
 import { pool } from "./pool";
 import { appendAgentEvent } from "./session";
 
@@ -69,10 +75,30 @@ function normalizeJobStatus(value: unknown): JobStatus | null {
     : null;
 }
 
+export class ConversationSourceMessageNotFoundError extends Error {
+  constructor(message = "conversation_source_message_not_found") {
+    super(message);
+    this.name = "ConversationSourceMessageNotFoundError";
+  }
+}
+
+export class ConversationSourceMessageConflictError extends Error {
+  constructor(message = "conversation_source_message_conflict") {
+    super(message);
+    this.name = "ConversationSourceMessageConflictError";
+  }
+}
+
 function normalizeJobHeartbeatStatus(value: unknown): JobHeartbeatStatus {
   return typeof value === "string" && (JOB_HEARTBEAT_STATUSES as readonly string[]).includes(value)
     ? (value as JobHeartbeatStatus)
     : "unknown";
+}
+
+function normalizeOrchestrationSource(value: unknown): OrchestrationPlanSource | null {
+  return value === "panel-agent" || value === "deterministic-fallback" || value === "legacy-fallback"
+    ? value
+    : null;
 }
 
 function heartbeatStatusForJobStatus(status: JobStatus): JobHeartbeatStatus {
@@ -190,11 +216,21 @@ function decodeJobListCursor(value: string): JobListCursor {
 }
 
 function toJobRecord(row: any): JobRecord {
+  const orchestrationPlan = parseStoredTaskOrchestrationPlan(row.orchestration_plan);
   return {
     id: row.id,
     sessionId: row.session_id ?? row.id,
+    conversationId: row.conversation_id ?? null,
+    sourceMessageId: row.source_message_id ?? null,
     ingressOrigin: normalizeIngressOrigin(row.ingress_origin),
     rawPrompt: row.raw_prompt,
+    displayTitle:
+      (typeof row.display_title === "string" && row.display_title.trim()) ||
+      orchestrationPlan?.title ||
+      inferJobDisplayTitle(row.raw_prompt),
+    orchestrationPlan,
+    orchestrationSource:
+      normalizeOrchestrationSource(row.orchestration_source) ?? orchestrationPlan?.source ?? null,
     routingMode: normalizeRoutingMode(row.routing_mode),
     maxModelCalls: row.max_model_calls ?? DEFAULT_MAX_MODEL_CALLS,
     classicFinalGateEnabled: row.classic_final_gate_enabled ?? false,
@@ -222,58 +258,171 @@ function toJobRecord(row: any): JobRecord {
 }
 
 export async function createJob(input: CreateJobInput): Promise<JobRecord> {
+  let conversationId = input.conversationId?.trim() || null;
+  const sourceMessageId = input.sourceMessageId?.trim() || null;
   const id = `JOB-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${randomUUID()
     .slice(0, 8)
     .toUpperCase()}`;
-  const routingMode = input.routingMode ?? DEFAULT_ROUTING_MODE;
-  const discussionRounds = input.discussionRounds ?? DEFAULT_DISCUSSION_ROUNDS;
-  const classicFinalGateEnabled = input.classicFinalGateEnabled ?? false;
-  const maxModelCalls = normalizeJobModelCallBudget({
+  const suppliedPlan = input.orchestrationPlan
+    ? parseStoredTaskOrchestrationPlan(input.orchestrationPlan)
+    : null;
+  const orchestrationPlan = suppliedPlan ?? buildDeterministicTaskPlan({
+    rawPrompt: input.rawPrompt,
+    requestedRoutingMode: input.routingMode,
     requestedMaxModelCalls: input.maxModelCalls,
+    source: input.orchestrationPlan ? "legacy-fallback" : "deterministic-fallback"
+  });
+  const displayTitle = input.displayTitle?.trim().slice(0, 120) || orchestrationPlan.title;
+  const routingMode = orchestrationPlan.routingMode ?? input.routingMode ?? DEFAULT_ROUTING_MODE;
+  const discussionRounds = input.discussionRounds ?? DEFAULT_DISCUSSION_ROUNDS;
+  const classicFinalGateEnabled =
+    input.classicFinalGateEnabled ??
+    (routingMode === "classic_master_slave" && orchestrationPlan.qualityGate.enabled);
+  const maxModelCalls = normalizeJobModelCallBudget({
+    requestedMaxModelCalls: orchestrationPlan.maxModelCalls ?? input.maxModelCalls,
     routingMode,
+    executableStageCount: orchestrationPlan.stages.length,
     discussionRounds,
     classicFinalGateEnabled
   });
 
-  const result = await pool.query(
-    `insert into agent.jobs (
-      id,
-      session_id,
-      feishu_chat_id,
-      feishu_message_id,
-      requester_id,
-      ingress_origin,
-      raw_prompt,
-      workdir,
-      routing_mode,
-      max_model_calls,
-      classic_final_gate_enabled,
-      discussion_rounds,
-      status,
-      heartbeat_at,
-      heartbeat_status,
-      heartbeat_source
-    ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'created', now(), 'healthy', 'job.created')
-    returning *`,
-    [
-      id,
-      id,
-      input.feishuChatId ?? null,
-      input.feishuMessageId ?? null,
-      input.requesterId ?? null,
-      input.ingressOrigin ?? "http",
-      input.rawPrompt,
-      input.workdir?.trim() || null,
-      routingMode,
-      maxModelCalls,
-      classicFinalGateEnabled,
-      discussionRounds
-    ]
-  );
+  const client = await pool.connect();
+  let createdRow: any;
+  try {
+    await client.query("begin");
+    if (sourceMessageId) {
+      const sourceMessageResult = await client.query(
+        `select message.conversation_id, message.job_id
+         from agent.conversation_messages message
+         join agent.conversations conversation on conversation.id = message.conversation_id
+         join agent.conversation_projects project on project.id = conversation.project_id
+         where message.id = $1
+           and message.deleted_at is null
+           and conversation.deleted_at is null
+           and project.deleted_at is null
+         for update of message`,
+        [sourceMessageId]
+      );
+      const sourceMessage = sourceMessageResult.rows[0];
+      if (!sourceMessage) {
+        throw new ConversationSourceMessageNotFoundError();
+      }
+      if (conversationId && conversationId !== sourceMessage.conversation_id) {
+        throw new ConversationSourceMessageConflictError();
+      }
+      conversationId = sourceMessage.conversation_id;
+      if (sourceMessage.job_id) {
+        const existingResult = await client.query(`select * from agent.jobs where id = $1`, [
+          sourceMessage.job_id
+        ]);
+        if (existingResult.rows[0]) {
+          await client.query("commit");
+          return toJobRecord(existingResult.rows[0]);
+        }
+      }
+    } else if (conversationId) {
+      const conversationResult = await client.query(
+        `select conversation.id
+         from agent.conversations conversation
+         join agent.conversation_projects project on project.id = conversation.project_id
+         where conversation.id = $1
+           and conversation.deleted_at is null
+           and project.deleted_at is null`,
+        [conversationId]
+      );
+      if (!conversationResult.rows[0]) {
+        throw new ConversationSourceMessageNotFoundError("conversation_not_found");
+      }
+    }
+
+    const result = await client.query(
+      `insert into agent.jobs (
+        id,
+        session_id,
+        conversation_id,
+        source_message_id,
+        feishu_chat_id,
+        feishu_message_id,
+        requester_id,
+        ingress_origin,
+        raw_prompt,
+        display_title,
+        orchestration_plan,
+        orchestration_source,
+        workdir,
+        routing_mode,
+        max_model_calls,
+        classic_final_gate_enabled,
+        discussion_rounds,
+        status,
+        heartbeat_at,
+        heartbeat_status,
+        heartbeat_source
+      ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14, $15, $16, $17, 'created', now(), 'healthy', 'job.created')
+      on conflict (source_message_id) where source_message_id is not null do nothing
+      returning *`,
+      [
+        id,
+        id,
+        conversationId,
+        sourceMessageId,
+        input.feishuChatId ?? null,
+        input.feishuMessageId ?? null,
+        input.requesterId ?? null,
+        input.ingressOrigin ?? "http",
+        input.rawPrompt,
+        displayTitle,
+        JSON.stringify(orchestrationPlan),
+        orchestrationPlan.source,
+        input.workdir?.trim() || null,
+        routingMode,
+        maxModelCalls,
+        classicFinalGateEnabled,
+        discussionRounds
+      ]
+    );
+
+    if (!result.rows[0] && sourceMessageId) {
+      const existingResult = await client.query(
+        `select * from agent.jobs where source_message_id = $1`,
+        [sourceMessageId]
+      );
+      if (existingResult.rows[0]) {
+        await client.query("commit");
+        return toJobRecord(existingResult.rows[0]);
+      }
+      throw new ConversationSourceMessageConflictError();
+    }
+    createdRow = result.rows[0];
+
+    if (sourceMessageId) {
+      await client.query(
+        `update agent.conversation_messages
+         set job_id = $2,
+             status = case when status = 'pending' then 'sent' else status end,
+             updated_at = now()
+         where id = $1 and deleted_at is null`,
+        [sourceMessageId, id]
+      );
+    }
+    await client.query("commit");
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
 
   await appendJobEvent(id, "job.created", {
     requesterId: input.requesterId ?? null,
     ingressOrigin: input.ingressOrigin ?? "http",
+    conversationId,
+    sourceMessageId,
+    displayTitle,
+    orchestrationSource: orchestrationPlan.source,
+    selectedAgents: orchestrationPlan.selectedAgents,
+    skippedAgents: orchestrationPlan.skippedAgents.map((entry) => entry.agentId),
+    deliverables: orchestrationPlan.deliverables,
     workdir: input.workdir?.trim() || null,
     routingMode,
     maxModelCalls,
@@ -292,7 +441,7 @@ export async function createJob(input: CreateJobInput): Promise<JobRecord> {
     });
   }
 
-  return toJobRecord(result.rows[0]);
+  return toJobRecord(createdRow);
 }
 
 export async function getJob(jobId: string): Promise<JobRecord | null> {
@@ -625,6 +774,13 @@ export async function cancelJob(input: {
     changed: true,
     reason: "cancelled"
   } as const;
+}
+
+export async function getJobBySourceMessageId(sourceMessageId: string): Promise<JobRecord | null> {
+  const result = await pool.query(`select * from agent.jobs where source_message_id = $1`, [
+    sourceMessageId
+  ]);
+  return result.rows[0] ? toJobRecord(result.rows[0]) : null;
 }
 
 export async function requestJobResume(input: {

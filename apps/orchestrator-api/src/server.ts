@@ -7,6 +7,8 @@ import {
   archiveJobSession,
   appendJobEvent,
   cancelJob,
+  ConversationSourceMessageConflictError,
+  ConversationSourceMessageNotFoundError,
   createJob,
   getJob,
   getJobByFeishuMessageId,
@@ -18,6 +20,25 @@ import {
   scanStalledJobHeartbeats,
   restoreJobSession
 } from "../../../packages/db/src/jobs";
+import {
+  ConversationRecordConflictError,
+  ConversationRecordDeletedError,
+  deleteConversation,
+  deleteConversationProject,
+  getConversation,
+  getConversationProject,
+  getConversationWorkspaceSnapshot,
+  listConversationMessages,
+  listConversationProjects,
+  listConversations,
+  patchConversation,
+  patchConversationMessage,
+  patchConversationProject,
+  syncConversationWorkspaceSnapshot,
+  upsertConversation,
+  upsertConversationMessage,
+  upsertConversationProject
+} from "../../../packages/db/src/conversations";
 import {
   consumeToolApproval,
   createToolApprovalRequest,
@@ -132,6 +153,8 @@ import {
   PROVIDER_VERIFICATION_STATUSES,
   ROUTING_MODES,
   AGENT_SYNC_STATUSES,
+  CONVERSATION_MESSAGE_ROLES,
+  CONVERSATION_MESSAGE_STATUSES,
   SCHEDULE_TASK_STATUSES,
   SCHEDULE_TYPES,
   TASK_PLAN_ITEM_STATUSES,
@@ -145,6 +168,11 @@ import {
   type ToolApprovalRecord
 } from "../../../packages/shared/src/types";
 import { buildPanelAgentPromptFiles } from "../../../packages/shared/src/panel-agent-prompt-designer";
+import {
+  buildDeterministicPanelResult,
+  panelOrchestrationJsonInstruction,
+  parsePanelOrchestrationOutput
+} from "../../../packages/shared/src/orchestration-contract";
 import {
   normalizeOpenClawAgentRunner,
   resolveOpenClawAgentRunner
@@ -359,11 +387,120 @@ const panelChatSchema = z.object({
   projectPath: z.string().trim().max(2000).optional(),
   projectName: z.string().trim().max(300).optional(),
   latestJobId: z.string().trim().max(160).optional(),
+  maxModelCalls: z.number().int().min(1).max(100).optional(),
   outputStyle: z.enum(["concise", "detailed", "warm", "formal"]).optional(),
   language: z.enum(["en", "zh"]).optional()
 });
 
+const conversationIdSchema = z.string().trim().min(1).max(200);
+const conversationTimestampSchema = z.string().datetime({ offset: true });
+const conversationMetadataSchema = z.record(z.unknown()).default({});
+const conversationAttachmentSchema = z.object({
+  id: conversationIdSchema,
+  name: z.string().trim().min(1).max(500),
+  path: z.string().trim().min(1).max(4000),
+  addedAt: conversationTimestampSchema
+});
+const conversationMessageSnapshotSchema = z.object({
+  id: conversationIdSchema,
+  conversationId: conversationIdSchema.optional(),
+  role: z.enum(CONVERSATION_MESSAGE_ROLES),
+  body: z.string().max(100_000),
+  status: z.enum(CONVERSATION_MESSAGE_STATUSES).default("sent"),
+  jobId: z.string().trim().min(1).max(200).nullable().optional(),
+  attachments: z.array(conversationAttachmentSchema).max(100).default([]),
+  metadata: conversationMetadataSchema,
+  createdAt: conversationTimestampSchema,
+  updatedAt: conversationTimestampSchema
+});
+const conversationSnapshotSchema = z.object({
+  id: conversationIdSchema,
+  projectId: conversationIdSchema.optional(),
+  title: z.string().trim().min(1).max(500),
+  draft: z.string().max(100_000).default(""),
+  attachments: z.array(conversationAttachmentSchema).max(100).default([]),
+  pinned: z.boolean().default(false),
+  unread: z.boolean().default(false),
+  archivedAt: conversationTimestampSchema.nullable().default(null),
+  metadata: conversationMetadataSchema,
+  createdAt: conversationTimestampSchema,
+  updatedAt: conversationTimestampSchema,
+  messages: z.array(conversationMessageSnapshotSchema).max(10_000).default([])
+});
+const conversationProjectSnapshotSchema = z.object({
+  id: conversationIdSchema,
+  name: z.string().trim().min(1).max(300),
+  workspacePath: z.string().trim().max(4000).nullable().default(null),
+  pinned: z.boolean().default(false),
+  archivedAt: conversationTimestampSchema.nullable().default(null),
+  metadata: conversationMetadataSchema,
+  createdAt: conversationTimestampSchema,
+  updatedAt: conversationTimestampSchema,
+  conversations: z.array(conversationSnapshotSchema).max(2000).default([])
+});
+const conversationWorkspaceSnapshotSchema = z.object({
+  projects: z.array(conversationProjectSnapshotSchema).max(1000),
+  generatedAt: conversationTimestampSchema.optional().default(() => new Date().toISOString())
+});
+const listConversationRecordsSchema = z.object({
+  includeArchived: z
+    .enum(["true", "false"])
+    .optional()
+    .transform((value) => value === "true")
+});
+const createConversationProjectSchema = z.object({
+  id: conversationIdSchema.optional(),
+  name: z.string().trim().min(1).max(300),
+  workspacePath: z.string().trim().max(4000).nullable().optional(),
+  pinned: z.boolean().optional(),
+  metadata: z.record(z.unknown()).optional()
+});
+const patchConversationProjectSchema = createConversationProjectSchema
+  .omit({ id: true })
+  .partial()
+  .extend({ archivedAt: conversationTimestampSchema.nullable().optional() })
+  .refine((input) => Object.keys(input).length > 0, "at least one field is required");
+const createConversationSchema = z.object({
+  id: conversationIdSchema.optional(),
+  title: z.string().trim().min(1).max(500),
+  draft: z.string().max(100_000).optional(),
+  attachments: z.array(conversationAttachmentSchema).max(100).optional(),
+  pinned: z.boolean().optional(),
+  unread: z.boolean().optional(),
+  metadata: z.record(z.unknown()).optional()
+});
+const patchConversationSchema = createConversationSchema
+  .omit({ id: true })
+  .partial()
+  .extend({ archivedAt: conversationTimestampSchema.nullable().optional() })
+  .refine((input) => Object.keys(input).length > 0, "at least one field is required");
+const createConversationMessageSchema = z.object({
+  id: conversationIdSchema.optional(),
+  role: z.enum(CONVERSATION_MESSAGE_ROLES),
+  body: z.string().max(100_000),
+  status: z.enum(CONVERSATION_MESSAGE_STATUSES).optional(),
+  jobId: z.string().trim().min(1).max(200).nullable().optional(),
+  attachments: z.array(conversationAttachmentSchema).max(100).optional(),
+  metadata: z.record(z.unknown()).optional(),
+  createdAt: conversationTimestampSchema.optional(),
+  updatedAt: conversationTimestampSchema.optional()
+});
+const patchConversationMessageSchema = z
+  .object({
+    status: z.enum(CONVERSATION_MESSAGE_STATUSES).optional(),
+    jobId: z.string().trim().min(1).max(200).nullable().optional(),
+    metadata: z.record(z.unknown()).optional()
+  })
+  .refine((input) => Object.keys(input).length > 0, "at least one field is required");
+const listConversationMessagesSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(2000).optional()
+});
+
 type PanelChatInput = z.infer<typeof panelChatSchema>;
+
+function routeParameter(value: string | string[] | undefined) {
+  return Array.isArray(value) ? value[0] ?? "" : value ?? "";
+}
 
 const panelPromptPersonalizationSchema = z.object({
   supervisorName: z.string().trim().min(1).max(200),
@@ -994,6 +1131,7 @@ function buildPanelChatSystemPrompt(input: {
   provider: ModelProviderRecord;
   model: string;
   experiences: ExperienceRecord[];
+  availableAgents: AgentConfigRecord[];
 }) {
   const agentName = input.chat.supervisorName?.trim() || input.agent.displayName || "Panel agent";
   const backendAgentMode = process.env.OPENCLAW_AGENT_MODE === "real" ? "real" : "mock";
@@ -1011,6 +1149,18 @@ function buildPanelChatSystemPrompt(input: {
       })
       .join("\n")
     : "No adopted long-term experience has been approved yet.";
+  const availableAgentCatalog = input.availableAgents.length
+    ? input.availableAgents
+      .map((agent) => {
+        const description = typeof agent.metadata.description === "string"
+          ? agent.metadata.description
+          : agent.tools.length
+            ? `tools: ${agent.tools.join(", ")}`
+            : "no additional capability description";
+        return `${agent.id}: ${agent.displayName} (${agent.agentRole}) - ${description}`;
+      })
+      .join("\n")
+    : "No enabled child agents are currently registered.";
 
   return [
     `You are ${agentName}, the Honeycomb panel agent.`,
@@ -1020,6 +1170,7 @@ function buildPanelChatSystemPrompt(input: {
     "Before coordinating task work, classify the requested deliverable, choose the routing mode, and choose the minimal child-agent set dynamically. Configured agents are a capability pool, not a mandatory fixed pipeline.",
     "For still poster/image tasks, use writer-agent and/or image-agent as needed and skip video-agent. For video tasks, use video-agent and add writer-agent/image-agent only when script, captions, storyboard, cover, keyframe, or visual-asset support is needed.",
     "Use research-agent only when fresh facts, sources, market context, or time-sensitive claims are needed. Use test-agent as the quality gate for each production child-agent deliverable.",
+    "Only select agent IDs from the enabled child-agent catalog below. Never invent an agent ID and never use the panel agent as a production stage.",
     "Before starting task work, review your own prompt contract plus adopted experience/task-summary context supplied by Honeycomb. Treat previous memory as hints, then re-check the current user request.",
     "You own first-run work-profile configuration: use the user's profession, daily work, and quality bar to personalize each child agent's AGENTS.md while preserving its original role, experience-library rules, and state JSON handoff contract.",
     "When the user updates their work profile, explain that Honeycomb can regenerate the child-agent prompts from that profile and keep API keys out of prompt files.",
@@ -1032,6 +1183,9 @@ function buildPanelChatSystemPrompt(input: {
       : "The backend worker is in mock mode. If the user asks why provider keys are not used, say OPENCLAW_AGENT_MODE must be real before child-agent provider keys drive generation.",
     `Current project: ${input.chat.projectPath || input.chat.projectName || "not selected"}`,
     `Latest job: ${input.chat.latestJobId || "none"}`,
+    "",
+    "Enabled child-agent catalog:",
+    availableAgentCatalog,
     panelOutputStyleInstruction(input.chat.outputStyle),
     "",
     "Long-term memory rule:",
@@ -1042,7 +1196,10 @@ function buildPanelChatSystemPrompt(input: {
     "Use adopted memories as hints, not as unquestionable truth; prefer fresh evidence when the task is time-sensitive or high-risk.",
     "",
     "Adopted experience memory:",
-    adoptedExperiences
+    adoptedExperiences,
+    "",
+    "Required response contract:",
+    panelOrchestrationJsonInstruction()
   ].join("\n");
 }
 
@@ -1088,6 +1245,9 @@ async function sendPanelChatToModel(input: PanelChatInput) {
   }
 
   const adoptedExperiences = await listExperiences({ status: "adopted", limit: 8 });
+  const availableAgents = (await listAgentConfigs()).filter(
+    (agent) => agent.enabled && agent.id !== panelAgent.id && agent.id !== "main-agent"
+  );
   const history: PanelChatCompletionMessage[] = (input.messages ?? [])
     .slice(-16)
     .map((message) => ({
@@ -1106,7 +1266,8 @@ async function sendPanelChatToModel(input: PanelChatInput) {
         agent: panelAgent,
         provider,
         model,
-        experiences: adoptedExperiences.experiences
+        experiences: adoptedExperiences.experiences,
+        availableAgents
       })
     },
     ...history,
@@ -1153,12 +1314,33 @@ async function sendPanelChatToModel(input: PanelChatInput) {
       // Recall scoring is best-effort; a delayed migration must not block chat.
     }
 
+    const parsedOrchestration = parsePanelOrchestrationOutput({
+      rawOutput: answer,
+      rawPrompt: input.message,
+      requestedMaxModelCalls: input.maxModelCalls,
+      allowedAgentIds: availableAgents.map((agent) => agent.id)
+    });
+    const orchestration = parsedOrchestration ?? {
+      ...buildDeterministicPanelResult({
+        rawPrompt: input.message,
+        language: input.language,
+        requestedMaxModelCalls: input.maxModelCalls,
+        warning: "panel_agent_contract_invalid"
+      }),
+      reply: answer
+    };
+
     return {
-      message: answer,
+      message: orchestration.reply,
       agentName: input.supervisorName?.trim() || panelAgent.displayName,
       model,
       providerId: provider.id,
-      usedExperienceIds
+      usedExperienceIds,
+      intent: orchestration.intent,
+      taskPlan: orchestration.plan,
+      orchestrationSource: orchestration.source,
+      degraded: orchestration.degraded,
+      warnings: orchestration.warnings
     };
   } catch (error) {
     if (error instanceof PanelChatError) {
@@ -1438,7 +1620,7 @@ async function main() {
     if (origin && corsOrigins.includes(origin)) {
       response.header("access-control-allow-origin", origin);
       response.header("vary", "Origin");
-      response.header("access-control-allow-methods", "GET,POST,PATCH,OPTIONS");
+      response.header("access-control-allow-methods", "GET,POST,PATCH,DELETE,OPTIONS");
       response.header(
         "access-control-allow-headers",
         "authorization,content-type,x-admin-token,x-honeycomb-token"
@@ -1470,17 +1652,236 @@ async function main() {
   });
 
   app.post("/panel/chat", async (request, response, next) => {
+    let input: PanelChatInput;
     try {
-      const input = panelChatSchema.parse(request.body ?? {});
+      input = panelChatSchema.parse(request.body ?? {});
       response.json(await sendPanelChatToModel(input));
     } catch (error) {
       if (error instanceof PanelChatError) {
-        response.status(error.status).json({
-          error: error.code,
-          message: error.message
+        const fallback = buildDeterministicPanelResult({
+          rawPrompt: input!.message,
+          language: input!.language,
+          requestedMaxModelCalls: input!.maxModelCalls,
+          warning: error.code
+        });
+        response.json({
+          message: fallback.reply,
+          agentName: input!.supervisorName?.trim() || "Panel agent",
+          model: null,
+          providerId: null,
+          usedExperienceIds: [],
+          intent: fallback.intent,
+          taskPlan: fallback.plan,
+          orchestrationSource: fallback.source,
+          degraded: true,
+          warnings: fallback.warnings,
+          panelError: {
+            code: error.code,
+            message: error.message
+          }
         });
         return;
       }
+      next(error);
+    }
+  });
+
+  app.get("/conversation-workspace", async (_request, response, next) => {
+    try {
+      response.json(await getConversationWorkspaceSnapshot());
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/conversation-workspace/sync", async (request, response, next) => {
+    try {
+      const input = conversationWorkspaceSnapshotSchema.parse(request.body ?? {});
+      const snapshot = {
+        projects: input.projects.map((project) => ({
+          ...project,
+          conversations: project.conversations.map((conversation) => ({
+            ...conversation,
+            projectId: project.id,
+            messages: conversation.messages.map((message) => ({
+              ...message,
+              conversationId: conversation.id,
+              jobId: message.jobId ?? null
+            }))
+          }))
+        })),
+        generatedAt: input.generatedAt
+      };
+      response.json(await syncConversationWorkspaceSnapshot(snapshot));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/conversation-projects", async (request, response, next) => {
+    try {
+      const query = listConversationRecordsSchema.parse(request.query);
+      response.json({
+        projects: await listConversationProjects({ includeArchived: query.includeArchived })
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/conversation-projects", async (request, response, next) => {
+    try {
+      const input = createConversationProjectSchema.parse(request.body ?? {});
+      const project = await upsertConversationProject({
+        ...input,
+        updatedAt: new Date().toISOString()
+      });
+      response.status(201).json(project);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.patch("/conversation-projects/:projectId", async (request, response, next) => {
+    try {
+      const projectId = routeParameter(request.params.projectId);
+      const input = patchConversationProjectSchema.parse(request.body ?? {});
+      const project = await patchConversationProject(projectId, input);
+      if (!project) {
+        response.status(404).json({ error: "conversation_project_not_found" });
+        return;
+      }
+      response.json(project);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.delete("/conversation-projects/:projectId", async (request, response, next) => {
+    try {
+      const deleted = await deleteConversationProject(routeParameter(request.params.projectId));
+      if (!deleted) {
+        response.status(404).json({ error: "conversation_project_not_found" });
+        return;
+      }
+      response.json({ ok: true, deleted: true });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/conversation-projects/:projectId/conversations", async (request, response, next) => {
+    try {
+      const projectId = routeParameter(request.params.projectId);
+      const project = await getConversationProject(projectId);
+      if (!project) {
+        response.status(404).json({ error: "conversation_project_not_found" });
+        return;
+      }
+      const query = listConversationRecordsSchema.parse(request.query);
+      response.json({
+        conversations: await listConversations({
+          projectId,
+          includeArchived: query.includeArchived
+        })
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/conversation-projects/:projectId/conversations", async (request, response, next) => {
+    try {
+      const projectId = routeParameter(request.params.projectId);
+      if (!(await getConversationProject(projectId))) {
+        response.status(404).json({ error: "conversation_project_not_found" });
+        return;
+      }
+      const input = createConversationSchema.parse(request.body ?? {});
+      const conversation = await upsertConversation({
+        ...input,
+        projectId,
+        updatedAt: new Date().toISOString()
+      });
+      response.status(201).json(conversation);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.patch("/conversations/:conversationId", async (request, response, next) => {
+    try {
+      const conversationId = routeParameter(request.params.conversationId);
+      const input = patchConversationSchema.parse(request.body ?? {});
+      const conversation = await patchConversation(conversationId, input);
+      if (!conversation) {
+        response.status(404).json({ error: "conversation_not_found" });
+        return;
+      }
+      response.json(conversation);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.delete("/conversations/:conversationId", async (request, response, next) => {
+    try {
+      const deleted = await deleteConversation(routeParameter(request.params.conversationId));
+      if (!deleted) {
+        response.status(404).json({ error: "conversation_not_found" });
+        return;
+      }
+      response.json({ ok: true, deleted: true });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/conversations/:conversationId/messages", async (request, response, next) => {
+    try {
+      const conversationId = routeParameter(request.params.conversationId);
+      if (!(await getConversation(conversationId))) {
+        response.status(404).json({ error: "conversation_not_found" });
+        return;
+      }
+      const query = listConversationMessagesSchema.parse(request.query);
+      response.json({
+        messages: await listConversationMessages({ conversationId, limit: query.limit })
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/conversations/:conversationId/messages", async (request, response, next) => {
+    try {
+      const conversationId = routeParameter(request.params.conversationId);
+      if (!(await getConversation(conversationId))) {
+        response.status(404).json({ error: "conversation_not_found" });
+        return;
+      }
+      const input = createConversationMessageSchema.parse(request.body ?? {});
+      const message = await upsertConversationMessage({
+        ...input,
+        conversationId
+      });
+      response.status(201).json(message);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.patch("/conversation-messages/:messageId", async (request, response, next) => {
+    try {
+      const messageId = routeParameter(request.params.messageId);
+      const input = patchConversationMessageSchema.parse(request.body ?? {});
+      const message = await patchConversationMessage(messageId, input);
+      if (!message) {
+        response.status(404).json({ error: "conversation_message_not_found" });
+        return;
+      }
+      response.json(message);
+    } catch (error) {
       next(error);
     }
   });
@@ -4334,6 +4735,20 @@ async function main() {
         message: error.message,
         details: error.details
       });
+      return;
+    }
+
+    if (error instanceof ConversationSourceMessageNotFoundError) {
+      response.status(404).json({ error: error.message });
+      return;
+    }
+
+    if (
+      error instanceof ConversationSourceMessageConflictError ||
+      error instanceof ConversationRecordConflictError ||
+      error instanceof ConversationRecordDeletedError
+    ) {
+      response.status(409).json({ error: error.message });
       return;
     }
 

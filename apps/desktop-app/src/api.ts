@@ -1,3 +1,13 @@
+import type {
+  ConversationMessageRecord,
+  ConversationProjectRecord,
+  ConversationRecord,
+  ConversationWorkspaceSnapshot,
+  OrchestrationPlanSource,
+  PanelMessageIntent,
+  TaskOrchestrationPlan
+} from "../../../packages/shared/src/types";
+
 const viteEnv = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env ?? {};
 const API_BASE = viteEnv.VITE_ORCHESTRATOR_URL ?? "http://127.0.0.1:3000";
 const STATIC_API_AUTH_TOKEN = viteEnv.VITE_HONEYCOMB_API_TOKEN ?? "";
@@ -1202,9 +1212,14 @@ export type SessionCompressionResponse = {
 export type JobRecord = {
   id: string;
   sessionId: string;
+  conversationId: string | null;
+  sourceMessageId: string | null;
   status: JobStatus;
   ingressOrigin: string;
   rawPrompt: string;
+  displayTitle: string;
+  orchestrationPlan: TaskOrchestrationPlan | null;
+  orchestrationSource: OrchestrationPlanSource | null;
   routingMode: RoutingMode;
   maxModelCalls: number;
   classicFinalGateEnabled: boolean;
@@ -1307,6 +1322,10 @@ export type JobTimeline = {
 
 export type CreateJobInput = {
   prompt: string;
+  displayTitle?: string;
+  orchestrationPlan?: TaskOrchestrationPlan;
+  conversationId?: string;
+  sourceMessageId?: string;
   workdir?: string;
   routingMode: RoutingMode;
   maxModelCalls: number;
@@ -1324,6 +1343,7 @@ export type PanelChatInput = {
   projectPath?: string;
   projectName?: string;
   latestJobId?: string;
+  maxModelCalls?: number;
   outputStyle?: PanelOutputStyle;
   language?: "en" | "zh";
 };
@@ -1331,9 +1351,18 @@ export type PanelChatInput = {
 export type PanelChatResponse = {
   message: string;
   agentName: string;
-  model: string;
-  providerId: string;
+  model: string | null;
+  providerId: string | null;
   usedExperienceIds: string[];
+  intent: PanelMessageIntent;
+  taskPlan: TaskOrchestrationPlan | null;
+  orchestrationSource: OrchestrationPlanSource;
+  degraded: boolean;
+  warnings: string[];
+  panelError?: {
+    code: string;
+    message: string;
+  };
 };
 
 export type PanelAgentWorkInterview = {
@@ -1541,6 +1570,10 @@ export async function createJob(input: CreateJobInput) {
     method: "POST",
     body: JSON.stringify({
       prompt: input.prompt,
+      displayTitle: input.displayTitle,
+      orchestrationPlan: input.orchestrationPlan,
+      conversationId: input.conversationId,
+      sourceMessageId: input.sourceMessageId,
       workdir: input.workdir,
       requesterId: "desktop-app",
       routingMode: input.routingMode,
@@ -1554,6 +1587,41 @@ export async function sendPanelChat(input: PanelChatInput) {
     method: "POST",
     body: JSON.stringify(input)
   });
+}
+
+export type {
+  ConversationMessageRecord,
+  ConversationProjectRecord,
+  ConversationRecord,
+  ConversationWorkspaceSnapshot
+};
+
+export async function getConversationWorkspace() {
+  return request<ConversationWorkspaceSnapshot>("/conversation-workspace");
+}
+
+export async function syncConversationWorkspace(snapshot: ConversationWorkspaceSnapshot) {
+  return request<{
+    snapshot: ConversationWorkspaceSnapshot;
+    accepted: { projects: number; conversations: number; messages: number };
+  }>("/conversation-workspace/sync", {
+    method: "POST",
+    body: JSON.stringify(snapshot)
+  });
+}
+
+export async function deleteConversationProject(projectId: string) {
+  return request<{ ok: true; deleted: true }>(
+    `/conversation-projects/${encodeURIComponent(projectId)}`,
+    { method: "DELETE" }
+  );
+}
+
+export async function deleteConversationRecord(conversationId: string) {
+  return request<{ ok: true; deleted: true }>(
+    `/conversations/${encodeURIComponent(conversationId)}`,
+    { method: "DELETE" }
+  );
 }
 
 export async function personalizePanelAgentPrompts(input: PanelAgentPromptPersonalizationInput) {

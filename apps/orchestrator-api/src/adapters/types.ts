@@ -2,11 +2,16 @@ import type express from "express";
 import type {
   IngressAdapter,
   JobRecord,
-  RoutingMode
+  RoutingMode,
+  TaskOrchestrationPlan
 } from "../../../../packages/shared/src/types";
 
 export type CreateJobForIngressInput = {
   rawPrompt: string;
+  displayTitle?: string;
+  orchestrationPlan?: TaskOrchestrationPlan;
+  conversationId?: string;
+  sourceMessageId?: string;
   workdir?: string;
   routingMode?: RoutingMode;
   maxModelCalls?: number;
