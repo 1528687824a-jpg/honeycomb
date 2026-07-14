@@ -657,6 +657,7 @@ export type ArtifactType =
   | "state_json"
   | "test_report"
   | "discussion_synthesis"
+  | "routing_synthesis"
   | "session_summary"
   | "final_output"
   | "group_message"

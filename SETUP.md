@@ -495,15 +495,17 @@ pipeline:
   test-agent quality gate before finalizeJob.
 
 classic_master_slave:
-  main-agent dispatches each child stage independently and collects outputs.
-  There is no peer-to-peer handoff. M2.5 supports an optional final test-agent
-  gate through the persisted classicFinalGateEnabled job flag. It defaults to
-  false.
+  Independent child-agent model calls start concurrently in deterministic
+  stage order. Honeycomb waits for every worker, persists successful outputs,
+  and main-agent synthesizes the complete worker set. There is no peer-to-peer
+  handoff. An optional final test-agent gate is controlled by the persisted
+  classicFinalGateEnabled job flag. It defaults to false.
 
 master_slave_discussion:
   Child agents run in a persisted discussion loop controlled by
   agent.jobs.discussion_rounds / POST /jobs discussionRounds. The default is
-  2 rounds. Each round writes visible discussion_handoff messages and
+  2 rounds. Every next participant receives the ordered prior contribution
+  artifacts. Each round writes visible discussion_handoff messages and
   discussion.round_completed events.
   After the rounds finish, main-agent runs a dedicated
   mainAgentSynthesizeDiscussion step over the agent_events ledger and stage
@@ -516,7 +518,9 @@ Additional job controls:
 ```text
 maxModelCalls:
   Persisted model-call budget. Default: 20. The workflow checks this before
-  each OpenClaw-backed call. If exhausted, the job enters waiting_for_human.
+  each OpenClaw-backed call. Resume checks count only model-call keys that do
+  not already exist, so reused results do not consume capacity twice. If
+  exhausted, the job enters waiting_for_human.
 
 classicFinalGateEnabled:
   Optional final test-agent gate for classic_master_slave. Default: false.
@@ -526,6 +530,9 @@ discussionRounds:
   accepts integer values from 1 through 10. The workflow reads it through a
   checkpointed DBOS step before entering the discussion loop.
 ```
+
+The full execution, synthesis, prompt-context, and recovery contract is in
+`docs/routing-mode-execution.md`.
 
 ## M2 Recovery Smoke Checks
 

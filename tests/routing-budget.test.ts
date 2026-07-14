@@ -11,7 +11,7 @@ test("minimumModelCallsForRoutingMode covers all routing modes", () => {
   const expected: Record<RoutingMode, number> = {
     pipeline: 5,
     supervisor_pipeline: 8,
-    classic_master_slave: 4,
+    classic_master_slave: 5,
     master_slave_discussion: 10
   };
 
@@ -32,7 +32,7 @@ test("minimumModelCallsForRoutingMode covers all routing modes", () => {
       executableStageCount: 4,
       classicFinalGateEnabled: true
     }),
-    5
+    6
   );
 });
 

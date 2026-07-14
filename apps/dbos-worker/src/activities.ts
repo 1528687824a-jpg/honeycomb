@@ -84,6 +84,11 @@ import {
   type TaskExecutionRetryState
 } from "../../../packages/shared/src/model-retry-policy";
 import { parseTaskExecutionRetryState } from "../../../packages/shared/src/task-retry-contract";
+import {
+  buildModelCallIdempotencyKey,
+  missingModelCallKeys,
+  normalizeModelCallKeys
+} from "../../../packages/shared/src/model-call-key";
 import type { ModelCallRequestReference } from "../../../packages/shared/src/model-reconciliation";
 import { inferFallbackStages } from "../../../packages/shared/src/orchestration-contract";
 import {
@@ -144,6 +149,13 @@ import {
   resolveModelCallRetryAction,
   waitForModelRetry
 } from "./model-call-retry";
+import { stageStatePaths } from "./artifact-state-paths";
+import { normalizeDiscussionContextArtifactIds } from "./discussion-context";
+import {
+  completedDiscussionRoundNumbers,
+  selectRoutingOutputEvents,
+  type SynthesisRoutingMode
+} from "./routing-synthesis-ledger";
 import { maybeCrashOnce } from "./test-crash";
 
 type OpenClawActionType =
@@ -333,12 +345,7 @@ async function runOpenClawAgentIdempotent(input: {
   outputDir?: string | null;
   timeoutSeconds: number;
 }): Promise<OpenClawRunResult | null> {
-  const idempotencyKey = [
-    input.jobId,
-    input.stageId ?? "job",
-    input.attemptNo,
-    input.actionType
-  ].join(":");
+  const idempotencyKey = buildModelCallIdempotencyKey(input);
   const currentJob = await getJob(input.jobId);
   if (!currentJob || currentJob.status === "cancelled") {
     throw new JobCancelledError();
@@ -1452,6 +1459,8 @@ export async function enforceModelCallBudget(input: {
   jobId: string;
   nextActionType: OpenClawActionType;
   nextAgentId: string;
+  requiredCalls?: number;
+  modelCallKeys?: string[];
 }) {
   const job = await getJob(input.jobId);
   if (!job) {
@@ -1460,7 +1469,21 @@ export async function enforceModelCallBudget(input: {
 
   const currentModelCalls = await countModelCallsForJob(input.jobId);
   const maxModelCalls = job.maxModelCalls ?? DEFAULT_MAX_MODEL_CALLS;
-  const allowed = currentModelCalls < maxModelCalls;
+  const requestedModelCallKeys = normalizeModelCallKeys(input.modelCallKeys);
+  const existingModelCallKeys = new Set(
+    (
+      await Promise.all(
+        requestedModelCallKeys.map((idempotencyKey) => getModelCallByKey(idempotencyKey))
+      )
+    )
+      .filter((record): record is NonNullable<typeof record> => record !== null)
+      .map((record) => record.idempotencyKey)
+  );
+  const missingKeys = missingModelCallKeys(requestedModelCallKeys, existingModelCallKeys);
+  const requiredCalls = requestedModelCallKeys.length > 0
+    ? missingKeys.length
+    : Math.max(1, Math.floor(input.requiredCalls ?? 1));
+  const allowed = currentModelCalls + requiredCalls <= maxModelCalls;
 
   if (!allowed) {
     const reason = `Model-call budget exhausted before ${input.nextActionType}`;
@@ -1468,12 +1491,20 @@ export async function enforceModelCallBudget(input: {
       reason,
       currentModelCalls,
       maxModelCalls,
+      requiredCalls,
+      requestedModelCallKeys,
+      reusedModelCallKeys: [...existingModelCallKeys],
+      missingModelCallKeys: missingKeys,
       nextActionType: input.nextActionType,
       nextAgentId: input.nextAgentId
     });
     await appendJobEvent(input.jobId, "budget.model_calls_exhausted", {
       currentModelCalls,
       maxModelCalls,
+      requiredCalls,
+      requestedModelCallKeys,
+      reusedModelCallKeys: [...existingModelCallKeys],
+      missingModelCallKeys: missingKeys,
       nextActionType: input.nextActionType,
       nextAgentId: input.nextAgentId
     });
@@ -1483,6 +1514,10 @@ export async function enforceModelCallBudget(input: {
     allowed,
     currentModelCalls,
     maxModelCalls,
+    requiredCalls,
+    requestedModelCallKeys,
+    reusedModelCallKeys: [...existingModelCallKeys],
+    missingModelCallKeys: missingKeys,
     nextActionType: input.nextActionType,
     nextAgentId: input.nextAgentId
   };
@@ -2020,6 +2055,7 @@ export async function runStageAgent(input: {
   routingMode?: RoutingMode;
   handoffTargetAgentId?: string | null;
   outputMessageType?: GroupMessageType;
+  contextArtifactIds?: string[];
 }): Promise<StageRunResult> {
   const [job, stage] = await Promise.all([getJob(input.jobId), getStage(input.stageId)]);
   if (!job) {
@@ -2088,6 +2124,29 @@ export async function runStageAgent(input: {
   const upstreamPromptContext = upstreamArtifact
     ? truncateForPrompt(upstreamArtifact.content || upstreamArtifact.uri || "", 6000)
     : "";
+  const discussionContextArtifactIds = normalizeDiscussionContextArtifactIds(
+    input.contextArtifactIds
+  );
+  const discussionContextArtifacts = await Promise.all(
+    discussionContextArtifactIds.map((artifactId) => getArtifact(artifactId))
+  );
+  const discussionPromptContext = discussionContextArtifacts
+    .map((artifact, index) => {
+      const parsed = parseArtifactJson(artifact);
+      const agentId = asString(parsed?.agentId) ?? "unknown-agent";
+      const roundNo = asNumber(parsed?.attemptNo);
+      const summary = truncateForPrompt(
+        asString(parsed?.summary) ?? parseArtifactSummary(artifact),
+        1800
+      );
+      return [
+        `[${index + 1}] Agent: ${agentId}`,
+        `Round: ${roundNo ?? "unknown"}`,
+        `Artifact: ${artifact.id}`,
+        `Contribution: ${summary || "No contribution text recorded."}`
+      ].join("\n");
+    })
+    .join("\n\n---\n\n");
   const clusterConfig = await loadClusterConfig().catch(() => null);
   const agentPromptSnapshot = await loadAgentPromptSnapshot(stage.agentId, clusterConfig);
   const preflightInstructions = stagePreflightInstructions({
@@ -2118,7 +2177,8 @@ export async function runStageAgent(input: {
     memoryContext: {
       workLogPath,
       stateDir,
-      upstreamArtifactPath: upstreamArtifact?.uri ?? null
+      upstreamArtifactPath: upstreamArtifact?.uri ?? null,
+      discussionContextArtifactIds
     }
   });
   const providerDirectPrompt = [
@@ -2129,6 +2189,9 @@ export async function runStageAgent(input: {
     `Stage name: ${stage.name}`,
     documentProductionInstructions,
     upstreamPromptContext ? `Upstream artifact context:\n${upstreamPromptContext}` : "",
+    discussionPromptContext
+      ? `Prior discussion contributions, oldest to newest:\n${discussionPromptContext}`
+      : "",
     stage.stageType === "image"
       ? "Generate the requested image/poster directly. Use the user task as the visual brief."
       : "",
@@ -2143,6 +2206,9 @@ export async function runStageAgent(input: {
     "",
     `User task: ${truncateForPrompt(job.rawPrompt, 4000)}`,
     upstreamPromptContext ? `Upstream artifact context:\n${upstreamPromptContext}` : "",
+    discussionPromptContext
+      ? `Prior discussion contributions, oldest to newest:\n${discussionPromptContext}`
+      : "",
     `工作模式：${input.attemptNo === 1 ? "生产" : "修正"}`,
     `任务编号：${input.jobId}`,
     `阶段编号：${stage.stageIndex}`,
@@ -2194,6 +2260,7 @@ export async function runStageAgent(input: {
     attemptNo: input.attemptNo,
     routingMode,
     handoffTargetAgentId,
+    discussionContextArtifactIds,
     quality,
     summary:
       openClawResult?.text ??
@@ -2223,12 +2290,15 @@ export async function runStageAgent(input: {
     acceptanceCriteria: stage.acceptanceCriteria
   };
 
-  const stateJsonPath = path.join(
+  const outputStatePaths = stageStatePaths({
     stateDir,
-    `stage-${stage.stageIndex.toString().padStart(3, "0")}-${stageTypeToAgentType(
-      stage.stageType
-    )}-output.json`
-  );
+    stageIndex: stage.stageIndex,
+    stageType: stageTypeToAgentType(stage.stageType),
+    kind: "output",
+    attemptNo: input.attemptNo
+  });
+  const stateJsonPath = outputStatePaths.attemptPath;
+  const latestStateJsonPath = outputStatePaths.latestPath;
   const outputMdPath = path.join(stageDir, `output-attempt-${input.attemptNo}.md`);
   const documentContentPath = path.join(
     stageDir,
@@ -2243,7 +2313,11 @@ export async function runStageAgent(input: {
   output.artifact_path = outputMdPath;
   output.document_content_path = documentContentPath;
 
-  await writeFile(stateJsonPath, `${JSON.stringify(output, null, 2)}\n`, "utf8");
+  const serializedOutput = `${JSON.stringify(output, null, 2)}\n`;
+  await Promise.all([
+    writeFile(stateJsonPath, serializedOutput, "utf8"),
+    writeFile(latestStateJsonPath, serializedOutput, "utf8")
+  ]);
   await writeFile(documentContentPath, `${output.summary.trimEnd()}\n`, "utf8");
   await writeFile(
     outputMdPath,
@@ -2287,12 +2361,14 @@ export async function runStageAgent(input: {
       documentContentPath,
       workLogPath,
       stateJsonPath,
+      latestStateJsonPath,
       agentSessionId,
       agentPromptPath: agentPromptSnapshot.path,
       agentPromptLoaded: Boolean(agentPromptSnapshot.contents),
       attemptNo: input.attemptNo,
       routingMode,
       handoffTargetAgentId,
+      discussionContextArtifactIds,
       quality,
       generatedArtifacts: openClawResult?.artifacts ?? []
     }
@@ -2305,9 +2381,11 @@ export async function runStageAgent(input: {
     type: "stage_summary",
     title: `${stage.name} work log attempt ${input.attemptNo}`,
     content: output.summary,
-    uri: workLogPath,
+    uri: documentContentPath,
     metadata: {
       stateJsonPath,
+      latestStateJsonPath,
+      workLogPath,
       attemptNo: input.attemptNo
     }
   });
@@ -2326,6 +2404,7 @@ export async function runStageAgent(input: {
     routingMode,
     handoffTargetAgentId,
     outputMessageType,
+    discussionContextArtifactIds,
     outputArtifactId: artifact.id
   });
 
@@ -2449,12 +2528,15 @@ export async function runTestAgent(input: {
         : ["Add a valid handoff object so the next stage can consume this output."];
 
   const reportPath = path.join(stageDir, `test-report-attempt-${input.attemptNo}.md`);
-  const stateJsonPath = path.join(
+  const testStatePaths = stageStatePaths({
     stateDir,
-    `stage-${stage.stageIndex.toString().padStart(3, "0")}-${stageTypeToAgentType(
-      stage.stageType
-    )}-test.json`
-  );
+    stageIndex: stage.stageIndex,
+    stageType: stageTypeToAgentType(stage.stageType),
+    kind: "test",
+    attemptNo: input.attemptNo
+  });
+  const stateJsonPath = testStatePaths.attemptPath;
+  const latestStateJsonPath = testStatePaths.latestPath;
   const nextAction =
     verdict === "PASS"
       ? "continue_to_next_stage"
@@ -2494,7 +2576,11 @@ export async function runTestAgent(input: {
     next_action: nextAction,
     created_at: nowIso()
   };
-  await writeFile(stateJsonPath, `${JSON.stringify(stateJson, null, 2)}\n`, "utf8");
+  const serializedState = `${JSON.stringify(stateJson, null, 2)}\n`;
+  await Promise.all([
+    writeFile(stateJsonPath, serializedState, "utf8"),
+    writeFile(latestStateJsonPath, serializedState, "utf8")
+  ]);
 
   const reportArtifact = await createArtifact({
     id: `${stage.id}-ART-TEST-${input.attemptNo.toString().padStart(2, "0")}`,
@@ -2510,6 +2596,7 @@ export async function runTestAgent(input: {
       requiredFixes,
       testAgentSessionId,
       stateJsonPath,
+      latestStateJsonPath,
       nextAction
     }
   });
@@ -2523,7 +2610,8 @@ export async function runTestAgent(input: {
     content: JSON.stringify(stateJson, null, 2),
     uri: stateJsonPath,
     metadata: {
-      reportArtifactId: reportArtifact.id
+      reportArtifactId: reportArtifact.id,
+      latestStateJsonPath
     }
   });
 
@@ -3200,22 +3288,22 @@ async function getArtifactOrNull(artifactId: string | null) {
   }
 }
 
-async function getDiscussionOutputRows(events: AgentEventRecord[]) {
-  const completedEvents = events.filter(
-    (event) =>
-      event.eventType === "stage.agent_completed" &&
-      event.payload?.routingMode === "master_slave_discussion"
-  );
+async function getRoutingOutputRows(
+  events: AgentEventRecord[],
+  routingMode: SynthesisRoutingMode
+) {
+  const completedEvents = selectRoutingOutputEvents(events, routingMode);
 
   const rows = [];
   for (const event of completedEvents) {
     const artifactId = asString(event.payload?.outputArtifactId);
+    const attemptNo = asNumber(event.payload?.attemptNo);
     const artifact = await getArtifactOrNull(artifactId);
     rows.push({
       seq: event.seq,
       stageId: event.stageId,
       agentId: asString(event.payload?.agentId) ?? event.actor,
-      attemptNo: asNumber(event.payload?.attemptNo),
+      attemptNo,
       artifactId,
       summary: parseArtifactSummary(artifact)
     });
@@ -3224,43 +3312,71 @@ async function getDiscussionOutputRows(events: AgentEventRecord[]) {
   return rows;
 }
 
-export async function mainAgentSynthesizeDiscussion(jobId: string) {
+async function mainAgentSynthesizeRoutingOutputs(
+  jobId: string,
+  routingMode: SynthesisRoutingMode
+) {
   const job = await getJob(jobId);
   if (!job) {
     throw new Error(`Job not found: ${jobId}`);
   }
 
   const [stages, events] = await Promise.all([getStagesForJob(jobId), getAgentEventsForJob(jobId)]);
-  const discussionRows = await getDiscussionOutputRows(events);
-  const roundEvents = events.filter((event) => event.eventType === "discussion.round_completed");
+  const outputRows = await getRoutingOutputRows(events, routingMode);
+  const roundCount = completedDiscussionRoundNumbers(events).length;
   const workdir = job.workdir ?? path.resolve(process.env.JOB_DATA_DIR ?? "data/jobs", jobId);
   const finalDir = path.join(workdir, "final");
   await mkdir(finalDir, { recursive: true });
 
-  const discussionThread = discussionRows.map((row) =>
+  const stageIndexById = new Map(stages.map((stage) => [stage.id, stage.stageIndex]));
+  const orderedRows = routingMode === "classic_master_slave"
+    ? [...outputRows].sort((left, right) => {
+        const stageOrder = (stageIndexById.get(left.stageId ?? "") ?? Number.MAX_SAFE_INTEGER) -
+          (stageIndexById.get(right.stageId ?? "") ?? Number.MAX_SAFE_INTEGER);
+        return stageOrder || left.seq - right.seq;
+      })
+    : outputRows;
+  const outputThread = orderedRows.map((row) =>
     [
       `Seq: ${row.seq}`,
-      `Round: ${row.attemptNo ?? "unknown"}`,
+      routingMode === "master_slave_discussion"
+        ? `Round: ${row.attemptNo ?? "unknown"}`
+        : "Worker mode: independent parallel contribution",
       `Agent: ${row.agentId}`,
       `Stage: ${row.stageId ?? "unknown"}`,
       `Artifact: ${row.artifactId ?? "missing"}`,
       `Summary: ${row.summary || "No summary recorded."}`
     ].join("\n")
   );
+  const isDiscussion = routingMode === "master_slave_discussion";
+  const expectedOutputCount = stages.length * (isDiscussion ? roundCount : 1);
+  if (orderedRows.length < expectedOutputCount) {
+    throw new Error(
+      `routing_synthesis_ledger_incomplete:${routingMode}:${orderedRows.length}/${expectedOutputCount}`
+    );
+  }
   const prompt = [
-    "You are main-agent. Synthesize the completed master_slave_discussion thread into the final answer.",
-    "Use the agent event ledger as the source of truth. Preserve useful disagreements, final consensus, risks, and next steps.",
+    isDiscussion
+      ? "You are main-agent. Synthesize the completed master_slave_discussion thread into the final answer."
+      : "You are main-agent. Synthesize every completed classic_master_slave worker output into one final answer.",
+    isDiscussion
+      ? "Use the ordered agent event ledger as the source of truth. Preserve useful disagreements, final consensus, risks, and next steps."
+      : "Treat workers as independent parallel contributors. Combine every useful result, reconcile conflicts, and do not silently omit a worker or required deliverable.",
     "",
     `Job: ${jobId}`,
     `Original user request: ${job.rawPrompt}`,
     `Stages: ${stages.map((stage) => `${stage.stageIndex}:${stage.agentId}`).join(", ")}`,
-    `Completed discussion rounds: ${roundEvents.length}`,
+    isDiscussion
+      ? `Completed discussion rounds: ${roundCount}`
+      : `Completed parallel workers: ${orderedRows.length}`,
     "",
-    "Discussion thread:",
-    discussionThread.join("\n\n---\n\n")
+    isDiscussion ? "Discussion thread:" : "Parallel worker outputs:",
+    outputThread.join("\n\n---\n\n")
   ].join("\n");
 
-  const sessionId = `${job.sessionId}:main-agent:discussion-synthesis`;
+  const sessionId = isDiscussion
+    ? `${job.sessionId}:main-agent:discussion-synthesis`
+    : `${job.sessionId}:main-agent:classic-synthesis`;
   const openClawResult = await runOpenClawAgentIdempotent({
     jobId,
     stageId: null,
@@ -3276,49 +3392,57 @@ export async function mainAgentSynthesizeDiscussion(jobId: string) {
   const synthesisBody =
     openClawResult?.text ??
     [
-      `# ${jobId} Discussion Synthesis`,
+      `# ${jobId} ${isDiscussion ? "Discussion" : "Parallel Worker"} Synthesis`,
       "",
-      "main-agent synthesized the master_slave_discussion ledger.",
+      `main-agent synthesized the ${routingMode} ledger.`,
       "",
-      `Rounds completed: ${roundEvents.length}`,
-      `Stage outputs synthesized: ${discussionRows.length}`,
+      isDiscussion
+        ? `Rounds completed: ${roundCount}`
+        : `Parallel workers completed: ${orderedRows.length}`,
+      `Stage outputs synthesized: ${orderedRows.length}`,
       "",
-      "Discussion ledger summary:",
-      ...discussionRows.map(
+      `${isDiscussion ? "Discussion" : "Worker"} ledger summary:`,
+      ...orderedRows.map(
         (row) =>
-          `- round ${row.attemptNo ?? "?"} ${row.agentId} (${row.artifactId ?? "no artifact"}): ${
+          `- ${isDiscussion ? `round ${row.attemptNo ?? "?"} ` : ""}${row.agentId} (${row.artifactId ?? "no artifact"}): ${
             row.summary || "No summary recorded."
           }`
       )
     ].join("\n");
-  const synthesisPath = path.join(finalDir, "discussion-synthesis.md");
+  const synthesisPath = path.join(
+    finalDir,
+    isDiscussion ? "discussion-synthesis.md" : "classic-synthesis.md"
+  );
 
   await writeFile(synthesisPath, synthesisBody, "utf8");
   const artifact = await createArtifact({
-    id: `${jobId}-ART-DISCUSSION-SYNTHESIS`,
+    id: isDiscussion
+      ? `${jobId}-ART-DISCUSSION-SYNTHESIS`
+      : `${jobId}-ART-CLASSIC-SYNTHESIS`,
     jobId,
-    type: "discussion_synthesis",
-    title: "main-agent discussion synthesis",
+    type: isDiscussion ? "discussion_synthesis" : "routing_synthesis",
+    title: `main-agent ${isDiscussion ? "discussion" : "classic worker"} synthesis`,
     content: synthesisBody,
     uri: synthesisPath,
     metadata: {
-      routingMode: "master_slave_discussion",
-      roundCount: roundEvents.length,
+      routingMode,
+      roundCount: isDiscussion ? roundCount : 0,
       stageCount: stages.length,
-      outputCount: discussionRows.length,
-      sourceEventSeqs: discussionRows.map((row) => row.seq),
+      outputCount: orderedRows.length,
+      sourceEventSeqs: orderedRows.map((row) => row.seq),
       agentSessionId: sessionId
     }
   });
 
   await appendJobEvent(
     jobId,
-    "discussion.synthesized",
+    isDiscussion ? "discussion.synthesized" : "classic.synthesized",
     {
       artifactId: artifact.id,
       synthesisPath,
-      roundCount: roundEvents.length,
-      outputCount: discussionRows.length
+      routingMode,
+      roundCount: isDiscussion ? roundCount : 0,
+      outputCount: orderedRows.length
     },
     {
       actor: "main-agent",
@@ -3329,9 +3453,17 @@ export async function mainAgentSynthesizeDiscussion(jobId: string) {
   return {
     artifactId: artifact.id,
     synthesisPath,
-    roundCount: roundEvents.length,
-    outputCount: discussionRows.length
+    roundCount: isDiscussion ? roundCount : 0,
+    outputCount: orderedRows.length
   };
+}
+
+export async function mainAgentSynthesizeDiscussion(jobId: string) {
+  return mainAgentSynthesizeRoutingOutputs(jobId, "master_slave_discussion");
+}
+
+export async function mainAgentSynthesizeClassic(jobId: string) {
+  return mainAgentSynthesizeRoutingOutputs(jobId, "classic_master_slave");
 }
 
 export async function requestStageFix(input: {
@@ -4190,10 +4322,12 @@ export async function finalizeJob(jobId: string) {
     }
   }
   const finalPath = path.join(workdir, "final", "final-answer.md");
-  const discussionSynthesis =
+  const routingSynthesis =
     job.routingMode === "master_slave_discussion"
       ? await getArtifactOrNull(`${jobId}-ART-DISCUSSION-SYNTHESIS`)
-      : null;
+      : job.routingMode === "classic_master_slave"
+        ? await getArtifactOrNull(`${jobId}-ART-CLASSIC-SYNTHESIS`)
+        : null;
   const executionMode = isOpenClawRealMode()
     ? `real provider-backed execution (${resolveOpenClawAgentRunner({ runner: getOpenClawAgentRunner() })})`
     : "mock execution";
@@ -4225,9 +4359,9 @@ export async function finalizeJob(jobId: string) {
       `- ${delivery.requestedFileName}: ${delivery.deliveredPath ?? delivery.status}`
     ),
     "",
-    discussionSynthesis
-      ? ["Main-agent discussion synthesis:", "", discussionSynthesis.content ?? ""].join("\n")
-      : "No dedicated discussion synthesis artifact was required for this routing mode.",
+    routingSynthesis
+      ? ["Main-agent routing synthesis:", "", routingSynthesis.content ?? ""].join("\n")
+      : "No dedicated routing synthesis artifact was required for this routing mode.",
     "",
     "Final owner: main-agent summarized the completed stage outputs.",
     ""

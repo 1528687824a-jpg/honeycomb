@@ -3,9 +3,19 @@ import { test } from "node:test";
 import {
   buildDeterministicPanelResult,
   buildDeterministicTaskPlan,
+  panelOrchestrationJsonInstruction,
   parsePanelOrchestrationOutput,
   parseStoredTaskOrchestrationPlan
 } from "../packages/shared/src/orchestration-contract";
+
+test("panel planning instructions define all four routing behaviors", () => {
+  const instruction = panelOrchestrationJsonInstruction();
+  assert.match(instruction, /supervisor_pipeline is for quality-sensitive dependent work/);
+  assert.match(instruction, /pipeline is for a clear strict sequence/);
+  assert.match(instruction, /classic_master_slave is for independent work that should run in parallel/);
+  assert.match(instruction, /master_slave_discussion is for ambiguity/);
+  assert.match(instruction, /Do not reuse a previous mode mechanically/);
+});
 
 test("tea poster fallback selects image only and preserves delivery requirements", () => {
   const plan = buildDeterministicTaskPlan({

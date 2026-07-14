@@ -24,7 +24,7 @@ export function minimumModelCallsForRoutingMode(input: {
     case "supervisor_pipeline":
       return executableStageCount * 2;
     case "classic_master_slave":
-      return executableStageCount + (input.classicFinalGateEnabled ? 1 : 0);
+      return executableStageCount + 1 + (input.classicFinalGateEnabled ? 1 : 0);
     case "master_slave_discussion":
       return executableStageCount * discussionRounds + 2;
     default:

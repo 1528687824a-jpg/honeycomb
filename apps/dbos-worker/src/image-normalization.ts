@@ -311,7 +311,17 @@ export async function inspectRasterImageFile(
   }
   const handle = await open(filePath, "r");
   try {
-    return inspectRasterBytes(await handle.readFile(), fileStat.size, limits);
+    try {
+      return await inspectRasterBytes(await handle.readFile(), fileStat.size, limits);
+    } catch (error) {
+      if (error instanceof ImageNormalizationError) {
+        throw new ImageNormalizationError(error.code, {
+          ...error.details,
+          filePath
+        });
+      }
+      throw error;
+    }
   } finally {
     await handle.close();
   }
@@ -393,7 +403,18 @@ export async function normalizeImageArtifact(input: {
     workdir: input.workdir,
     limits
   });
-  const sourceInspection = await inspectRasterBytes(source.bytes, source.sizeBytes, limits);
+  let sourceInspection: RasterImageInspection;
+  try {
+    sourceInspection = await inspectRasterBytes(source.bytes, source.sizeBytes, limits);
+  } catch (error) {
+    if (error instanceof ImageNormalizationError) {
+      throw new ImageNormalizationError(error.code, {
+        ...error.details,
+        filePath: source.canonicalSource
+      });
+    }
+    throw error;
+  }
   const requestedWidth = validateRequestedDimension(input.requestedWidth, limits, "width");
   const requestedHeight = validateRequestedDimension(input.requestedHeight, limits, "height");
   const format = resolveNormalizedImageFormat(input.requestedFormat, sourceInspection.format);

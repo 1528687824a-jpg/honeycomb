@@ -50,7 +50,11 @@ export function taskAgentRequirements(plan: TaskOrchestrationPlan): AgentRequire
     });
   }
 
-  if (plan.routingMode === "master_slave_discussion" && !requirements.has("main-agent")) {
+  if (
+    (plan.routingMode === "classic_master_slave" ||
+      plan.routingMode === "master_slave_discussion") &&
+    !requirements.has("main-agent")
+  ) {
     requirements.set("main-agent", {
       agentId: "main-agent",
       purpose: "synthesis",

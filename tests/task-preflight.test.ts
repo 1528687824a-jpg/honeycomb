@@ -72,6 +72,17 @@ test("task preflight derives production and quality-gate requirements", () => {
     ),
     true
   );
+
+  const classicPlan = {
+    ...posterPlan,
+    routingMode: "classic_master_slave" as const
+  };
+  assert.equal(
+    taskAgentRequirements(classicPlan).some(
+      (requirement) => requirement.agentId === "main-agent" && requirement.purpose === "synthesis"
+    ),
+    true
+  );
 });
 
 test("real preflight accepts configured image and test agents", async () => {

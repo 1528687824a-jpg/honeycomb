@@ -5,8 +5,14 @@ import type {
   StageRecord
 } from "../../../packages/shared/src/types";
 import { WORKFLOW_NAME } from "../../../packages/shared/src/constants";
+import { buildModelCallIdempotencyKey } from "../../../packages/shared/src/model-call-key";
 import * as activities from "./activities";
 import { shouldRetryModelCallStep } from "./model-call-retry";
+import {
+  executeRoutingMode,
+  type ModelCallActionType,
+  type RoutingExecutionActions
+} from "./routing-execution";
 import { maybeCrashOnce } from "./test-crash";
 
 const retryingStepConfig = {
@@ -83,6 +89,10 @@ const mainAgentSynthesizeDiscussion = DBOS.registerStep(activities.mainAgentSynt
   name: "mainAgentSynthesizeDiscussion",
   ...modelCallingStepConfig
 });
+const mainAgentSynthesizeClassic = DBOS.registerStep(activities.mainAgentSynthesizeClassic, {
+  name: "mainAgentSynthesizeClassic",
+  ...modelCallingStepConfig
+});
 const passStageAndHandoff = DBOS.registerStep(activities.passStageAndHandoff, {
   name: "passStageAndHandoff",
   ...retryingStepConfig
@@ -131,224 +141,34 @@ function crashAfterStageAgent(jobId: string, stage: StageRecord, attemptNo: numb
 
 async function hasModelCallBudget(
   jobId: string,
-  nextActionType: "stage-agent" | "test-agent" | "main-agent-synthesis" | "final-test-agent",
-  nextAgentId: string
+  nextActionType: ModelCallActionType,
+  nextAgentId: string,
+  requiredCalls?: number,
+  modelCallKeys?: string[]
 ) {
   const budget = await enforceModelCallBudget({
     jobId,
     nextActionType,
-    nextAgentId
+    nextAgentId,
+    requiredCalls,
+    modelCallKeys
   });
   return budget.allowed;
 }
 
-async function runSupervisorPipeline(jobId: string, stages: StageRecord[]) {
-  for (const stage of stages) {
-    if (await isJobCancelled(jobId)) {
-      return "cancelled";
-    }
-
-    let passed = false;
-
-    for (let attemptNo = 1; attemptNo <= stage.maxRetries; attemptNo++) {
-      if (await isJobCancelled(jobId)) {
-        return "cancelled";
-      }
-
-      if (!(await hasModelCallBudget(jobId, "stage-agent", stage.agentId))) {
-        return "waiting_for_human";
-      }
-
-      const run = await runStageAgent({
-        jobId,
-        stageId: stage.id,
-        attemptNo,
-        routingMode: "supervisor_pipeline",
-        handoffTargetAgentId: "test-agent",
-        outputMessageType: "stage_output_to_test"
-      });
-      crashAfterStageAgent(jobId, stage, attemptNo);
-
-      if (await isJobCancelled(jobId)) {
-        return "cancelled";
-      }
-
-      if (!(await hasModelCallBudget(jobId, "test-agent", "test-agent"))) {
-        return "waiting_for_human";
-      }
-
-      const review = await runTestAgent({
-        jobId,
-        stageId: stage.id,
-        attemptId: run.attemptId,
-        attemptNo,
-        outputArtifactId: run.outputArtifactId
-      });
-
-      if (review.verdict === "PASS") {
-        await passStageAndHandoff({
-          jobId,
-          stageId: stage.id,
-          outputArtifactId: run.outputArtifactId,
-          reportArtifactId: review.reportArtifactId
-        });
-        passed = true;
-        break;
-      }
-
-      if (review.verdict === "NEEDS_HUMAN") {
-        await markJobWaitingForHuman(jobId, `Stage ${stage.id} needs human review`);
-        return "waiting_for_human";
-      }
-
-      if (attemptNo < stage.maxRetries) {
-        await requestStageFix({
-          jobId,
-          stageId: stage.id,
-          attemptNo,
-          reportArtifactId: review.reportArtifactId
-        });
-      } else {
-        await stopAfterConsecutiveFailures({
-          jobId,
-          stageId: stage.id,
-          attemptNo,
-          reportArtifactId: review.reportArtifactId
-        });
-      }
-    }
-
-    if (!passed) {
-      return "waiting_for_human";
-    }
-  }
-
-  return "succeeded";
-}
-
-async function runSequentialPipeline(jobId: string, stages: StageRecord[]) {
-  for (const [index, stage] of stages.entries()) {
-    if (await isJobCancelled(jobId)) {
-      return "cancelled";
-    }
-
-    const nextStage = stages[index + 1] ?? null;
-    if (!(await hasModelCallBudget(jobId, "stage-agent", stage.agentId))) {
-      return "waiting_for_human";
-    }
-
-    const run = await runStageAgent({
-      jobId,
-      stageId: stage.id,
-      attemptNo: 1,
-      routingMode: "pipeline",
-      handoffTargetAgentId: nextStage?.agentId ?? "main-agent",
-      outputMessageType: nextStage ? "pipeline_handoff" : "final_output"
-    });
-    crashAfterStageAgent(jobId, stage, 1);
-
-    await completeStageWithoutReview({
-      jobId,
-      stageId: stage.id,
-      outputArtifactId: run.outputArtifactId,
-      routingMode: "pipeline",
-      linkNextStage: true
-    });
-  }
-
-  return "succeeded";
-}
-
-async function runClassicMasterSlave(jobId: string, stages: StageRecord[]) {
-  for (const stage of stages) {
-    if (await isJobCancelled(jobId)) {
-      return "cancelled";
-    }
-
-    if (!(await hasModelCallBudget(jobId, "stage-agent", stage.agentId))) {
-      return "waiting_for_human";
-    }
-
-    const run = await runStageAgent({
-      jobId,
-      stageId: stage.id,
-      attemptNo: 1,
-      routingMode: "classic_master_slave",
-      handoffTargetAgentId: "main-agent",
-      outputMessageType: "main_dispatch"
-    });
-    crashAfterStageAgent(jobId, stage, 1);
-
-    await completeStageWithoutReview({
-      jobId,
-      stageId: stage.id,
-      outputArtifactId: run.outputArtifactId,
-      routingMode: "classic_master_slave"
-    });
-  }
-
-  return "succeeded";
-}
-
-async function runMasterSlaveDiscussion(jobId: string, stages: StageRecord[], discussionRounds: number) {
-  for (let roundNo = 1; roundNo <= discussionRounds; roundNo++) {
-    if (await isJobCancelled(jobId)) {
-      return "cancelled";
-    }
-
-    for (const [index, stage] of stages.entries()) {
-      if (await isJobCancelled(jobId)) {
-        return "cancelled";
-      }
-
-      const nextStage = stages.length > 1 ? stages[(index + 1) % stages.length] : null;
-      if (!(await hasModelCallBudget(jobId, "stage-agent", stage.agentId))) {
-        return "waiting_for_human";
-      }
-
-      const run = await runStageAgent({
-        jobId,
-        stageId: stage.id,
-        attemptNo: roundNo,
-        routingMode: "master_slave_discussion",
-        handoffTargetAgentId: nextStage?.agentId ?? "main-agent",
-        outputMessageType: "discussion_handoff"
-      });
-      crashAfterStageAgent(jobId, stage, roundNo);
-
-      await completeStageWithoutReview({
-        jobId,
-        stageId: stage.id,
-        outputArtifactId: run.outputArtifactId,
-        routingMode: "master_slave_discussion",
-        roundNo
-      });
-    }
-
-    await recordDiscussionRound({
-      jobId,
-      roundNo,
-      stageIds: stages.map((stage) => stage.id)
-    });
-  }
-
-  return "succeeded";
-}
-
-async function runRoutingMode(jobId: string, routingMode: RoutingMode, stages: StageRecord[]) {
-  switch (routingMode) {
-    case "supervisor_pipeline":
-      return runSupervisorPipeline(jobId, stages);
-    case "pipeline":
-      return runSequentialPipeline(jobId, stages);
-    case "classic_master_slave":
-      return runClassicMasterSlave(jobId, stages);
-    case "master_slave_discussion":
-      return runMasterSlaveDiscussion(jobId, stages, await getJobDiscussionRounds(jobId));
-    default:
-      throw new Error(`Unsupported routing mode: ${routingMode}`);
-  }
-}
+const routingExecutionActions: RoutingExecutionActions = {
+  isJobCancelled,
+  hasModelCallBudget,
+  runStageAgent,
+  afterStageAgent: crashAfterStageAgent,
+  runTestAgent,
+  passStageAndHandoff,
+  markJobWaitingForHuman,
+  requestStageFix,
+  stopAfterConsecutiveFailures,
+  completeStageWithoutReview,
+  recordDiscussionRound
+};
 
 function workflowErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
@@ -400,7 +220,16 @@ async function runJobPipelineWorkflow(input: JobWorkflowInput) {
     userRequestArtifactId: prepared.userRequestArtifactId
   });
   const routingMode = await getJobRoutingMode(input.jobId);
-  const status = await runRoutingMode(input.jobId, routingMode, stages);
+  const discussionRounds = routingMode === "master_slave_discussion"
+    ? await getJobDiscussionRounds(input.jobId)
+    : 1;
+  const status = await executeRoutingMode({
+    jobId: input.jobId,
+    routingMode,
+    stages,
+    discussionRounds,
+    actions: routingExecutionActions
+  });
 
   if (status === "waiting_for_human") {
     await ensureJobWaitingForHuman({
@@ -421,7 +250,10 @@ async function runJobPipelineWorkflow(input: JobWorkflowInput) {
   }
 
   let finalQualitySourceArtifactId: string | null = null;
-  if (routingMode === "master_slave_discussion") {
+  if (
+    routingMode === "classic_master_slave" ||
+    routingMode === "master_slave_discussion"
+  ) {
     if (await isJobCancelled(input.jobId)) {
       return {
         jobId: input.jobId,
@@ -429,7 +261,18 @@ async function runJobPipelineWorkflow(input: JobWorkflowInput) {
       };
     }
 
-    if (!(await hasModelCallBudget(input.jobId, "main-agent-synthesis", "main-agent"))) {
+    if (!(await hasModelCallBudget(
+      input.jobId,
+      "main-agent-synthesis",
+      "main-agent",
+      1,
+      [buildModelCallIdempotencyKey({
+        jobId: input.jobId,
+        stageId: null,
+        attemptNo: 1,
+        actionType: "main-agent-synthesis"
+      })]
+    ))) {
       await ensureJobWaitingForHuman({
         jobId: input.jobId,
         reason: "Model-call budget exhausted before main-agent-synthesis"
@@ -440,7 +283,9 @@ async function runJobPipelineWorkflow(input: JobWorkflowInput) {
       };
     }
 
-    const synthesis = await mainAgentSynthesizeDiscussion(input.jobId);
+    const synthesis = routingMode === "master_slave_discussion"
+      ? await mainAgentSynthesizeDiscussion(input.jobId)
+      : await mainAgentSynthesizeClassic(input.jobId);
     finalQualitySourceArtifactId = synthesis.artifactId;
   }
 
@@ -460,7 +305,18 @@ async function runJobPipelineWorkflow(input: JobWorkflowInput) {
       finalQualitySourceArtifactId = await getLatestStageOutputArtifactId(input.jobId);
     }
 
-    if (!(await hasModelCallBudget(input.jobId, "final-test-agent", "test-agent"))) {
+    if (!(await hasModelCallBudget(
+      input.jobId,
+      "final-test-agent",
+      "test-agent",
+      1,
+      [buildModelCallIdempotencyKey({
+        jobId: input.jobId,
+        stageId: null,
+        attemptNo: 1,
+        actionType: "final-test-agent"
+      })]
+    ))) {
       await ensureJobWaitingForHuman({
         jobId: input.jobId,
         reason: "Model-call budget exhausted before final-test-agent"
