@@ -773,6 +773,24 @@ repair action. It never repeats an expired provider request. Ordinary calls are
 paused for human reconciliation; persisted provider-direct video tasks retain
 their task ID and can safely resume polling.
 
+## Task execution state
+
+The task page can read one authoritative backend projection instead of joining
+timeline text and separate runtime endpoints:
+
+```text
+GET /jobs/:jobId/execution-state
+```
+
+It returns stage progress, selected/current Agent state, plan items, queue and
+retry waits, safe model-call state, pending approvals, artifact/delivery
+counts, blockers, and stable recommended-action IDs. See
+`docs/job-execution-state.md`. With PostgreSQL running, verify the aggregate:
+
+```powershell
+npm run smoke:job-execution-state
+```
+
 Admin API unstick path:
 
 ```text

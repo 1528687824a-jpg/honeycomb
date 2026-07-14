@@ -411,15 +411,16 @@ export async function consumeToolApproval(input: {
   };
 }
 
-export async function expirePendingToolApprovals(now = new Date()): Promise<number> {
+export async function expirePendingToolApprovals(now = new Date(), jobId?: string): Promise<number> {
   const result = await pool.query(
     `update agent.tool_approval_requests
      set status = 'expired',
          updated_at = now()
      where status in ('pending', 'approved')
        and expires_at is not null
-       and expires_at <= $1::timestamptz`,
-    [now.toISOString()]
+       and expires_at <= $1::timestamptz
+       and ($2::text is null or job_id = $2)`,
+    [now.toISOString(), jobId ?? null]
   );
 
   return result.rowCount ?? 0;

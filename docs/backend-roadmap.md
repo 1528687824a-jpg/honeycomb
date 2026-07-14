@@ -741,6 +741,11 @@ slice is Stage 4: real behavioral regression for all four routing modes.
       The bounded recovery scan and diagnostics repair action preserve resumable
       provider video task IDs, while ambiguous ordinary calls pause for explicit
       reconciliation instead of being sent again.
+      The task page also has an authoritative aggregate at
+      `GET /jobs/:jobId/execution-state`: stage/plan progress, selected Agent
+      state, queue/retry/model-call activity, approvals, artifact delivery,
+      spend, blockers, and recommended actions are projected from durable
+      records instead of inferred from timeline wording.
 
 ## Current Next Step: Staged Work Plan (2026-06-12)
 

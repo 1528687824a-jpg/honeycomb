@@ -14,6 +14,9 @@ import type {
   ModelCallReconciliationState,
   ModelCallRequestReference
 } from "../../../packages/shared/src/model-reconciliation";
+import type { JobExecutionState } from "../../../packages/shared/src/job-execution-state";
+
+export type { JobExecutionState } from "../../../packages/shared/src/job-execution-state";
 
 const viteEnv = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env ?? {};
 const API_BASE = viteEnv.VITE_ORCHESTRATOR_URL ?? "http://127.0.0.1:3000";
@@ -1882,6 +1885,10 @@ export async function personalizePanelAgentPrompts(input: PanelAgentPromptPerson
 
 export async function getJob(jobId: string) {
   return request<JobRecord>(`/jobs/${jobId}`);
+}
+
+export async function getJobExecutionState(jobId: string) {
+  return request<JobExecutionState>(`/jobs/${encodeURIComponent(jobId)}/execution-state`);
 }
 
 export async function getJobTimeline(jobId: string, limit = 500, since?: string, cursor?: string) {

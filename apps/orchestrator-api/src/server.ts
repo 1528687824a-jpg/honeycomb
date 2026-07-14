@@ -23,6 +23,7 @@ import {
   setJobExecutionPreflight,
   setJobStatus
 } from "../../../packages/db/src/jobs";
+import { getJobExecutionState } from "../../../packages/db/src/job-execution-state";
 import {
   ConversationRecordConflictError,
   ConversationRecordDeletedError,
@@ -5642,6 +5643,19 @@ async function main() {
           artifactDeliveryView(job.id, delivery, canonicalFileById.get(delivery.artifactFileId) ?? null)
         )
       });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/jobs/:jobId/execution-state", async (request, response, next) => {
+    try {
+      const state = await getJobExecutionState(routeParameter(request.params.jobId));
+      if (!state) {
+        response.status(404).json({ error: "job_not_found" });
+        return;
+      }
+      response.json(state);
     } catch (error) {
       next(error);
     }
