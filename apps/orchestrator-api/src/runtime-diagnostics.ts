@@ -2,6 +2,7 @@ import { listToolApprovals } from "../../../packages/db/src/approvals";
 import { listAgentConfigs, listModelProviders } from "../../../packages/db/src/config-registry";
 import { getJobHeartbeatSummary } from "../../../packages/db/src/jobs";
 import { getModelCallLeaseSummary } from "../../../packages/db/src/model-call-leases";
+import { getRuntimeMaintenanceOverview } from "../../../packages/db/src/runtime-maintenance";
 import { pool } from "../../../packages/db/src/pool";
 import { listDueScheduledTasks, listScheduledTasks } from "../../../packages/db/src/schedules";
 import { listMcpServers, listSkills } from "../../../packages/db/src/tool-registry";
@@ -17,6 +18,7 @@ import {
   normalizeOpenClawAgentRunner,
   resolveOpenClawAgentRunner
 } from "../../../packages/shared/src/openclaw-runner";
+import { resolveRuntimeMaintenanceConfig } from "../../../packages/shared/src/runtime-maintenance";
 
 export type RuntimeDiagnosticStatus = "ok" | "warning" | "error" | "unknown";
 
@@ -196,6 +198,52 @@ export async function getRuntimeDiagnostics(input: {
   });
   for (const action of hostRuntime.docker.nextActions) {
     pushAction(recommendedActions, action);
+  }
+
+  try {
+    const maintenance = await getRuntimeMaintenanceOverview(resolveRuntimeMaintenanceConfig());
+    const maintenanceStatus: RuntimeDiagnosticStatus = maintenance.health === "failed"
+      ? "error"
+      : ["disabled", "degraded", "stale"].includes(maintenance.health)
+        ? "warning"
+        : maintenance.health === "never_run"
+          ? "unknown"
+          : "ok";
+    const maintenanceSummary = maintenance.health === "healthy"
+      ? "Automatic runtime maintenance is healthy."
+      : maintenance.health === "running"
+        ? "Automatic runtime maintenance is running now."
+        : maintenance.health === "disabled"
+          ? "Automatic runtime maintenance is disabled."
+          : maintenance.health === "never_run"
+            ? "Automatic runtime maintenance has not completed its first run."
+            : maintenance.health === "degraded"
+              ? "Automatic runtime maintenance completed with partial failures."
+              : maintenance.health === "failed"
+                ? "Automatic runtime maintenance failed."
+                : "Automatic runtime maintenance has not completed within its expected interval.";
+    checks.push({
+      id: "runtime_maintenance",
+      title: "Automatic runtime maintenance",
+      status: maintenanceStatus,
+      summary: maintenanceSummary,
+      details: maintenance
+    });
+    if (maintenance.health === "disabled") {
+      pushAction(recommendedActions, "Enable automatic runtime maintenance unless another managed process performs these scans.");
+    } else if (["degraded", "failed", "stale"].includes(maintenance.health)) {
+      pushAction(recommendedActions, "Review the maintenance error and run one manual maintenance cycle after repairing the cause.");
+    }
+  } catch (error) {
+    checks.push({
+      id: "runtime_maintenance",
+      title: "Automatic runtime maintenance",
+      status: "unknown",
+      summary: "Automatic runtime maintenance state could not be read.",
+      details: {
+        error: error instanceof Error ? error.message : String(error)
+      }
+    });
   }
 
   try {

@@ -15,8 +15,16 @@ import type {
   ModelCallRequestReference
 } from "../../../packages/shared/src/model-reconciliation";
 import type { JobExecutionState } from "../../../packages/shared/src/job-execution-state";
+import type {
+  RuntimeMaintenanceAttempt,
+  RuntimeMaintenanceOverview
+} from "../../../packages/shared/src/runtime-maintenance";
 
 export type { JobExecutionState } from "../../../packages/shared/src/job-execution-state";
+export type {
+  RuntimeMaintenanceAttempt,
+  RuntimeMaintenanceOverview
+} from "../../../packages/shared/src/runtime-maintenance";
 
 const viteEnv = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env ?? {};
 const API_BASE = viteEnv.VITE_ORCHESTRATOR_URL ?? "http://127.0.0.1:3000";
@@ -2062,6 +2070,17 @@ export async function scanStalledJobHeartbeats(input: {
   return request<JobHeartbeatScanResult>("/runtime/heartbeats/scan", {
     method: "POST",
     body: JSON.stringify(input)
+  });
+}
+
+export async function getRuntimeMaintenanceOverview() {
+  return request<RuntimeMaintenanceOverview>("/runtime/maintenance");
+}
+
+export async function runRuntimeMaintenanceNow() {
+  return request<RuntimeMaintenanceAttempt>("/runtime/maintenance/run", {
+    method: "POST",
+    body: JSON.stringify({})
   });
 }
 

@@ -74,6 +74,8 @@ $diagnostics = Invoke-RestMethod -Uri "$apiBaseUrl/runtime/diagnostics" -Headers
 $providerCheck = @($diagnostics.checks | Where-Object { $_.id -eq "providers" })[0]
 $e2eCheck = @($diagnostics.checks | Where-Object { $_.id -eq "real_provider_e2e" })[0]
 $leaseCheck = @($diagnostics.checks | Where-Object { $_.id -eq "model_call_leases" })[0]
+$maintenanceCheck = @($diagnostics.checks | Where-Object { $_.id -eq "runtime_maintenance" })[0]
+$maintenance = Invoke-RestMethod -Uri "$apiBaseUrl/runtime/maintenance" -Headers $apiHeaders
 
 if ($null -eq $providerCheck) {
   throw "providers diagnostic check missing"
@@ -84,6 +86,11 @@ if ($null -eq $e2eCheck) {
 if ($null -eq $leaseCheck) {
   throw "model_call_leases diagnostic check missing"
 }
+if ($null -eq $maintenanceCheck) {
+  throw "runtime_maintenance diagnostic check missing"
+}
+Assert-Equal -Actual $maintenance.version -Expected "honeycomb.runtime-maintenance.v1" -Message "runtime maintenance version"
+Assert-True -Condition ($maintenance.health -in @("healthy", "running")) -Message "automatic runtime maintenance should be active"
 
 $missing = @($providerCheck.details.missingSecrets | Where-Object { $_.id -eq $providerId })
 Assert-Equal -Actual $missing.Count -Expected 1 -Message "missing secret provider should be reported"
@@ -98,6 +105,7 @@ Assert-True -Condition ($diagnostics.recommendedActions -contains "Verify a live
   e2eCheckStatus = $e2eCheck.status
   checks = @(
     "runtime_diagnostics_reconciles_provider_secret_status",
+    "automatic_runtime_maintenance_health_present",
     "model_call_lease_diagnostic_present",
     "real_provider_e2e_readiness_check_present",
     "real_provider_e2e_recommends_live_verified_provider"

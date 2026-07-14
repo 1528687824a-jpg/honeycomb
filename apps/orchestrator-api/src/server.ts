@@ -65,6 +65,7 @@ import {
   getModelCallLeaseSummary,
   scanExpiredModelCallLeases
 } from "../../../packages/db/src/model-call-leases";
+import { getRuntimeMaintenanceOverview } from "../../../packages/db/src/runtime-maintenance";
 import {
   claimModelCallSpendDispatch,
   getJobSpendBudget,
@@ -271,6 +272,8 @@ import {
   saveProviderApiKey
 } from "../../../packages/runtime/src/local-secrets";
 import { preflightTaskExecution } from "../../../packages/runtime/src/task-preflight";
+import { startRuntimeMaintenanceRunner } from "../../../packages/runtime/src/runtime-maintenance-runner";
+import { resolveRuntimeMaintenanceConfig } from "../../../packages/shared/src/runtime-maintenance";
 import {
   verifyOpenAiCompatibleImageGenerationProvider,
   verifyOpenAiCompatibleProvider,
@@ -2191,6 +2194,11 @@ async function main() {
   const port = Number(process.env.ORCHESTRATOR_PORT ?? 3000);
   const host = process.env.ORCHESTRATOR_HOST?.trim() || "127.0.0.1";
   const corsOrigins = getCorsOrigins();
+  const maintenanceRunner = startRuntimeMaintenanceRunner({
+    instanceKind: "orchestrator-api",
+    config: resolveRuntimeMaintenanceConfig(),
+    runImmediately: true
+  });
 
   app.use((request, response, next) => {
     const origin = request.header("origin");
@@ -2955,6 +2963,27 @@ async function main() {
     try {
       const input = jobHeartbeatScanSchema.parse(request.body ?? {});
       response.json(await scanStalledJobHeartbeats(input));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/runtime/maintenance", async (_request, response, next) => {
+    try {
+      response.json(await getRuntimeMaintenanceOverview(maintenanceRunner.config));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/runtime/maintenance/run", async (_request, response, next) => {
+    try {
+      const result = await maintenanceRunner.triggerNow("manual", true);
+      if (!result) {
+        response.status(503).json({ error: "runtime_maintenance_stopping" });
+        return;
+      }
+      response.json(result);
     } catch (error) {
       next(error);
     }
@@ -6164,11 +6193,13 @@ async function main() {
     }, 10_000);
     forceExitTimer.unref();
 
+    const maintenanceStop = maintenanceRunner.stop();
     closeAllMcpSessions();
     httpServer.close(() => {
-      void closePool()
+      void maintenanceStop
+        .then(() => closePool())
         .catch((error) => {
-          console.error("Failed to close database pool", error);
+          console.error("Failed to stop runtime maintenance or close database pool", error);
         })
         .finally(() => {
           process.exit(0);

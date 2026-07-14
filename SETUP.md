@@ -791,6 +791,27 @@ counts, blockers, and stable recommended-action IDs. See
 npm run smoke:job-execution-state
 ```
 
+## Automatic runtime maintenance
+
+The orchestrator API and DBOS worker both start a bounded recovery runner. A
+PostgreSQL advisory lock and persisted next-run time ensure that only one
+process scans expired model calls and stale job heartbeats per interval. The
+runner stores its last result and error for diagnostics and stops cleanly before
+the database pool closes.
+
+```text
+GET  /runtime/maintenance
+POST /runtime/maintenance/run
+```
+
+Defaults and operating details are in `docs/runtime-maintenance.md`. With
+PostgreSQL running, verify ownership and persistence without starting external
+providers:
+
+```powershell
+npm run smoke:runtime-maintenance
+```
+
 Admin API unstick path:
 
 ```text

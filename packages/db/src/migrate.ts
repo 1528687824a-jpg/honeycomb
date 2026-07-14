@@ -576,6 +576,22 @@ const statements = [
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now()
   )`,
+  `create table if not exists agent.runtime_maintenance_state (
+    maintenance_id text primary key,
+    status text not null default 'never_run',
+    owner_id text,
+    run_id text,
+    trigger text,
+    last_started_at timestamptz,
+    last_completed_at timestamptz,
+    last_succeeded_at timestamptz,
+    next_run_at timestamptz,
+    last_error text,
+    last_result jsonb not null default '{}',
+    total_runs bigint not null default 0,
+    consecutive_failures int not null default 0,
+    updated_at timestamptz not null default now()
+  )`,
   `alter table agent.artifacts
     drop constraint if exists artifacts_stage_id_fkey`,
   `alter table agent.artifacts
@@ -781,7 +797,9 @@ const statements = [
     where provider_id is not null`,
   `create index if not exists scheduled_tasks_agent_config_idx
     on agent.scheduled_tasks(agent_config_id)
-    where agent_config_id is not null`
+    where agent_config_id is not null`,
+  `create index if not exists runtime_maintenance_next_run_idx
+    on agent.runtime_maintenance_state(next_run_at)`
 ];
 
 export async function runMigrations() {

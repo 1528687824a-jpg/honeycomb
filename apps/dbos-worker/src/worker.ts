@@ -1,6 +1,8 @@
 import "dotenv/config";
 import { DBOS } from "@dbos-inc/dbos-sdk";
 import { closePool } from "../../../packages/db/src/pool";
+import { resolveRuntimeMaintenanceConfig } from "../../../packages/shared/src/runtime-maintenance";
+import { startRuntimeMaintenanceRunner } from "../../../packages/runtime/src/runtime-maintenance-runner";
 import { launchDbos } from "./dbos-runtime";
 import { startScheduleRunner } from "./scheduler";
 
@@ -21,6 +23,11 @@ function schedulerBatchSize() {
 async function main() {
   await launchDbos();
   console.log("DBOS worker launched for workflow recovery");
+  const maintenanceRunner = startRuntimeMaintenanceRunner({
+    instanceKind: "dbos-worker",
+    config: resolveRuntimeMaintenanceConfig(),
+    runImmediately: true
+  });
 
   let stopScheduler: (() => void) | null = null;
   if (schedulerEnabled()) {
@@ -49,9 +56,10 @@ async function main() {
     forceExitTimer.unref();
 
     stopScheduler?.();
-    void DBOS.shutdown()
+    void maintenanceRunner.stop()
+      .then(() => DBOS.shutdown())
       .catch((error) => {
-        console.error("DBOS shutdown failed", error);
+        console.error("Runtime maintenance or DBOS shutdown failed", error);
       })
       .then(() => closePool())
       .catch((error) => {
