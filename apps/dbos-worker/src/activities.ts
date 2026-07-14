@@ -89,7 +89,7 @@ import {
   assessRequiredMediaDeliverables,
   type GeneratedMediaDeliveryCandidate
 } from "../../../packages/shared/src/artifact-delivery-policy";
-import { inspectImageFile } from "../../../packages/shared/src/image-file-inspection";
+import { planRequiredImageNormalizations } from "../../../packages/shared/src/image-normalization-policy";
 import { inspectVideoFile } from "../../../packages/shared/src/video-file-inspection";
 import { resolveProviderVideoResumeReference } from "../../../packages/shared/src/provider-video-resume";
 import { preflightTaskExecution } from "../../../packages/runtime/src/task-preflight";
@@ -108,6 +108,11 @@ import {
   type OpenClawRunResult,
   type ProviderVideoTaskUpdate
 } from "./adapters/openclaw";
+import {
+  ImageNormalizationError,
+  inspectRasterImageFile,
+  normalizeImageArtifact
+} from "./image-normalization";
 import { loadClusterConfig, type LoadedClusterConfig } from "./config/cluster";
 import { deliverOutboundMessage } from "./egress/dispatcher";
 import {
@@ -2937,12 +2942,11 @@ async function mediaDeliveryCandidate(
       localAvailable = fileStat.isFile() && fileStat.size > 0;
       actualSize = fileStat.size;
       if (localAvailable && artifact.kind === "image") {
-        const bytes = await readFile(artifact.filePath);
-        const inspection = inspectImageFile(bytes);
-        detectedFormat = inspection?.format ?? null;
-        width = inspection?.width ?? null;
-        height = inspection?.height ?? null;
-        checksumSha256 = createHash("sha256").update(bytes).digest("hex");
+        const inspection = await inspectRasterImageFile(artifact.filePath);
+        detectedFormat = inspection.format;
+        width = inspection.width;
+        height = inspection.height;
+        checksumSha256 = await sha256File(artifact.filePath);
       } else if (localAvailable) {
         const inspection = await inspectVideoFile(artifact.filePath);
         detectedFormat = inspection?.format ?? null;
@@ -3404,7 +3408,7 @@ export async function finalizeJob(jobId: string) {
       candidate: await mediaDeliveryCandidate(workdir, artifact)
     }))
   );
-  const artifactFiles = await Promise.all(
+  const sourceArtifactFiles = await Promise.all(
     inspectedMedia.map(async ({ artifact, candidate }) => {
       if (!artifact.artifactId) return null;
       const format = mediaArtifactFormat(artifact, candidate);
@@ -3428,7 +3432,9 @@ export async function finalizeJob(jobId: string) {
         externalUrl: artifact.url,
         fileName: mediaArtifactFileName(artifact, `${artifact.kind}-${artifact.generatedIndex + 1}`),
         mimeType: candidate.detectedFormat
-          ? `image/${candidate.detectedFormat}`
+          ? artifact.kind === "video" && candidate.detectedFormat === "mov"
+            ? "video/quicktime"
+            : `${artifact.kind}/${candidate.detectedFormat}`
           : artifact.mimeType,
         format,
         sizeBytes: candidate.sizeBytes,
@@ -3444,18 +3450,195 @@ export async function finalizeJob(jobId: string) {
       });
     })
   );
-  const mediaAssessment = assessRequiredMediaDeliverables({
+
+  const imageNormalizationPlan = planRequiredImageNormalizations({
     deliverables: job.orchestrationPlan?.deliverables ?? [],
     candidates: inspectedMedia.map((entry) => entry.candidate)
   });
+  const imageNormalizationFailures: Array<{
+    deliverableIndex: number;
+    candidateIndex: number | null;
+    code: string;
+    message: string;
+    details: Record<string, unknown>;
+  }> = imageNormalizationPlan.missingDeliverableIndexes.map((deliverableIndex) => ({
+    deliverableIndex,
+    candidateIndex: null,
+    code: "image_normalization_source_missing",
+    message: "No distinct local image source is available for this required deliverable.",
+    details: {}
+  }));
+  const normalizedMedia: Array<{
+    candidate: GeneratedMediaDeliveryCandidate;
+    artifactFile: NonNullable<(typeof sourceArtifactFiles)[number]>;
+  }> = [];
+
+  for (const assignment of imageNormalizationPlan.assignments) {
+    if (!assignment.needsNormalization) {
+      continue;
+    }
+    const deliverable = job.orchestrationPlan?.deliverables[assignment.deliverableIndex];
+    const source = inspectedMedia[assignment.candidateIndex];
+    const sourceArtifactFile = sourceArtifactFiles[assignment.candidateIndex];
+    if (!deliverable || deliverable.kind !== "image" || !source?.artifact.filePath ||
+        !source.artifact.artifactId || !sourceArtifactFile) {
+      imageNormalizationFailures.push({
+        deliverableIndex: assignment.deliverableIndex,
+        candidateIndex: assignment.candidateIndex,
+        code: "image_normalization_source_missing",
+        message: "The selected image source is no longer available.",
+        details: {}
+      });
+      continue;
+    }
+
+    await heartbeat(
+      jobId,
+      "finalize.image_normalizing",
+      `deliverable=${assignment.deliverableIndex};candidate=${assignment.candidateIndex}`,
+      source.artifact.stageId
+    );
+    await appendJobEvent(jobId, "artifact.image_normalization_started", {
+      deliverableIndex: assignment.deliverableIndex,
+      sourceArtifactFileId: sourceArtifactFile.id,
+      requestedFormat: deliverable.format,
+      requestedWidth: deliverable.width,
+      requestedHeight: deliverable.height
+    }, {
+      actor: "image-normalizer",
+      stageId: source.artifact.stageId,
+      artifactId: source.artifact.artifactId
+    });
+
+    try {
+      const normalized = await normalizeImageArtifact({
+        sourcePath: source.artifact.filePath,
+        workdir,
+        deliverableIndex: assignment.deliverableIndex,
+        requestedFormat: deliverable.format,
+        requestedWidth: deliverable.width,
+        requestedHeight: deliverable.height
+      });
+      const artifactFile = await upsertArtifactFile({
+        id: `${source.artifact.artifactId}-NORMALIZED-${(assignment.deliverableIndex + 1)
+          .toString()
+          .padStart(2, "0")}`,
+        artifactId: source.artifact.artifactId,
+        jobId,
+        stageId: source.artifact.stageId,
+        kind: "image",
+        status: "available",
+        filePath: normalized.filePath,
+        externalUrl: null,
+        fileName: normalized.fileName,
+        mimeType: normalized.mimeType,
+        format: normalized.format,
+        sizeBytes: normalized.sizeBytes,
+        width: normalized.width,
+        height: normalized.height,
+        checksumSha256: normalized.checksumSha256,
+        source: "honeycomb-image-normalizer",
+        error: null,
+        metadata: {
+          normalized: true,
+          sourceArtifactFileId: sourceArtifactFile.id,
+          sourceChecksumSha256: normalized.sourceChecksumSha256,
+          requestedFormat: deliverable.format,
+          requestedWidth: deliverable.width,
+          requestedHeight: deliverable.height,
+          transformed: normalized.transformed,
+          reused: normalized.reused,
+          fit: normalized.fit,
+          cropFraction: normalized.cropFraction
+        }
+      });
+      normalizedMedia.push({
+        artifactFile,
+        candidate: {
+          kind: "image",
+          filePath: normalized.filePath,
+          mimeType: normalized.mimeType,
+          detectedFormat: normalized.format,
+          sizeBytes: normalized.sizeBytes,
+          width: normalized.width,
+          height: normalized.height,
+          localAvailable: true,
+          checksumSha256: normalized.checksumSha256
+        }
+      });
+      await appendJobEvent(jobId, "artifact.image_normalized", {
+        deliverableIndex: assignment.deliverableIndex,
+        sourceArtifactFileId: sourceArtifactFile.id,
+        normalizedArtifactFileId: artifactFile.id,
+        format: normalized.format,
+        width: normalized.width,
+        height: normalized.height,
+        sizeBytes: normalized.sizeBytes,
+        checksumSha256: normalized.checksumSha256,
+        reused: normalized.reused,
+        fit: normalized.fit,
+        cropFraction: normalized.cropFraction
+      }, {
+        actor: "image-normalizer",
+        stageId: source.artifact.stageId,
+        artifactId: source.artifact.artifactId
+      });
+    } catch (error) {
+      const code = error instanceof ImageNormalizationError
+        ? error.code
+        : "image_normalization_failed";
+      const details = error instanceof ImageNormalizationError ? error.details : {};
+      const message = error instanceof Error ? error.message.slice(0, 500) : code;
+      imageNormalizationFailures.push({
+        deliverableIndex: assignment.deliverableIndex,
+        candidateIndex: assignment.candidateIndex,
+        code,
+        message,
+        details
+      });
+      await appendJobEvent(jobId, "artifact.image_normalization_failed", {
+        deliverableIndex: assignment.deliverableIndex,
+        sourceArtifactFileId: sourceArtifactFile.id,
+        code,
+        message,
+        details
+      }, {
+        actor: "image-normalizer",
+        stageId: source.artifact.stageId,
+        artifactId: source.artifact.artifactId
+      });
+    }
+  }
+
+  const deliveryCandidates = [
+    ...inspectedMedia.map((entry) => entry.candidate),
+    ...normalizedMedia.map((entry) => entry.candidate)
+  ];
+  const deliveryArtifactFiles = [
+    ...sourceArtifactFiles,
+    ...normalizedMedia.map((entry) => entry.artifactFile)
+  ];
+  const mediaAssessment = assessRequiredMediaDeliverables({
+    deliverables: job.orchestrationPlan?.deliverables ?? [],
+    candidates: deliveryCandidates
+  });
   if (!mediaAssessment.ok) {
+    const blockedDeliverableIndexes = new Set(mediaAssessment.issues.map((issue) => issue.deliverableIndex));
+    const blockingNormalizationFailures = imageNormalizationFailures.filter((failure) =>
+      blockedDeliverableIndexes.has(failure.deliverableIndex)
+    );
+    const reason = blockingNormalizationFailures.length > 0
+      ? "required_image_normalization_failed"
+      : "required_media_delivery_missing";
     await setJobStatus(jobId, "waiting_for_human", {
-      reason: "required_media_delivery_missing",
-      issues: mediaAssessment.issues
+      reason,
+      issues: mediaAssessment.issues,
+      imageNormalizationFailures: blockingNormalizationFailures
     });
     await appendJobEvent(jobId, "final.delivery_blocked", {
-      reason: "required_media_delivery_missing",
+      reason,
       issues: mediaAssessment.issues,
+      imageNormalizationFailures: blockingNormalizationFailures,
       generatedMedia: generatedMedia.map((artifact) => ({
         kind: artifact.kind,
         filePath: artifact.filePath,
@@ -3474,7 +3657,7 @@ export async function finalizeJob(jobId: string) {
   }
   for (const match of mediaAssessment.matches) {
     const deliverable = job.orchestrationPlan?.deliverables[match.deliverableIndex];
-    const artifactFile = artifactFiles[match.candidateIndex];
+    const artifactFile = deliveryArtifactFiles[match.candidateIndex];
     if (!deliverable || !artifactFile || (deliverable.kind !== "image" && deliverable.kind !== "video")) {
       throw new Error(`Artifact delivery match is incomplete for deliverable ${match.deliverableIndex}`);
     }

@@ -98,7 +98,10 @@ Safe commands that can run without paid providers:
 
 ```powershell
 npm run check
+npm run test:unit
 npm run check:no-secrets
+npm audit --omit=dev
+node --import tsx --test tests/image-normalization.test.ts tests/image-normalization-policy.test.ts tests/artifact-delivery-policy.test.ts
 npm run smoke:docker-compose
 npm run smoke:http-only
 npm run smoke:m3-config

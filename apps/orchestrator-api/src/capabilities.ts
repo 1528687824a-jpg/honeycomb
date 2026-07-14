@@ -61,6 +61,7 @@ const capabilities: RuntimeCapability[] = [
       "Task artifact listing",
       "Safe local artifact file download",
       "Required media file, format, and image-dimension completion gate",
+      "Deterministic image conversion, EXIF orientation, bounded exact resizing, and retry-safe derived files",
       "Canonical media records with byte count, dimensions, source, and SHA-256",
       "Leased destination delivery with durable retries and desktop write acknowledgement",
       "Registered-workspace and separately approved custom-directory delivery authorization",

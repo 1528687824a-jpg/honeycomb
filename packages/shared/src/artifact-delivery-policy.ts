@@ -56,21 +56,16 @@ export function assessRequiredMediaDeliverables(input: {
   deliverables: TaskDeliverable[];
   candidates: GeneratedMediaDeliveryCandidate[];
 }): RequiredMediaDeliveryAssessment {
-  const usedCandidates = new Set<number>();
-  const matches: RequiredMediaDeliveryAssessment["matches"] = [];
-  const issues: RequiredMediaDeliveryIssue[] = [];
-
-  input.deliverables.forEach((deliverable, deliverableIndex) => {
+  const requirements = input.deliverables.flatMap((deliverable, deliverableIndex) => {
     if (!deliverable.required || (deliverable.kind !== "image" && deliverable.kind !== "video")) {
-      return;
+      return [];
     }
     const requiredFormat = normalizedFormat(deliverable.format);
     const availableOfKind = input.candidates
       .map((candidate, candidateIndex) => ({ candidate, candidateIndex }))
       .filter(({ candidate, candidateIndex }) =>
         candidate.kind === deliverable.kind &&
-        candidate.localAvailable &&
-        !usedCandidates.has(candidateIndex)
+        candidate.localAvailable
       );
     const formatMatches = availableOfKind.filter(({ candidate }) => {
       const actualFormat = candidateFormat(candidate);
@@ -80,28 +75,96 @@ export function assessRequiredMediaDeliverables(input: {
     const measurable = formatMatches.filter(({ candidate }) =>
       !dimensionsRequired || (candidate.width !== null && candidate.height !== null)
     );
-    const match = measurable.find(({ candidate }) =>
+    const exactMatches = measurable.filter(({ candidate }) =>
       (deliverable.width === null || candidate.width === deliverable.width) &&
       (deliverable.height === null || candidate.height === deliverable.height)
     );
-    if (match) {
-      usedCandidates.add(match.candidateIndex);
-      matches.push({ deliverableIndex, candidateIndex: match.candidateIndex });
-      return;
+    return [{
+      deliverable,
+      deliverableIndex,
+      requiredFormat,
+      availableOfKind,
+      formatMatches,
+      measurable,
+      exactMatches: exactMatches.sort((left, right) =>
+        Math.abs(deliverableIndex - left.candidateIndex) -
+          Math.abs(deliverableIndex - right.candidateIndex) ||
+        left.candidateIndex - right.candidateIndex
+      )
+    }];
+  });
+
+  const requirementByIndex = new Map(
+    requirements.map((requirement) => [requirement.deliverableIndex, requirement])
+  );
+  const candidateOwner = new Map<number, number>();
+  const candidateByDeliverable = new Map<number, number>();
+
+  const tryAssign = (
+    deliverableIndex: number,
+    visitedCandidates: Set<number>,
+    visitedDeliverables: Set<number>
+  ): boolean => {
+    if (visitedDeliverables.has(deliverableIndex)) {
+      return false;
     }
-    const reason: RequiredMediaDeliveryIssue["reason"] = availableOfKind.length === 0
+    visitedDeliverables.add(deliverableIndex);
+    const requirement = requirementByIndex.get(deliverableIndex);
+    if (!requirement) {
+      return false;
+    }
+    for (const option of requirement.exactMatches) {
+      if (visitedCandidates.has(option.candidateIndex)) {
+        continue;
+      }
+      visitedCandidates.add(option.candidateIndex);
+      const previousOwner = candidateOwner.get(option.candidateIndex);
+      if (previousOwner === undefined || tryAssign(
+        previousOwner,
+        visitedCandidates,
+        visitedDeliverables
+      )) {
+        if (previousOwner !== undefined) {
+          candidateByDeliverable.delete(previousOwner);
+        }
+        candidateOwner.set(option.candidateIndex, deliverableIndex);
+        candidateByDeliverable.set(deliverableIndex, option.candidateIndex);
+        return true;
+      }
+    }
+    return false;
+  };
+
+  for (const requirement of [...requirements].sort((left, right) =>
+    left.exactMatches.length - right.exactMatches.length ||
+    left.deliverableIndex - right.deliverableIndex
+  )) {
+    if (requirement.exactMatches.length > 0) {
+      tryAssign(requirement.deliverableIndex, new Set(), new Set());
+    }
+  }
+
+  const matches = [...candidateByDeliverable.entries()]
+    .map(([deliverableIndex, candidateIndex]) => ({ deliverableIndex, candidateIndex }))
+    .sort((left, right) => left.deliverableIndex - right.deliverableIndex);
+  const issues = requirements.flatMap((requirement): RequiredMediaDeliveryIssue[] => {
+    if (candidateByDeliverable.has(requirement.deliverableIndex)) {
+      return [];
+    }
+    const reason: RequiredMediaDeliveryIssue["reason"] = requirement.availableOfKind.length === 0 ||
+        requirement.exactMatches.length > 0
       ? "local_file_missing"
-      : formatMatches.length === 0
+      : requirement.formatMatches.length === 0
         ? "format_mismatch"
-        : measurable.length === 0
+        : requirement.measurable.length === 0
           ? "dimensions_missing"
           : "dimension_mismatch";
-    issues.push({
-      deliverableIndex,
-      kind: deliverable.kind,
-      format: requiredFormat,
+    return [{
+      deliverableIndex: requirement.deliverableIndex,
+      kind: requirement.deliverable.kind as "image" | "video",
+      format: requirement.requiredFormat,
       reason
-    });
+    }];
   });
 
   return {

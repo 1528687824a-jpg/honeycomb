@@ -184,3 +184,39 @@ test("optional and non-media deliverables do not create a media completion gate"
   assert.equal(assessment.ok, true);
   assert.deepEqual(assessment.issues, []);
 });
+
+test("media matching reserves a constrained exact file before a flexible deliverable", () => {
+  const assessment = assessRequiredMediaDeliverables({
+    deliverables: [
+      deliverable({ format: null, width: null, height: null }),
+      deliverable({ format: "png", width: 1080, height: 1920 })
+    ],
+    candidates: [
+      {
+        kind: "image",
+        filePath: "/jobs/exact.png",
+        mimeType: "image/png",
+        detectedFormat: "png",
+        sizeBytes: 100,
+        width: 1080,
+        height: 1920,
+        localAvailable: true
+      },
+      {
+        kind: "image",
+        filePath: "/jobs/flexible.jpg",
+        mimeType: "image/jpeg",
+        detectedFormat: "jpeg",
+        sizeBytes: 100,
+        width: 1024,
+        height: 1792,
+        localAvailable: true
+      }
+    ]
+  });
+  assert.equal(assessment.ok, true);
+  assert.deepEqual(assessment.matches, [
+    { deliverableIndex: 0, candidateIndex: 1 },
+    { deliverableIndex: 1, candidateIndex: 0 }
+  ]);
+});

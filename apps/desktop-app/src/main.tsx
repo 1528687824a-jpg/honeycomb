@@ -5593,15 +5593,28 @@ function App() {
             ) : null}
 
             {selectedFromList?.status === "waiting_for_human" &&
-            selectedFromList.heartbeatNote === "required_media_delivery_missing" ? (
+            ["required_media_delivery_missing", "required_image_normalization_failed"]
+              .includes(selectedFromList.heartbeatNote ?? "") ? (
               <section className="jobPreflightNotice" role="alert">
                 <AlertTriangle size={18} aria-hidden="true" />
                 <div>
-                  <h3>{language === "zh" ? "真实媒体文件尚未达到交付标准" : "The media file is not ready for delivery"}</h3>
+                  <h3>
+                    {language === "zh"
+                      ? selectedFromList.heartbeatNote === "required_image_normalization_failed"
+                        ? "图片无法安全转换为目标规格"
+                        : "真实媒体文件尚未达到交付标准"
+                      : selectedFromList.heartbeatNote === "required_image_normalization_failed"
+                        ? "The image could not be safely normalized"
+                        : "The media file is not ready for delivery"}
+                  </h3>
                   <p>
                     {language === "zh"
-                      ? "Honeycomb 没有找到可下载的本地图片或视频，或者文件格式、尺寸与任务要求不一致，因此没有把任务标记为成功。"
-                      : "Honeycomb did not find a downloadable local image or video, or its format or dimensions do not match the task. The task was not marked successful."}
+                      ? selectedFromList.heartbeatNote === "required_image_normalization_failed"
+                        ? "源图的比例差异过大、文件无法读取，或输出超过安全限制。Honeycomb 没有强行裁切或交付错误文件。"
+                        : "Honeycomb 没有找到可下载的本地图片或视频，或者文件格式、尺寸与任务要求不一致，因此没有把任务标记为成功。"
+                      : selectedFromList.heartbeatNote === "required_image_normalization_failed"
+                        ? "The source aspect ratio is too different, the file is unreadable, or the output exceeds safety limits. Honeycomb did not force a destructive crop or deliver a bad file."
+                        : "Honeycomb did not find a downloadable local image or video, or its format or dimensions do not match the task. The task was not marked successful."}
                   </p>
                 </div>
               </section>

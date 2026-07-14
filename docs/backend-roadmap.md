@@ -197,8 +197,23 @@ The media success gate and durable Windows desktop delivery loop are implemented
   workspace cannot satisfy delivery. Missing files leave the job paused instead
   of recording false success.
 - Requested image formats and exact dimensions are checked from the actual local
-  file. PNG IHDR and JPEG start-of-frame headers are inspected without trusting
-  the filename or provider text.
+  file without trusting the filename or provider text.
+- Required still images now pass through a deterministic normalization step
+  before delivery. JPEG, PNG, WebP, GIF, AVIF, and TIFF inputs are decoded by
+  Sharp/libvips; PNG, JPEG, WebP, and static GIF outputs can be produced.
+- EXIF orientation is applied before sizing. One requested dimension preserves
+  aspect ratio; two dimensions produce an exact attention-cropped canvas. A
+  crop exceeding the default 15 percent safety limit pauses instead of silently
+  destroying the composition.
+- PNG/WebP transparency is retained, while JPEG transparency is explicitly
+  flattened to white. Output bytes/pixels/dimensions/time are bounded and the
+  derived file is decoded again before it becomes canonical.
+- The source SHA-256 and requested specification determine the derived path.
+  Worker/DBOS retries reuse a verified result, while a corrupt interrupted
+  result is rebuilt. Original provider files are never overwritten.
+- Multiple image deliverables use maximum one-to-one matching, so a flexible
+  requirement cannot consume the only file that exactly satisfies a stricter
+  requirement.
 - The desktop exporter now prefers Honeycomb's authenticated local artifact
   download route. Base64-generated or already-downloaded files therefore reach
   the Windows desktop even when no external provider URL exists.
@@ -266,12 +281,13 @@ The media success gate and durable Windows desktop delivery loop are implemented
 - `npm run smoke:artifact-destination-authorization` covers registration/grant
   requirements, authorization refresh, receipt boundaries, revocation, and the
   defined behavior for a delivery that already owns a short lease.
-- All 158 unit tests, TypeScript build/check, Compose configuration validation,
+- All 168 unit tests, TypeScript build/check, desktop production build,
+  dependency audit, cross-platform Sharp lock verification, Compose validation,
   package-layout check, no-secrets check, and diff whitespace check pass.
 
-Stage 3 still needs image conversion/resizing and document artifact
-normalization. PostgreSQL and Docker Desktop remained stopped, so the
-migration-backed smoke scripts have not yet been executed.
+Stage 3 still needs document artifact normalization. PostgreSQL and Docker
+Desktop remained stopped, so the migration-backed smoke scripts have not yet
+been executed.
 
 ## Current Backend Status
 
