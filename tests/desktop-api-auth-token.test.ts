@@ -4,6 +4,7 @@ import {
   __apiAuthTokenTestInternals,
   completeArtifactDelivery,
   listJobs,
+  queryJobExecutionSummaries,
   resolveArtifactDownloadRequest
 } from "../apps/desktop-app/src/api";
 
@@ -110,6 +111,48 @@ test("desktop API auth refreshes the token and retries once after invalid_api_to
 
   assert.deepEqual(seenAuthHeaders, ["Bearer runtime-old-token", "Bearer runtime-fresh-token"]);
   assert.equal(storage.getItem("honeycomb.apiToken"), "runtime-fresh-token");
+});
+
+test("desktop task list sends authenticated incremental summary queries", async () => {
+  const storage = new MemoryStorage();
+  installWindow(storage);
+  __apiAuthTokenTestInternals.setRuntimeTokenLoaderForTests(async () => "runtime-summary-token");
+  let seenUrl = "";
+  let seenMethod = "";
+  let seenAuthorization = "";
+  let seenBody: unknown = null;
+  globalThis.fetch = async (url, init) => {
+    seenUrl = String(url);
+    seenMethod = init?.method ?? "GET";
+    seenAuthorization = new Headers(init?.headers).get("authorization") ?? "";
+    seenBody = JSON.parse(String(init?.body));
+    return new Response(JSON.stringify({
+      version: "honeycomb.job-execution-summary-query.v1",
+      generatedAt: "2026-07-14T12:00:00.000Z",
+      requested: 1,
+      returned: 0,
+      summaries: [],
+      unchangedJobIds: ["JOB-1"],
+      missingJobIds: [],
+      revisions: { "JOB-1": "a".repeat(64) }
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    });
+  };
+
+  await queryJobExecutionSummaries({
+    jobIds: ["JOB-1"],
+    knownRevisions: { "JOB-1": "a".repeat(64) }
+  });
+
+  assert.equal(seenUrl, "http://127.0.0.1:3000/jobs/execution-summaries/query");
+  assert.equal(seenMethod, "POST");
+  assert.equal(seenAuthorization, "Bearer runtime-summary-token");
+  assert.deepEqual(seenBody, {
+    jobIds: ["JOB-1"],
+    knownRevisions: { "JOB-1": "a".repeat(64) }
+  });
 });
 
 test("desktop artifact delivery prefers the authenticated Honeycomb file endpoint", async () => {

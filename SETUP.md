@@ -294,6 +294,8 @@ The current thin-client UI consumes:
 ```text
 GET /jobs
 GET /jobs?prompt=<text>&status=<status>&ingressOrigin=<origin>&sort=createdAt&order=desc&cursor=<cursor>
+GET /jobs?sort=updatedAt&order=desc&includeExecutionSummaries=true
+POST /jobs/execution-summaries/query
 POST /jobs
 GET /jobs/:jobId/timeline
 GET /jobs/:jobId/timeline?since=<ISO timestamp>&limit=<n>
@@ -789,6 +791,15 @@ counts, blockers, and stable recommended-action IDs. See
 
 ```powershell
 npm run smoke:job-execution-state
+```
+
+Task lists can request the same state in one bounded batch instead of calling
+the detail endpoint for every row. The first paginated response can include
+summaries; later refreshes send known SHA-256 revisions and receive changed
+tasks only. See `docs/job-execution-summaries.md`.
+
+```powershell
+npm run smoke:job-execution-summaries
 ```
 
 ## Automatic runtime maintenance

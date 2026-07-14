@@ -373,6 +373,36 @@ export async function getPlan(planId: string): Promise<TaskPlanWithItems | null>
   return { plan, items };
 }
 
+export async function getLatestPlansForJobs(jobIds: string[]): Promise<TaskPlanWithItems[]> {
+  const ids = [...new Set(jobIds.filter(Boolean))];
+  if (ids.length === 0) return [];
+  const plansResult = await pool.query(
+    `select distinct on (job_id) *
+     from agent.task_plans
+     where job_id = any($1::text[])
+     order by job_id, updated_at desc, id desc`,
+    [ids]
+  );
+  if (plansResult.rows.length === 0) return [];
+
+  const plans = plansResult.rows.map(toTaskPlanRecord);
+  const itemsResult = await pool.query(
+    `select *
+     from agent.task_plan_items
+     where plan_id = any($1::text[])
+     order by plan_id, position, id`,
+    [plans.map((plan) => plan.id)]
+  );
+  const itemsByPlan = new Map<string, TaskPlanItemRecord[]>();
+  for (const row of itemsResult.rows) {
+    const item = toTaskPlanItemRecord(row);
+    const items = itemsByPlan.get(item.planId) ?? [];
+    items.push(item);
+    itemsByPlan.set(item.planId, items);
+  }
+  return plans.map((plan) => ({ plan, items: itemsByPlan.get(plan.id) ?? [] }));
+}
+
 export async function updatePlan(
   planId: string,
   input: {

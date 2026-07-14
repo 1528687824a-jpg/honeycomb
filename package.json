@@ -39,6 +39,7 @@
     "smoke:agent-model-config": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-with-smoke-lock.ps1 dev-stack scripts/smoke-agent-model-config.ps1",
     "smoke:job-heartbeats": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-with-smoke-lock.ps1 dev-stack scripts/smoke-job-heartbeats.ps1",
     "smoke:job-execution-state": "tsx scripts/smoke-job-execution-state.ts",
+    "smoke:job-execution-summaries": "tsx scripts/smoke-job-execution-summaries.ts",
     "smoke:runtime-maintenance": "tsx scripts/smoke-runtime-maintenance.ts",
     "smoke:web-search-browser": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-with-smoke-lock.ps1 dev-stack scripts/smoke-web-search-browser.ps1",
     "smoke:list-jobs": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-with-smoke-lock.ps1 dev-stack scripts/smoke-list-jobs.ps1",

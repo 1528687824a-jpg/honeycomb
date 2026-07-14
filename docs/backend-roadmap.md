@@ -746,6 +746,9 @@ slice is Stage 4: real behavioral regression for all four routing modes.
       state, queue/retry/model-call activity, approvals, artifact delivery,
       spend, blockers, and recommended actions are projected from durable
       records instead of inferred from timeline wording.
+      Paginated task lists can include the same state as compact batch
+      summaries, and revision-based refresh returns only changed tasks without
+      relying on timestamp cursors or one request per task.
       Runtime maintenance is also automatic: API and worker processes compete
       for one PostgreSQL advisory lock, honor a persisted next-run time, scan
       expired model-call leases before stale heartbeats, and persist health,

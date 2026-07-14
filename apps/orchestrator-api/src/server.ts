@@ -24,6 +24,7 @@ import {
   setJobStatus
 } from "../../../packages/db/src/jobs";
 import { getJobExecutionState } from "../../../packages/db/src/job-execution-state";
+import { queryJobExecutionSummaries } from "../../../packages/db/src/job-execution-summary";
 import {
   ConversationRecordConflictError,
   ConversationRecordDeletedError,
@@ -1744,7 +1745,19 @@ const listJobsQuerySchema = z.object({
   until: z.string().datetime({ offset: true }).optional(),
   sort: z.enum(["createdAt", "updatedAt"]).optional(),
   order: z.enum(["asc", "desc"]).optional(),
-  cursor: z.string().min(1).max(2000).optional()
+  cursor: z.string().min(1).max(2000).optional(),
+  includeExecutionSummaries: z.enum(["true", "false"])
+    .transform((value) => value === "true")
+    .optional()
+});
+
+const jobExecutionSummaryQuerySchema = z.object({
+  jobIds: z.array(z.string().trim().min(1).max(200)).min(1).max(100),
+  knownRevisions: z.record(z.string().regex(/^[a-f0-9]{64}$/i)).optional()
+}).superRefine((value, context) => {
+  if (Object.keys(value.knownRevisions ?? {}).length > 100) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "too_many_known_revisions" });
+  }
 });
 
 const cancelJobSchema = z.object({
@@ -2893,7 +2906,17 @@ async function main() {
   app.get("/jobs", async (request, response, next) => {
     try {
       const query = listJobsQuerySchema.parse(request.query);
-      const result = await listJobs(query);
+      const { includeExecutionSummaries, ...filters } = query;
+      const result = await listJobs(filters);
+      if (includeExecutionSummaries) {
+        response.json({
+          ...result,
+          executionSummaries: await queryJobExecutionSummaries({
+            jobIds: result.jobs.map((job) => job.id)
+          })
+        });
+        return;
+      }
       response.json(result);
     } catch (error) {
       if (error instanceof InvalidJobListCursorError) {
@@ -2918,6 +2941,15 @@ async function main() {
     try {
       const query = runtimeUsageQuerySchema.parse(request.query);
       response.json(await getRuntimeUsage(query));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/jobs/execution-summaries/query", async (request, response, next) => {
+    try {
+      const input = jobExecutionSummaryQuerySchema.parse(request.body ?? {});
+      response.json(await queryJobExecutionSummaries(input));
     } catch (error) {
       next(error);
     }

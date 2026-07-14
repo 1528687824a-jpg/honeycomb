@@ -299,6 +299,19 @@ export async function getStagesForJob(jobId: string): Promise<StageRecord[]> {
   return result.rows.map(toStageRecord);
 }
 
+export async function getStagesForJobs(jobIds: string[]): Promise<StageRecord[]> {
+  const ids = [...new Set(jobIds.filter(Boolean))];
+  if (ids.length === 0) return [];
+  const result = await pool.query(
+    `select *
+     from agent.job_stages
+     where job_id = any($1::text[])
+     order by job_id, stage_index, id`,
+    [ids]
+  );
+  return result.rows.map(toStageRecord);
+}
+
 export async function getStage(stageId: string): Promise<StageRecord> {
   const result = await pool.query(`select * from agent.job_stages where id = $1`, [stageId]);
   if (!result.rows[0]) {

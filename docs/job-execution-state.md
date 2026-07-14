@@ -32,6 +32,7 @@ This prevents a generic `running` stage or a recent timeline event from hiding t
 ## Response sections
 
 - `job.phase` is the task page's primary state.
+- `stateUpdatedAt` is the newest timestamp across all durable records used by the projection.
 - `progress` reports weighted stage progress and all currently active or blocked stages.
 - `agents` contains only the coordinator, selected/observed workers, quality-gate Agent, and explicitly skipped Agents.
 - `runtime` summarizes model calls, queues, approvals, artifacts, deliveries, heartbeat, and spend.
@@ -45,3 +46,5 @@ npm run smoke:job-execution-state
 ```
 
 The database smoke test verifies stage/plan aggregation, approval precedence, payload sanitization, and state changes after approval resolution.
+
+For task-list batching and revision-based incremental refresh, see `docs/job-execution-summaries.md`.

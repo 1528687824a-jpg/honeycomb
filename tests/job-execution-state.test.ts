@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { projectJobExecutionState, type JobExecutionStateInput } from "../packages/shared/src/job-execution-state";
+import {
+  createJobExecutionSummary,
+  selectChangedJobExecutionSummaries
+} from "../packages/db/src/job-execution-summary";
 import { emptyJobSpendBudget } from "../packages/shared/src/spend-policy";
 import type { ArtifactDeliveryRecord, StageRecord, ToolApprovalRecord } from "../packages/shared/src/types";
 
@@ -127,7 +131,8 @@ function project(overrides: Partial<JobExecutionStateInput> = {}) {
       artifactCount: 0,
       fileCount: 0,
       availableFileCount: 0,
-      failedFileCount: 0
+      failedFileCount: 0,
+      updatedAt: null
     },
     ...overrides
   });
@@ -317,4 +322,92 @@ test("persisted job queue state keeps its agent visible after queue history clea
   assert.equal(state.job.phase, "queued");
   assert.equal(state.agents.find((agent) => agent.agentId === "writer-agent")?.state, "queued");
   assert.equal(state.agents.find((agent) => agent.agentId === "writer-agent")?.currentAction.kind, "queue");
+});
+
+test("task-list summary preserves progress and agent state without execution secrets", () => {
+  const pendingApproval = {
+    ...approval("image-agent"),
+    reason: "Write C:\\Users\\Administrator\\Desktop\\poster.png with Bearer secret-token",
+    command: "secret-shell-command",
+    input: { apiKey: "secret-input-key" },
+    policy: { hiddenRule: "secret-policy" }
+  };
+  const state = project({
+    stages: [
+      stage({ id: "STAGE-1", stageIndex: 1, agentId: "research-agent", status: "completed" }),
+      stage({ id: "STAGE-2", stageIndex: 2, agentId: "image-agent", status: "running" })
+    ],
+    pendingApprovals: [pendingApproval],
+    modelCalls: [{
+      id: "MC-SUMMARY",
+      idempotencyKey: "secret-idempotency-key",
+      stageId: "STAGE-2",
+      agentId: "image-agent",
+      actionType: "stage-agent",
+      status: "started",
+      classification: "active",
+      providerId: "image-provider",
+      model: "image-model",
+      leaseExpiresAt: "2026-07-14T12:10:00.000Z",
+      recoveryStatus: null,
+      error: null,
+      updatedAt: now
+    }]
+  });
+  const summary = createJobExecutionSummary(state);
+  const serialized = JSON.stringify(summary);
+
+  assert.equal(summary.phase, "waiting_for_approval");
+  assert.equal(summary.progress.percent, 68);
+  assert.equal(summary.agentCounts.total, 3);
+  assert.equal(summary.agentCounts.waiting, 1);
+  assert.equal(summary.primaryBlocker?.code, "tool_approval_required");
+  assert.match(summary.revision, /^[a-f0-9]{64}$/);
+  assert.equal(serialized.includes("secret-shell-command"), false);
+  assert.equal(serialized.includes("secret-input-key"), false);
+  assert.equal(serialized.includes("secret-policy"), false);
+  assert.equal(serialized.includes("secret-idempotency-key"), false);
+  assert.equal(serialized.includes("C:\\Users\\Administrator"), false);
+  assert.equal(serialized.includes("secret-token"), false);
+});
+
+test("task-list revision ignores projection time but changes with visible execution state", () => {
+  const first = createJobExecutionSummary(project({ generatedAt: "2026-07-14T12:00:00.000Z" }));
+  const refreshed = createJobExecutionSummary(project({ generatedAt: "2026-07-14T12:00:10.000Z" }));
+  const blocked = createJobExecutionSummary(project({
+    generatedAt: "2026-07-14T12:00:10.000Z",
+    pendingApprovals: [approval("image-agent")]
+  }));
+
+  assert.equal(first.revision, refreshed.revision);
+  assert.notEqual(first.revision, blocked.revision);
+});
+
+test("task-list freshness includes artifact inventory updates", () => {
+  const state = project({
+    artifacts: {
+      artifactCount: 1,
+      fileCount: 1,
+      availableFileCount: 1,
+      failedFileCount: 0,
+      updatedAt: "2026-07-14T12:05:00.000Z"
+    }
+  });
+
+  assert.equal(state.stateUpdatedAt, "2026-07-14T12:05:00.000Z");
+  assert.equal(createJobExecutionSummary(state).updatedAt, "2026-07-14T12:05:00.000Z");
+});
+
+test("task-list incremental selection returns only changed summaries", () => {
+  const unchanged = createJobExecutionSummary(project());
+  const changed = createJobExecutionSummary(project({
+    job: job({ id: "JOB-STATE-2", displayTitle: "Changed task", status: "queued" })
+  }));
+  const selected = selectChangedJobExecutionSummaries(
+    [unchanged, changed],
+    { [unchanged.jobId]: unchanged.revision, [changed.jobId]: "0".repeat(64) }
+  );
+
+  assert.deepEqual(selected.unchangedJobIds, [unchanged.jobId]);
+  assert.deepEqual(selected.changed.map((summary) => summary.jobId), [changed.jobId]);
 });

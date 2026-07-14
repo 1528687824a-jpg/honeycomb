@@ -491,6 +491,17 @@ export async function getJob(jobId: string): Promise<JobRecord | null> {
   return result.rows[0] ? toJobRecord(result.rows[0]) : null;
 }
 
+export async function getJobsByIds(jobIds: string[]): Promise<JobRecord[]> {
+  const ids = [...new Set(jobIds.filter(Boolean))];
+  if (ids.length === 0) return [];
+  const result = await pool.query(
+    `select * from agent.jobs where id = any($1::text[])`,
+    [ids]
+  );
+  const jobsById = new Map(result.rows.map((row) => [row.id, toJobRecord(row)]));
+  return ids.map((id) => jobsById.get(id)).filter((job): job is JobRecord => Boolean(job));
+}
+
 export async function getJobBySessionId(sessionId: string): Promise<JobRecord | null> {
   const result = await pool.query(`select * from agent.jobs where session_id = $1`, [sessionId]);
   return result.rows[0] ? toJobRecord(result.rows[0]) : null;

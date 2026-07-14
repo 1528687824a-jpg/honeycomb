@@ -257,6 +257,20 @@ export async function listToolApprovals(input: {
   };
 }
 
+export async function listPendingToolApprovalsForJobs(jobIds: string[]): Promise<ToolApprovalRecord[]> {
+  const ids = [...new Set(jobIds.filter(Boolean))];
+  if (ids.length === 0) return [];
+  const result = await pool.query(
+    `select *
+     from agent.tool_approval_requests
+     where job_id = any($1::text[])
+       and status = 'pending'
+     order by job_id, updated_at desc, id desc`,
+    [ids]
+  );
+  return result.rows.map(toToolApprovalRecord);
+}
+
 export async function decideToolApproval(input: {
   approvalId: string;
   status: "approved" | "rejected" | "cancelled";
@@ -411,7 +425,13 @@ export async function consumeToolApproval(input: {
   };
 }
 
-export async function expirePendingToolApprovals(now = new Date(), jobId?: string): Promise<number> {
+export async function expirePendingToolApprovals(
+  now = new Date(),
+  jobIds?: string | string[]
+): Promise<number> {
+  const scope = jobIds === undefined
+    ? null
+    : [...new Set((Array.isArray(jobIds) ? jobIds : [jobIds]).filter(Boolean))];
   const result = await pool.query(
     `update agent.tool_approval_requests
      set status = 'expired',
@@ -419,8 +439,8 @@ export async function expirePendingToolApprovals(now = new Date(), jobId?: strin
      where status in ('pending', 'approved')
        and expires_at is not null
        and expires_at <= $1::timestamptz
-       and ($2::text is null or job_id = $2)`,
-    [now.toISOString(), jobId ?? null]
+       and ($2::text[] is null or job_id = any($2::text[]))`,
+    [now.toISOString(), scope]
   );
 
   return result.rowCount ?? 0;

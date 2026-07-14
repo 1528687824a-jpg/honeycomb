@@ -476,6 +476,19 @@ export async function listArtifactDeliveriesForJob(jobId: string) {
   return result.rows.map(toArtifactDeliveryRecord);
 }
 
+export async function listArtifactDeliveriesForJobs(jobIds: string[]) {
+  const ids = [...new Set(jobIds.filter(Boolean))];
+  if (ids.length === 0) return [];
+  const result = await pool.query(
+    `select *
+     from agent.artifact_deliveries
+     where job_id = any($1::text[])
+     order by job_id, deliverable_index, id`,
+    [ids]
+  );
+  return result.rows.map(toArtifactDeliveryRecord);
+}
+
 export async function getArtifactDeliveryForJob(jobId: string, deliveryId: string) {
   const result = await pool.query(
     `select * from agent.artifact_deliveries where job_id = $1 and id = $2`,

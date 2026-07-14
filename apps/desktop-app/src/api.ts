@@ -16,11 +16,19 @@ import type {
 } from "../../../packages/shared/src/model-reconciliation";
 import type { JobExecutionState } from "../../../packages/shared/src/job-execution-state";
 import type {
+  JobExecutionSummary,
+  JobExecutionSummaryQueryResponse
+} from "../../../packages/shared/src/job-execution-summary";
+import type {
   RuntimeMaintenanceAttempt,
   RuntimeMaintenanceOverview
 } from "../../../packages/shared/src/runtime-maintenance";
 
 export type { JobExecutionState } from "../../../packages/shared/src/job-execution-state";
+export type {
+  JobExecutionSummary,
+  JobExecutionSummaryQueryResponse
+} from "../../../packages/shared/src/job-execution-summary";
 export type {
   RuntimeMaintenanceAttempt,
   RuntimeMaintenanceOverview
@@ -1625,10 +1633,12 @@ export type ListJobsInput = {
   sort?: "createdAt" | "updatedAt";
   order?: "asc" | "desc";
   cursor?: string;
+  includeExecutionSummaries?: boolean;
 };
 
 export type ListJobsResponse = {
   jobs: JobRecord[];
+  executionSummaries?: JobExecutionSummaryQueryResponse;
   page: {
     limit: number;
     returned: number;
@@ -1839,6 +1849,16 @@ export async function createJob(input: CreateJobInput) {
       maxModelCalls: input.maxModelCalls,
       maxCostUsd: input.maxCostUsd
     })
+  });
+}
+
+export async function queryJobExecutionSummaries(input: {
+  jobIds: string[];
+  knownRevisions?: Record<string, string>;
+}) {
+  return request<JobExecutionSummaryQueryResponse>("/jobs/execution-summaries/query", {
+    method: "POST",
+    body: JSON.stringify(input)
   });
 }
 

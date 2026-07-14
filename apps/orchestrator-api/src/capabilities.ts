@@ -32,6 +32,7 @@ const capabilities: RuntimeCapability[] = [
     routes: [
       "POST /jobs",
       "GET /jobs",
+      "POST /jobs/execution-summaries/query",
       "GET /jobs/:jobId",
       "GET /jobs/:jobId/execution-state",
       "GET /jobs/:jobId/artifacts",
@@ -61,6 +62,7 @@ const capabilities: RuntimeCapability[] = [
       "DBOS workflow launch path",
       "Task artifact listing",
       "Unified task progress, agent state, runtime blocker, and recommended-action projection",
+      "Batch task-list execution summaries with content-revision incremental refresh",
       "Safe local artifact file download",
       "Required media file, format, and image-dimension completion gate",
       "Deterministic image conversion, EXIF orientation, bounded exact resizing, and retry-safe derived files",

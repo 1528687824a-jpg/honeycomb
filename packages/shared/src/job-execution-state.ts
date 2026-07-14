@@ -106,6 +106,7 @@ export type JobExecutionArtifactInventory = {
   fileCount: number;
   availableFileCount: number;
   failedFileCount: number;
+  updatedAt: string | null;
 };
 
 export type JobExecutionApprovalActivity = {
@@ -202,6 +203,7 @@ export type JobExecutionBlocker = {
 export type JobExecutionState = {
   version: "honeycomb.job-execution-state.v1";
   generatedAt: string;
+  stateUpdatedAt: string;
   job: {
     id: string;
     displayTitle: string;
@@ -351,6 +353,14 @@ function action(input: Partial<JobExecutionCurrentAction> & Pick<JobExecutionCur
 
 function unique<T>(values: T[]) {
   return [...new Set(values)];
+}
+
+function latestTimestamp(values: Array<string | null | undefined>, fallback: string) {
+  let latest = fallback;
+  for (const value of values) {
+    if (value && Date.parse(value) > Date.parse(latest)) latest = value;
+  }
+  return latest;
 }
 
 export function projectJobExecutionState(input: JobExecutionStateInput): JobExecutionState {
@@ -740,10 +750,28 @@ export function projectJobExecutionState(input: JobExecutionStateInput): JobExec
       ? Math.round((stages.reduce((sum, stage) => sum + stageProgress(stage.status), 0) / stages.length) * 100)
       : fallbackProgress(input.job.status);
   const recommendedActions = unique(blockers.map((blocker) => blocker.recommendedAction));
+  const stateUpdatedAt = latestTimestamp([
+    input.job.updatedAt,
+    input.job.heartbeatAt,
+    input.job.completedAt,
+    input.job.executionPreflight?.checkedAt,
+    input.job.executionQueue?.queuedAt,
+    input.job.executionQueue?.acquiredAt,
+    input.job.executionRetry?.updatedAt,
+    ...stages.map((stage) => stage.updatedAt),
+    input.plan?.plan.updatedAt,
+    ...(input.plan?.items.map((item) => item.updatedAt) ?? []),
+    ...input.pendingApprovals.map((approval) => approval.updatedAt),
+    ...input.modelCalls.map((call) => call.updatedAt),
+    ...input.queues.map((queue) => queue.updatedAt),
+    ...input.deliveries.map((delivery) => delivery.updatedAt),
+    input.artifacts.updatedAt
+  ], input.job.updatedAt);
 
   return {
     version: "honeycomb.job-execution-state.v1",
     generatedAt: input.generatedAt,
+    stateUpdatedAt,
     job: {
       id: input.job.id,
       displayTitle: input.job.displayTitle,
