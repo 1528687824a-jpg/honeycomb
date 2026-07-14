@@ -1,5 +1,10 @@
 # Honeycomb macOS Desktop Framework
 
+> Status on 2026-07-13: paused. The existing native OpenClaw runner and macOS
+> Keychain foundation remain in the shared codebase, but no additional macOS
+> implementation starts until the Windows release-candidate gates in
+> [`windows-backend-product-plan.md`](windows-backend-product-plan.md) pass.
+
 This replaces the earlier iOS direction. The Apple target is macOS desktop,
 not iPhone/iPad.
 

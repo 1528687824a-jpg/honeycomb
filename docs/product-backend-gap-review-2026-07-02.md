@@ -1,5 +1,10 @@
 # Honeycomb Product Backend Gap Review - 2026-07-02
 
+> Superseded priority note (2026-07-13): this review remains useful as a gap
+> inventory, but its macOS-first execution order is paused. The active plan is
+> [`windows-backend-product-plan.md`](windows-backend-product-plan.md): finish
+> the Windows backend and Windows release-candidate gates before resuming macOS.
+
 This review uses the current product standard: Honeycomb must feel reliable as
 a multi-agent product, not just as a local developer demo.
 

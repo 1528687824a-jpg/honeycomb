@@ -1,5 +1,10 @@
 # Honeycomb 跨平台适配设计（阶段 E，刻意最后执行）
 
+> 2026-07-13 优先级更新：跨平台新增研发现已暂停。已完成的 native runner、
+> SecretBackend 和 macOS Keychain 第一版继续保留；在
+> [`windows-backend-product-plan.md`](windows-backend-product-plan.md) 的 Windows
+> 发布候选门槛全部通过前，不继续 macOS/Linux 启动器、诊断、打包和签名工作。
+
 用户分布覆盖 Windows、WSL2、Linux、macOS。本设计先定架构边界，
 实施排在产品功能研发完成之后（见 backend-roadmap.md 的工作计划阶段 E）。
 

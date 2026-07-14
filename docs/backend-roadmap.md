@@ -4,6 +4,26 @@ This document tracks what the Honeycomb backend can do now, what is only partial
 and what still needs to be implemented. Keep it updated when backend capability
 changes land.
 
+## Current Priority Decision (2026-07-13)
+
+Windows backend productization is the only active platform priority. macOS work
+is paused after the native runner and Keychain foundation; those changes stay in
+the codebase but receive no new implementation until the Windows release-candidate
+gates pass.
+
+The canonical execution order and acceptance criteria now live in
+[`windows-backend-product-plan.md`](windows-backend-product-plan.md). When older
+sections in this roadmap conflict with that document, the Windows plan wins.
+
+Current order:
+
+1. Persistent conversations and a structured panel-agent orchestration contract.
+2. Queue, concurrency, cancellation propagation, retry/backoff, and spend control.
+3. Durable artifact persistence, asynchronous media completion, and destination delivery.
+4. Real behavioral validation for all four routing modes.
+5. A Windows runtime and installer path that does not require ordinary users to operate Docker Desktop.
+6. Release hardening; only then resume macOS.
+
 ## Current Backend Status
 
 ### Done Enough For Product Integration

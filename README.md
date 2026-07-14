@@ -108,10 +108,14 @@ Agent 协作        四种编排模式、阶段交接和讨论轮次
 
 ## 接下来建设
 
-- 把已采纳经验接入后续任务与 Agent 生成的迭代检索；
-- 汇总多次相似结果，提高或降低经验置信度；
-- 扩展真实 OpenClaw 模式下更多 Provider 与失败场景验证；
-- 发布首个可公开体验的 Alpha 版本。
+- 先完成 Windows 后端：持久化项目对话，并让面板 Agent 用结构化计划统一决定编排模式和参与的子 Agent；
+- 补齐任务排队、并发、立即取消、分类重试、崩溃恢复和费用保护；
+- 统一图片、视频、文档的持久化与交付，确保“任务成功”时用户真的拿到文件；
+- 用真实 Provider 验证四种编排模式，并完成不要求普通用户操作 Docker Desktop 的 Windows 发行运行环境；
+- Windows 发布候选版通过后，再恢复 macOS 适配和打包工作。
+
+详细顺序与验收标准见
+[`docs/windows-backend-product-plan.md`](docs/windows-backend-product-plan.md)。
 
 ## 快速体验桌面应用
 

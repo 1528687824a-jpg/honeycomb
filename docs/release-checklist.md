@@ -1,5 +1,13 @@
 # Release Checklist
 
+> 2026-07-13 release reset: the earlier technical alpha proofs below are kept as
+> history, but they no longer define the next release. The active target is a
+> Windows release candidate that passes
+> [`windows-backend-product-plan.md`](windows-backend-product-plan.md), including
+> structured panel planning, execution control, durable artifact delivery, all
+> four routing-mode regressions, and a normal-user path that does not require
+> operating Docker Desktop. macOS release work is deferred.
+
 This checklist keeps alpha/release work pointed at the product goal: a
 downloadable OpenClaw multi-agent orchestration platform that a new user can
 start locally, inspect, and extend without depending on the author's private
