@@ -47,7 +47,7 @@ The structured conversation-to-task contract is implemented:
 
 ### Windows Stage 2 Progress (2026-07-14)
 
-The first four execution-control slices are implemented:
+The first five execution-control slices are implemented:
 
 - Every new or resumed job runs a shared execution preflight before DBOS starts.
 - Preflight checks every production agent, the test agent, and the discussion
@@ -117,11 +117,23 @@ The first four execution-control slices are implemented:
   action.
 - `npm run smoke:model-retry` covers the migration-backed retry state machine
   and runtime counters when PostgreSQL is running.
-- `npm run check`, the desktop production build, and all 118 unit tests pass.
+- Model calls now persist a route-scoped local request reference before provider
+  dispatch and capture provider request IDs from response headers/video tasks.
+- Provider-specific, same-origin status lookup reconciles pending,
+  not-accepted, failed, and succeeded outcomes without replaying the request.
+- The resume API, legacy admin repair route, database transition, and worker all
+  prevent unresolved unknown outcomes from being restarted.
+- Reconciliation state and audit events are durable. The task page shows the
+  affected agent/provider/model, supports provider lookup, and permits explicit
+  manual confirmation only after warning about duplicate spend.
+- Recovered image/video success requires a usable HTTP(S) media URL; a text-only
+  success cannot falsely complete a media task.
+- `npm run smoke:model-reconciliation` covers migration-backed request
+  references, restart guards, state reset, safe retry unlock, and result reuse.
+- `npm run check`, the desktop production build, and all 125 unit tests pass.
 
 Runtime database acceptance is pending while PostgreSQL and Docker Desktop are
-stopped. The next active Stage 2 slice is unknown-outcome reconciliation and
-repair, followed by hard spend limits.
+stopped. The next active Stage 2 slice is hard spend limits.
 
 ## Current Backend Status
 

@@ -2180,6 +2180,115 @@ select {
   color: #acc5d7;
 }
 
+.jobReconciliationNotice {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid #67432d;
+  background: #211813;
+  color: #eea66f;
+}
+
+.jobReconciliationBody {
+  min-width: 0;
+}
+
+.jobReconciliationNotice h3,
+.jobReconciliationNotice p,
+.jobReconciliationResolved p {
+  margin: 0;
+}
+
+.jobReconciliationNotice h3 {
+  color: #ffe4d0;
+  font-size: 14px;
+}
+
+.jobReconciliationNotice p {
+  margin-top: 5px;
+  color: #d6b59d;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.jobReconciliationCalls {
+  margin-top: 10px;
+  border-top: 1px solid #4d3528;
+}
+
+.jobReconciliationCall {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid #4d3528;
+}
+
+.jobReconciliationMeta {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 5px 9px;
+}
+
+.jobReconciliationMeta strong {
+  color: #fff4ec;
+  font-size: 13px;
+}
+
+.jobReconciliationMeta span {
+  color: #d9b8a0;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.jobReconciliationMeta small {
+  flex-basis: 100%;
+  color: #b99a84;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.jobReconciliationActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.jobReconciliationActions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 30px;
+  white-space: normal;
+}
+
+.jobReconciliationFeedback.success {
+  color: #8dd9bc;
+}
+
+.jobReconciliationFeedback.error {
+  color: #ff9e91;
+}
+
+.jobReconciliationResolved {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid #285445;
+  background: #121e19;
+  color: #8dd9bc;
+  font-size: 13px;
+}
+
 .jobQueueNotice {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -4664,6 +4773,9 @@ select {
   .customTimeFilters,
   .stats,
   .jobPreflightNotice,
+  .jobReconciliationNotice,
+  .jobReconciliationCall,
+  .jobReconciliationResolved,
   .jobQueueNotice,
   .timelineItem,
   .firstRunHero,

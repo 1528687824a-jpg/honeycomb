@@ -1,4 +1,10 @@
 import { randomUUID } from "node:crypto";
+import {
+  parseModelCallReconciliationState,
+  parseModelCallRequestReference,
+  type ModelCallReconciliationState,
+  type ModelCallRequestReference
+} from "../../shared/src/model-reconciliation";
 import { pool } from "./pool";
 
 export type ModelCallStatus =
@@ -21,6 +27,8 @@ export type ModelCallRecord = {
   requestHash: string | null;
   status: ModelCallStatus;
   responsePayload: Record<string, unknown> | null;
+  requestReference: ModelCallRequestReference | null;
+  reconciliation: ModelCallReconciliationState | null;
   error: string | null;
   createdAt: string;
   updatedAt: string;
@@ -39,6 +47,8 @@ function toModelCallRecord(row: any): ModelCallRecord {
     requestHash: row.request_hash,
     status: row.status,
     responsePayload: row.response_payload ?? null,
+    requestReference: parseModelCallRequestReference(row.request_reference),
+    reconciliation: parseModelCallReconciliationState(row.reconciliation),
     error: row.error,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString()
@@ -113,16 +123,24 @@ export async function markModelCallStarted(input: {
       ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'started')
       on conflict (idempotency_key) do update
         set status = case
-              when agent.model_calls.status in ('retry_waiting', 'failed', 'failed_unknown_outcome') then 'started'
+              when agent.model_calls.status in ('retry_waiting', 'failed') then 'started'
               else agent.model_calls.status
             end,
             error = case
-              when agent.model_calls.status in ('retry_waiting', 'failed', 'failed_unknown_outcome') then null
+              when agent.model_calls.status in ('retry_waiting', 'failed') then null
               else agent.model_calls.error
             end,
             response_payload = case
-              when agent.model_calls.status in ('retry_waiting', 'failed', 'failed_unknown_outcome') then null
+              when agent.model_calls.status in ('retry_waiting', 'failed') then null
               else agent.model_calls.response_payload
+            end,
+            request_reference = case
+              when agent.model_calls.status in ('retry_waiting', 'failed') then '{}'::jsonb
+              else agent.model_calls.request_reference
+            end,
+            reconciliation = case
+              when agent.model_calls.status in ('retry_waiting', 'failed') then '{}'::jsonb
+              else agent.model_calls.reconciliation
             end,
             updated_at = now()
       returning *`,
@@ -154,6 +172,31 @@ export async function markModelCallStarted(input: {
   } finally {
     client.release();
   }
+}
+
+export async function getModelCallForJobById(
+  jobId: string,
+  modelCallId: string
+): Promise<ModelCallRecord | null> {
+  const result = await pool.query(
+    `select * from agent.model_calls where id = $1 and job_id = $2`,
+    [modelCallId, jobId]
+  );
+  return result.rows[0] ? toModelCallRecord(result.rows[0]) : null;
+}
+
+export async function listUnknownOutcomeModelCallsForJob(
+  jobId: string
+): Promise<ModelCallRecord[]> {
+  const result = await pool.query(
+    `select *
+     from agent.model_calls
+     where job_id = $1
+       and status = 'failed_unknown_outcome'
+     order by updated_at desc, id desc`,
+    [jobId]
+  );
+  return result.rows.map(toModelCallRecord);
 }
 
 export async function markModelCallSucceeded(input: {
@@ -302,5 +345,99 @@ export async function markModelCallRetryWaiting(input: {
     ]
   );
 
+  return result.rows[0] ? toModelCallRecord(result.rows[0]) : null;
+}
+
+export async function setModelCallRequestReference(input: {
+  idempotencyKey: string;
+  requestReference: ModelCallRequestReference;
+}): Promise<ModelCallRecord | null> {
+  const result = await pool.query(
+    `update agent.model_calls
+     set request_reference = $2::jsonb,
+         updated_at = now()
+     where idempotency_key = $1
+       and status = 'started'
+     returning *`,
+    [input.idempotencyKey, JSON.stringify(input.requestReference)]
+  );
+  return result.rows[0] ? toModelCallRecord(result.rows[0]) : null;
+}
+
+export async function recordModelCallReconciliation(input: {
+  jobId: string;
+  modelCallId: string;
+  reconciliation: ModelCallReconciliationState;
+}): Promise<ModelCallRecord | null> {
+  const result = await pool.query(
+    `update agent.model_calls
+     set reconciliation = $3::jsonb,
+         response_payload = coalesce(response_payload, '{}'::jsonb)
+           || jsonb_build_object('reconciliation', $3::jsonb),
+         updated_at = now()
+     where id = $1
+       and job_id = $2
+       and status = 'failed_unknown_outcome'
+     returning *`,
+    [input.modelCallId, input.jobId, JSON.stringify(input.reconciliation)]
+  );
+  return result.rows[0] ? toModelCallRecord(result.rows[0]) : null;
+}
+
+export async function reconcileModelCallAsFailed(input: {
+  jobId: string;
+  modelCallId: string;
+  error: string;
+  reconciliation: ModelCallReconciliationState;
+}): Promise<ModelCallRecord | null> {
+  const result = await pool.query(
+    `update agent.model_calls
+     set status = 'failed',
+         error = $3,
+         reconciliation = $4::jsonb,
+         response_payload = coalesce(response_payload, '{}'::jsonb)
+           || jsonb_build_object('reconciliation', $4::jsonb),
+         updated_at = now()
+     where id = $1
+       and job_id = $2
+       and status = 'failed_unknown_outcome'
+     returning *`,
+    [
+      input.modelCallId,
+      input.jobId,
+      sanitizePostgresText(input.error),
+      JSON.stringify(input.reconciliation)
+    ]
+  );
+  return result.rows[0] ? toModelCallRecord(result.rows[0]) : null;
+}
+
+export async function reconcileModelCallAsSucceeded(input: {
+  jobId: string;
+  modelCallId: string;
+  responsePayload: Record<string, unknown>;
+  reconciliation: ModelCallReconciliationState;
+}): Promise<ModelCallRecord | null> {
+  const result = await pool.query(
+    `update agent.model_calls
+     set status = 'succeeded',
+         error = null,
+         reconciliation = $3::jsonb,
+         response_payload = $4::jsonb,
+         updated_at = now()
+     where id = $1
+       and job_id = $2
+       and status = 'failed_unknown_outcome'
+     returning *`,
+    [
+      input.modelCallId,
+      input.jobId,
+      JSON.stringify(input.reconciliation),
+      JSON.stringify({
+        ...input.responsePayload,
+        reconciliation: input.reconciliation
+      })
+    ]
+  );
   return result.rows[0] ? toModelCallRecord(result.rows[0]) : null;
 }

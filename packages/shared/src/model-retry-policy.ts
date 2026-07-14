@@ -31,6 +31,7 @@ export type ModelCallFailureSignal = {
   source?: ModelCallFailureSource;
   statusCode?: number | null;
   providerCode?: string | null;
+  providerRequestId?: string | null;
   networkCode?: string | null;
   retryAfterMs?: number | null;
 };
@@ -43,6 +44,7 @@ export type ModelCallFailureDecision = {
   userActionRequired: boolean;
   statusCode: number | null;
   providerCode: string | null;
+  providerRequestId: string | null;
   networkCode: string | null;
   retryAfterMs: number | null;
 };
@@ -110,6 +112,7 @@ function decision(
     userActionRequired: options.userActionRequired ?? false,
     statusCode: input.statusCode ?? null,
     providerCode: input.providerCode ?? null,
+    providerRequestId: input.providerRequestId ?? null,
     networkCode: input.networkCode ?? null,
     retryAfterMs: input.retryAfterMs ?? null
   };

@@ -210,6 +210,7 @@ test("selectProviderDirectKind routes specialist agents to media endpoints", () 
 
 test("provider-direct video requests use Volcengine content payloads", async () => {
   let capturedBody: Record<string, unknown> | null = null;
+  const providerRequestIds: string[] = [];
   const server = http.createServer(async (request, response) => {
     assert.equal(request.method, "POST");
     assert.equal(request.url, "/contents/generations/tasks");
@@ -220,7 +221,10 @@ test("provider-direct video requests use Volcengine content payloads", async () 
     }
     capturedBody = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
 
-    response.writeHead(200, { "content-type": "application/json" });
+    response.writeHead(200, {
+      "content-type": "application/json",
+      "x-request-id": "provider-http-request-1"
+    });
     response.end(JSON.stringify({ id: "video-task-1", status: "queued" }));
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -244,7 +248,10 @@ test("provider-direct video requests use Volcengine content payloads", async () 
         apiKey: "test-key",
         agentRole: "video"
       },
-      timeoutSeconds: 5
+      timeoutSeconds: 5,
+      onProviderRequestId: async (providerRequestId) => {
+        providerRequestIds.push(providerRequestId);
+      }
     });
 
     assert.equal(result?.textSource, "provider:video");
@@ -255,6 +262,7 @@ test("provider-direct video requests use Volcengine content payloads", async () 
       }
     ]);
     assert.equal("prompt" in (capturedBody ?? {}), false);
+    assert.deepEqual(providerRequestIds, ["provider-http-request-1", "video-task-1"]);
   } finally {
     if (previousMode === undefined) {
       delete process.env.OPENCLAW_AGENT_MODE;
@@ -324,11 +332,13 @@ test("provider-direct requests stop when the job cancellation signal aborts", as
 
 test("provider-direct errors preserve status, provider code, and Retry-After", async () => {
   let idempotencyKey: string | string[] | undefined;
+  const providerRequestIds: string[] = [];
   const server = http.createServer((request, response) => {
     idempotencyKey = request.headers["idempotency-key"];
     response.writeHead(429, {
       "content-type": "application/json",
-      "retry-after": "2"
+      "retry-after": "2",
+      "x-request-id": "provider-request-429"
     });
     response.end(JSON.stringify({
       error: {
@@ -359,16 +369,45 @@ test("provider-direct errors preserve status, provider code, and Retry-After", a
         apiKey: "test-key",
         agentRole: "research"
       },
-      timeoutSeconds: 5
+      timeoutSeconds: 5,
+      onProviderRequestId: async (providerRequestId) => {
+        providerRequestIds.push(providerRequestId);
+      }
     }), (error: unknown) => {
       assert.ok(error instanceof ProviderDirectResponseError);
       assert.equal(error.statusCode, 429);
       assert.equal(error.providerCode, "rate_limit_exceeded");
       assert.equal(error.retryAfterMs, 2_000);
+      assert.equal(error.providerRequestId, "provider-request-429");
       assert.equal(error.failureSource, "provider_http");
       return true;
     });
     assert.equal(idempotencyKey, "job-retry-after:route:0");
+    assert.deepEqual(providerRequestIds, ["provider-request-429"]);
+
+    await assert.rejects(runOpenClawAgent({
+      agentId: "research-agent",
+      sessionId: "job:request-reference-failure/stage",
+      message: "Test request reference persistence failure.",
+      requestId: "job-request-reference-failure:route:0",
+      provider: {
+        providerId: "test-provider",
+        baseUrl: `http://127.0.0.1:${address.port}`,
+        model: "test-chat-model",
+        apiKey: "test-key",
+        agentRole: "research"
+      },
+      timeoutSeconds: 5,
+      onProviderRequestId: async () => {
+        throw new Error("database temporarily unavailable");
+      }
+    }), (error: unknown) => {
+      assert.ok(error instanceof ProviderDirectResponseError);
+      assert.equal(error.failureSource, "provider_network");
+      assert.equal(error.networkCode, "REFERENCE_PERSIST_FAILED");
+      assert.equal(error.providerRequestId, "provider-request-429");
+      return true;
+    });
   } finally {
     if (previousMode === undefined) {
       delete process.env.OPENCLAW_AGENT_MODE;

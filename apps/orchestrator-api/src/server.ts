@@ -49,7 +49,15 @@ import {
   getToolApproval,
   listToolApprovals
 } from "../../../packages/db/src/approvals";
-import { markModelCallFailedUnknownOutcome } from "../../../packages/db/src/model-calls";
+import {
+  getModelCallForJobById,
+  listUnknownOutcomeModelCallsForJob,
+  markModelCallFailedUnknownOutcome,
+  reconcileModelCallAsFailed,
+  reconcileModelCallAsSucceeded,
+  recordModelCallReconciliation,
+  type ModelCallRecord
+} from "../../../packages/db/src/model-calls";
 import { getModelCallQueueOverview } from "../../../packages/db/src/model-call-queue";
 import {
   listExperiences,
@@ -186,6 +194,11 @@ import {
   resolveOpenClawAgentRunner
 } from "../../../packages/shared/src/openclaw-runner";
 import {
+  parseProviderUnknownOutcomePolicy,
+  type ModelCallReconciliationState,
+  type ModelCallReconciliationStatus
+} from "../../../packages/shared/src/model-reconciliation";
+import {
   cancelJobWorkflow,
   launchDbos,
   startJobWorkflow
@@ -249,13 +262,41 @@ import {
   runRuntimeRepairAction
 } from "./runtime-repair";
 import { extractArtifactFileRefs } from "./artifact-files";
+import {
+  queryProviderUnknownOutcome,
+  recoverProviderMediaArtifacts,
+  type ProviderReconciliationResult
+} from "./model-call-reconciliation";
 
 const unstickModelCallSchema = z.object({
   jobId: z.string().min(1),
   idempotencyKey: z.string().min(1),
   reason: z.string().optional(),
-  restartWorkflow: z.boolean().optional().default(true)
+  restartWorkflow: z.boolean().optional().default(false)
 });
+
+const reconcileUnknownOutcomeSchema = z.discriminatedUnion("action", [
+  z.object({
+    action: z.literal("query_provider")
+  }),
+  z.object({
+    action: z.literal("keep_waiting"),
+    reason: z.string().trim().min(1).max(500).optional()
+  }),
+  z.object({
+    action: z.literal("confirm_not_accepted"),
+    reason: z.string().trim().min(3).max(500)
+  }),
+  z.object({
+    action: z.literal("confirm_failed"),
+    reason: z.string().trim().min(3).max(500)
+  }),
+  z.object({
+    action: z.literal("confirm_succeeded"),
+    recoveredText: z.string().trim().min(1).max(200_000),
+    reason: z.string().trim().min(3).max(500).optional()
+  })
+]);
 
 const timelineQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(1000).optional(),
@@ -1558,6 +1599,217 @@ async function respondWithExperienceStatus(
   response.json(result);
 }
 
+function unknownOutcomeModelCallView(modelCall: ModelCallRecord) {
+  return {
+    id: modelCall.id,
+    jobId: modelCall.jobId,
+    stageId: modelCall.stageId,
+    actionType: modelCall.actionType,
+    agentId: modelCall.agentId,
+    status: modelCall.status,
+    requestReference: modelCall.requestReference,
+    reconciliation: modelCall.reconciliation,
+    error: modelCall.error,
+    createdAt: modelCall.createdAt,
+    updatedAt: modelCall.updatedAt
+  };
+}
+
+function providerReconciliationResultView(result: ProviderReconciliationResult) {
+  return {
+    status: result.status,
+    providerStatus: result.providerStatus,
+    providerHttpStatus: result.providerHttpStatus,
+    reason: result.reason,
+    resultTextRecovered: Boolean(result.resultText)
+  };
+}
+
+function recoveredMediaArtifacts(
+  modelCall: ModelCallRecord,
+  providerResult: ProviderReconciliationResult | null | undefined,
+  resultText: string | null | undefined
+) {
+  const kind = modelCall.requestReference?.kind;
+  if (kind !== "image" && kind !== "video") {
+    return [];
+  }
+  return recoverProviderMediaArtifacts({
+    kind,
+    payload: providerResult?.payload,
+    resultText
+  });
+}
+
+function canRecoverSuccessfulModelCall(
+  modelCall: ModelCallRecord,
+  providerResult: ProviderReconciliationResult | null | undefined,
+  resultText: string | null | undefined
+) {
+  const kind = modelCall.requestReference?.kind;
+  return kind === "image" || kind === "video"
+    ? recoveredMediaArtifacts(modelCall, providerResult, resultText).length > 0
+    : Boolean(resultText?.trim());
+}
+
+function buildModelCallReconciliationState(input: {
+  status: ModelCallReconciliationStatus;
+  source: ModelCallReconciliationState["source"];
+  providerStatus?: string | null;
+  providerHttpStatus?: number | null;
+  reason?: string | null;
+  canResume: boolean;
+  checkedAt?: string;
+}): ModelCallReconciliationState {
+  const checkedAt = input.checkedAt ?? new Date().toISOString();
+  return {
+    version: "honeycomb.model-reconciliation.v1",
+    status: input.status,
+    source: input.source,
+    providerStatus: input.providerStatus ?? null,
+    providerHttpStatus: input.providerHttpStatus ?? null,
+    reason: input.reason?.trim().slice(0, 500) || null,
+    canResume: input.canResume,
+    checkedAt,
+    resolvedAt: input.canResume ? checkedAt : null
+  };
+}
+
+async function recordUnresolvedModelCallReconciliation(input: {
+  jobId: string;
+  modelCall: ModelCallRecord;
+  state: ModelCallReconciliationState;
+  actor: "user" | "system";
+}) {
+  const modelCall = await recordModelCallReconciliation({
+    jobId: input.jobId,
+    modelCallId: input.modelCall.id,
+    reconciliation: input.state
+  });
+  if (!modelCall) {
+    return null;
+  }
+  await setJobStatus(input.jobId, "waiting_for_human", {
+    reason: "model_call_reconciliation_required",
+    modelCallId: modelCall.id,
+    reconciliationStatus: input.state.status
+  });
+  await appendJobEvent(input.jobId, "model_call.reconciliation_checked", {
+    modelCallId: modelCall.id,
+    idempotencyKey: modelCall.idempotencyKey,
+    status: input.state.status,
+    source: input.state.source,
+    providerStatus: input.state.providerStatus,
+    providerHttpStatus: input.state.providerHttpStatus,
+    reason: input.state.reason,
+    canResume: false
+  }, {
+    actor: input.actor,
+    stageId: modelCall.stageId
+  });
+  return modelCall;
+}
+
+async function resolveUnknownOutcomeModelCall(input: {
+  job: NonNullable<Awaited<ReturnType<typeof getJob>>>;
+  modelCall: ModelCallRecord;
+  state: ModelCallReconciliationState;
+  resultText?: string | null;
+  providerResult?: ProviderReconciliationResult | null;
+  actor: "user" | "system";
+}) {
+  let modelCall: ModelCallRecord | null;
+  if (input.state.status === "confirmed_succeeded") {
+    const recoveredArtifacts = recoveredMediaArtifacts(
+      input.modelCall,
+      input.providerResult,
+      input.resultText
+    );
+    const mediaKind = input.modelCall.requestReference?.kind;
+    const text = input.resultText?.trim() || (
+      mediaKind === "image" || mediaKind === "video"
+        ? [
+            `Recovered ${mediaKind} output from provider reconciliation.`,
+            ...recoveredArtifacts.map((artifact) => `URL: ${artifact.url}`)
+          ].join("\n")
+        : ""
+    );
+    if (!text || !canRecoverSuccessfulModelCall(
+      input.modelCall,
+      input.providerResult,
+      input.resultText
+    )) {
+      return null;
+    }
+    const previousRouteAttempts = input.modelCall.responsePayload?.routeAttempts;
+    modelCall = await reconcileModelCallAsSucceeded({
+      jobId: input.job.id,
+      modelCallId: input.modelCall.id,
+      reconciliation: input.state,
+      responsePayload: {
+        result: {
+          mode: input.modelCall.requestReference?.runner === "provider-direct"
+            ? "provider-direct"
+            : "real",
+          sessionId: input.modelCall.agentSessionId ?? input.job.sessionId,
+          text,
+          textSource: "provider:reconciled",
+          usage: null,
+          artifacts: recoveredArtifacts,
+          raw: input.providerResult?.payload ?? null
+        },
+        route: input.modelCall.requestReference,
+        routeAttempts: Array.isArray(previousRouteAttempts) ? previousRouteAttempts : [],
+        routeSelection: input.modelCall.requestReference
+          ? {
+              selectedIndex: input.modelCall.requestReference.routeIndex,
+              attemptedCount: Array.isArray(previousRouteAttempts)
+                ? previousRouteAttempts.length
+                : input.modelCall.requestReference.routeAttemptNo,
+              failoverUsed: input.modelCall.requestReference.routeIndex > 0,
+              retryUsed: input.modelCall.requestReference.routeAttemptNo > 1
+            }
+          : null
+      }
+    });
+  } else {
+    modelCall = await reconcileModelCallAsFailed({
+      jobId: input.job.id,
+      modelCallId: input.modelCall.id,
+      reconciliation: input.state,
+      error: input.state.status === "confirmed_not_accepted"
+        ? `provider_confirmed_not_accepted: ${input.state.reason ?? "request was not accepted"}`
+        : `provider_confirmed_failed: ${input.state.reason ?? "request failed"}`
+    });
+  }
+  if (!modelCall) {
+    return null;
+  }
+
+  await setJobStatus(input.job.id, "waiting_for_human", {
+    reason: "model_call_reconciled_safe_to_resume",
+    modelCallId: modelCall.id,
+    reconciliationStatus: input.state.status
+  });
+  await appendJobEvent(input.job.id, "model_call.reconciliation_resolved", {
+    modelCallId: modelCall.id,
+    idempotencyKey: modelCall.idempotencyKey,
+    status: input.state.status,
+    source: input.state.source,
+    providerStatus: input.state.providerStatus,
+    providerHttpStatus: input.state.providerHttpStatus,
+    reason: input.state.reason,
+    recoveredTextLength: input.state.status === "confirmed_succeeded"
+      ? input.resultText?.trim().length ?? 0
+      : 0,
+    canResume: true
+  }, {
+    actor: input.actor,
+    stageId: modelCall.stageId
+  });
+  return modelCall;
+}
+
 async function runJobExecutionPreflight(job: Awaited<ReturnType<typeof createJob>>) {
   if (!job.orchestrationPlan) {
     throw new Error("job_orchestration_plan_missing");
@@ -1908,6 +2160,13 @@ async function main() {
       }
 
       const input = unstickModelCallSchema.parse(request.body);
+      if (input.restartWorkflow) {
+        response.status(409).json({
+          error: "unsafe_unknown_outcome_restart_rejected",
+          message: "Reconcile the provider outcome before resuming this job."
+        });
+        return;
+      }
       const job = await getJob(input.jobId);
       if (!job) {
         response.status(404).json({ error: "job_not_found" });
@@ -1934,23 +2193,316 @@ async function main() {
         actor: "admin",
         stageId: modelCall.stageId
       });
-
-      let workflowId: string | null = null;
-      if (input.restartWorkflow) {
-        const stamp = new Date().toISOString().replace(/[^0-9]/g, "").slice(0, 14);
-        workflowId = await startJobWorkflow(input.jobId, `job-${input.jobId}-unstick-${stamp}`);
-      }
+      await setJobStatus(input.jobId, "waiting_for_human", {
+        reason: "model_call_reconciliation_required",
+        modelCallId: modelCall.id
+      });
 
       response.json({
         ok: true,
         modelCallId: modelCall.id,
         status: modelCall.status,
-        workflowId
+        workflowId: null,
+        reconciliationRequired: true
       });
     } catch (error) {
       next(error);
     }
   });
+
+  app.get("/jobs/:jobId/model-calls/unknown-outcomes", async (request, response, next) => {
+    try {
+      const jobId = routeParameter(request.params.jobId);
+      const job = await getJob(jobId);
+      if (!job) {
+        response.status(404).json({ error: "job_not_found" });
+        return;
+      }
+      const modelCalls = await listUnknownOutcomeModelCallsForJob(jobId);
+      response.json({
+        jobId,
+        count: modelCalls.length,
+        canResume: modelCalls.length === 0,
+        modelCalls: modelCalls.map(unknownOutcomeModelCallView)
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post(
+    "/jobs/:jobId/model-calls/:modelCallId/reconcile",
+    async (request, response, next) => {
+      try {
+        const jobId = routeParameter(request.params.jobId);
+        const modelCallId = routeParameter(request.params.modelCallId);
+        const input = reconcileUnknownOutcomeSchema.parse(request.body ?? {});
+        const job = await getJob(jobId);
+        if (!job) {
+          response.status(404).json({ error: "job_not_found" });
+          return;
+        }
+        const modelCall = await getModelCallForJobById(jobId, modelCallId);
+        if (!modelCall) {
+          response.status(404).json({ error: "model_call_not_found" });
+          return;
+        }
+        if (modelCall.status !== "failed_unknown_outcome") {
+          response.status(409).json({
+            error: "model_call_reconciliation_not_required",
+            modelCall: unknownOutcomeModelCallView(modelCall)
+          });
+          return;
+        }
+        if (["succeeded", "failed", "cancelled"].includes(job.status)) {
+          response.status(409).json({
+            error: "terminal_job_cannot_be_reconciled",
+            jobId,
+            status: job.status
+          });
+          return;
+        }
+
+        if (input.action === "query_provider") {
+          const reference = modelCall.requestReference;
+          if (!reference) {
+            const state = buildModelCallReconciliationState({
+              status: "manual_review",
+              source: "system",
+              reason: "model_call_request_reference_missing",
+              canResume: false
+            });
+            const updated = await recordUnresolvedModelCallReconciliation({
+              jobId,
+              modelCall,
+              state,
+              actor: "system"
+            });
+            response.status(409).json({
+              error: "model_call_request_reference_missing",
+              canResume: false,
+              modelCall: updated ? unknownOutcomeModelCallView(updated) : null
+            });
+            return;
+          }
+
+          const provider = await getModelProvider(reference.providerId);
+          if (!provider) {
+            const state = buildModelCallReconciliationState({
+              status: "manual_review",
+              source: "system",
+              reason: "model_call_provider_missing",
+              canResume: false
+            });
+            const updated = await recordUnresolvedModelCallReconciliation({
+              jobId,
+              modelCall,
+              state,
+              actor: "system"
+            });
+            response.status(409).json({
+              error: "model_call_provider_missing",
+              canResume: false,
+              modelCall: updated ? unknownOutcomeModelCallView(updated) : null
+            });
+            return;
+          }
+
+          const policy = parseProviderUnknownOutcomePolicy(provider.metadata);
+          if (!policy) {
+            const state = buildModelCallReconciliationState({
+              status: "manual_review",
+              source: "system",
+              reason: "provider_reconciliation_not_configured",
+              canResume: false
+            });
+            const updated = await recordUnresolvedModelCallReconciliation({
+              jobId,
+              modelCall,
+              state,
+              actor: "system"
+            });
+            response.status(409).json({
+              error: "provider_reconciliation_not_configured",
+              canResume: false,
+              modelCall: updated ? unknownOutcomeModelCallView(updated) : null
+            });
+            return;
+          }
+
+          const providerResult = await queryProviderUnknownOutcome({
+            baseUrl: provider.baseUrl,
+            apiKey: await readProviderApiKey(provider.id),
+            reference,
+            policy
+          });
+          if (
+            providerResult.status === "confirmed_succeeded" &&
+            !canRecoverSuccessfulModelCall(modelCall, providerResult, providerResult.resultText)
+          ) {
+            const mediaKind = modelCall.requestReference?.kind;
+            const missingReason = mediaKind === "image" || mediaKind === "video"
+              ? "provider_media_artifact_missing"
+              : providerResult.reason ?? "provider_result_missing";
+            const state = buildModelCallReconciliationState({
+              status: "manual_review",
+              source: "provider_query",
+              providerStatus: providerResult.providerStatus,
+              providerHttpStatus: providerResult.providerHttpStatus,
+              reason: missingReason,
+              canResume: false
+            });
+            const updated = await recordUnresolvedModelCallReconciliation({
+              jobId,
+              modelCall,
+              state,
+              actor: "system"
+            });
+            response.status(409).json({
+              error: missingReason,
+              outcome: providerReconciliationResultView(providerResult),
+              canResume: false,
+              modelCall: updated ? unknownOutcomeModelCallView(updated) : null
+            });
+            return;
+          }
+
+          if (
+            providerResult.status === "confirmed_not_accepted" ||
+            providerResult.status === "confirmed_failed" ||
+            providerResult.status === "confirmed_succeeded"
+          ) {
+            const state = buildModelCallReconciliationState({
+              status: providerResult.status,
+              source: "provider_query",
+              providerStatus: providerResult.providerStatus,
+              providerHttpStatus: providerResult.providerHttpStatus,
+              reason: providerResult.reason,
+              canResume: true
+            });
+            const updated = await resolveUnknownOutcomeModelCall({
+              job,
+              modelCall,
+              state,
+              resultText: providerResult.resultText,
+              providerResult,
+              actor: "system"
+            });
+            if (!updated) {
+              response.status(409).json({ error: "model_call_reconciliation_conflict" });
+              return;
+            }
+            response.json({
+              ok: true,
+              outcome: providerReconciliationResultView(providerResult),
+              canResume: true,
+              modelCall: unknownOutcomeModelCallView(updated)
+            });
+            return;
+          }
+
+          const state = buildModelCallReconciliationState({
+            status: providerResult.status,
+            source: "provider_query",
+            providerStatus: providerResult.providerStatus,
+            providerHttpStatus: providerResult.providerHttpStatus,
+            reason: providerResult.reason,
+            canResume: false
+          });
+          const updated = await recordUnresolvedModelCallReconciliation({
+            jobId,
+            modelCall,
+            state,
+            actor: "system"
+          });
+          if (!updated) {
+            response.status(409).json({ error: "model_call_reconciliation_conflict" });
+            return;
+          }
+          response.status(providerResult.status === "query_failed" ? 502 : 202).json({
+            ok: providerResult.status !== "query_failed",
+            ...(providerResult.status === "query_failed"
+              ? { error: "provider_reconciliation_query_failed" }
+              : {}),
+            outcome: providerReconciliationResultView(providerResult),
+            canResume: false,
+            modelCall: unknownOutcomeModelCallView(updated)
+          });
+          return;
+        }
+
+        if (input.action === "keep_waiting") {
+          const state = buildModelCallReconciliationState({
+            status: "manual_review",
+            source: "manual",
+            reason: input.reason ?? "manual_review_requested",
+            canResume: false
+          });
+          const updated = await recordUnresolvedModelCallReconciliation({
+            jobId,
+            modelCall,
+            state,
+            actor: "user"
+          });
+          if (!updated) {
+            response.status(409).json({ error: "model_call_reconciliation_conflict" });
+            return;
+          }
+          response.status(202).json({
+            ok: true,
+            canResume: false,
+            modelCall: unknownOutcomeModelCallView(updated)
+          });
+          return;
+        }
+
+        if (
+          input.action === "confirm_succeeded" &&
+          !canRecoverSuccessfulModelCall(modelCall, null, input.recoveredText)
+        ) {
+          response.status(409).json({
+            error: modelCall.requestReference?.kind === "image" ||
+              modelCall.requestReference?.kind === "video"
+              ? "provider_media_artifact_missing"
+              : "provider_result_missing",
+            canResume: false,
+            modelCall: unknownOutcomeModelCallView(modelCall)
+          });
+          return;
+        }
+
+        const status = input.action === "confirm_not_accepted"
+          ? "confirmed_not_accepted"
+          : input.action === "confirm_failed"
+            ? "confirmed_failed"
+            : "confirmed_succeeded";
+        const state = buildModelCallReconciliationState({
+          status,
+          source: "manual",
+          reason: input.reason ?? "manually confirmed by user",
+          canResume: true
+        });
+        const updated = await resolveUnknownOutcomeModelCall({
+          job,
+          modelCall,
+          state,
+          resultText: input.action === "confirm_succeeded" ? input.recoveredText : null,
+          actor: "user"
+        });
+        if (!updated) {
+          response.status(409).json({ error: "model_call_reconciliation_conflict" });
+          return;
+        }
+        response.json({
+          ok: true,
+          canResume: true,
+          modelCall: unknownOutcomeModelCallView(updated)
+        });
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
 
   app.get("/jobs", async (request, response, next) => {
     try {
@@ -4650,6 +5202,18 @@ async function main() {
   app.post("/jobs/:jobId/resume", async (request, response, next) => {
     try {
       const input = resumeJobSchema.parse(request.body ?? {});
+      const unresolvedModelCalls = await listUnknownOutcomeModelCallsForJob(
+        routeParameter(request.params.jobId)
+      );
+      if (unresolvedModelCalls.length > 0) {
+        response.status(409).json({
+          error: "model_call_reconciliation_required",
+          jobId: routeParameter(request.params.jobId),
+          canResume: false,
+          modelCalls: unresolvedModelCalls.map(unknownOutcomeModelCallView)
+        });
+        return;
+      }
       const resume = await requestJobResume({
         jobId: request.params.jobId,
         reason: input.reason,

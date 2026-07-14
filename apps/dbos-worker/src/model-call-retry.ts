@@ -50,6 +50,7 @@ export function classifyModelCallError(error: unknown) {
     source,
     statusCode: numberValue(value?.statusCode),
     providerCode: stringValue(value?.providerCode),
+    providerRequestId: stringValue(value?.providerRequestId),
     networkCode: nestedNetworkCode(error),
     retryAfterMs: numberValue(value?.retryAfterMs)
   });

@@ -37,7 +37,8 @@ import {
   markModelCallFailedUnknownOutcome,
   markModelCallRetryWaiting,
   markModelCallStarted,
-  markModelCallSucceeded
+  markModelCallSucceeded,
+  setModelCallRequestReference
 } from "../../../packages/db/src/model-calls";
 import { getAgentEventsForJob } from "../../../packages/db/src/session";
 import { createExperienceCandidate } from "../../../packages/db/src/experience";
@@ -67,6 +68,7 @@ import {
   type TaskExecutionRetryState
 } from "../../../packages/shared/src/model-retry-policy";
 import { parseTaskExecutionRetryState } from "../../../packages/shared/src/task-retry-contract";
+import type { ModelCallRequestReference } from "../../../packages/shared/src/model-reconciliation";
 import { inferFallbackStages } from "../../../packages/shared/src/orchestration-contract";
 import { preflightTaskExecution } from "../../../packages/runtime/src/task-preflight";
 import {
@@ -79,6 +81,7 @@ import {
   getOpenClawAgentRunner,
   resolveOpenClawAgentRunner,
   runOpenClawAgent,
+  selectProviderDirectKind,
   type OpenClawRunResult
 } from "./adapters/openclaw";
 import { loadClusterConfig, type LoadedClusterConfig } from "./config/cluster";
@@ -189,6 +192,7 @@ function routeAttemptPayload(input: {
           userActionRequired: input.decision.userActionRequired,
           statusCode: input.decision.statusCode,
           providerCode: input.decision.providerCode,
+          providerRequestId: input.decision.providerRequestId,
           networkCode: input.decision.networkCode,
           retryAfterMs: input.decision.retryAfterMs
         }
@@ -310,6 +314,20 @@ async function runOpenClawAgentIdempotent(input: {
       actionType: input.actionType,
       agentId: primaryRoute.honeycombAgentId,
       providerId: primaryRoute.providerId,
+      failure: decision
+    });
+    throw new ModelCallExecutionError(message, decision);
+  }
+
+  if (existing?.status === "failed_unknown_outcome") {
+    const message = `model_call_reconciliation_required: ${idempotencyKey}`;
+    const decision = unknownOutcomeDecision(message);
+    await setJobStatus(input.jobId, "waiting_for_human", {
+      reason: message,
+      actionType: input.actionType,
+      agentId: primaryRoute.honeycombAgentId,
+      providerId: primaryRoute.providerId,
+      modelCallId: existing.id,
       failure: decision
     });
     throw new ModelCallExecutionError(message, decision);
@@ -507,6 +525,7 @@ async function runOpenClawAgentIdempotent(input: {
         let slotLease: ModelCallSlotLease | null = null;
         let slotReleaseReason: string | null = null;
         let retryState: TaskExecutionRetryState | null = null;
+        let requestReference: ModelCallRequestReference | null = null;
         let shouldFailover = false;
         try {
           slotLease = await acquireModelCallSlot({
@@ -540,6 +559,64 @@ async function runOpenClawAgentIdempotent(input: {
             modelCallRecorded = true;
           }
 
+          let requestId: string | null = null;
+          if (isOpenClawRealMode()) {
+            const runner = resolveOpenClawAgentRunner({ runner: getOpenClawAgentRunner() });
+            requestId = sha256(`${idempotencyKey}:route:${routeIndex}`);
+            requestReference = {
+              version: "honeycomb.model-request-reference.v1",
+              requestId,
+              providerRequestId: null,
+              providerId: route.providerId!,
+              model: route.model,
+              kind: runner === "provider-direct"
+                ? selectProviderDirectKind({
+                    providerId: route.providerId,
+                    baseUrl: route.providerBaseUrl,
+                    model: route.model,
+                    apiKey: route.apiKey,
+                    agentRole: route.agentRole
+                  })
+                : "openclaw",
+              runner,
+              routeIndex,
+              routeAttemptNo,
+              preparedAt: nowIso()
+            };
+            const referencedCall = await setModelCallRequestReference({
+              idempotencyKey,
+              requestReference
+            });
+            if (!referencedCall) {
+              const latestCall = await getModelCallByKey(idempotencyKey);
+              if (latestCall?.status === "cancelled") {
+                throw new JobCancelledError();
+              }
+              throw new Error("model_call_request_reference_not_persisted");
+            }
+          }
+
+          const recordProviderRequestId = async (providerRequestId: string) => {
+            if (!requestReference) {
+              return;
+            }
+            requestReference = {
+              ...requestReference,
+              providerRequestId: providerRequestId.trim().slice(0, 500)
+            };
+            const referencedCall = await setModelCallRequestReference({
+              idempotencyKey,
+              requestReference
+            });
+            if (!referencedCall) {
+              const latestCall = await getModelCallByKey(idempotencyKey);
+              if (latestCall?.status === "cancelled") {
+                throw new JobCancelledError();
+              }
+              throw new Error("model_call_provider_request_id_not_persisted");
+            }
+          };
+
           let result: OpenClawRunResult | null = null;
           let providerFailure: { message: string; decision: ModelCallFailureDecision } | null = null;
           try {
@@ -547,7 +624,7 @@ async function runOpenClawAgentIdempotent(input: {
               agentId: route.openclawAgentId,
               sessionId: input.sessionId,
               message: input.message,
-              requestId: sha256(`${idempotencyKey}:route:${routeIndex}`),
+              requestId,
               providerDirectMessage: input.providerDirectMessage,
               provider: {
                 providerId: route.providerId,
@@ -558,7 +635,8 @@ async function runOpenClawAgentIdempotent(input: {
               },
               outputDir: input.outputDir,
               timeoutSeconds: input.timeoutSeconds,
-              signal: cancellationWatcher.signal
+              signal: cancellationWatcher.signal,
+              onProviderRequestId: recordProviderRequestId
             });
           } catch (error) {
             const cancelled = isJobCancellationError(error) || toSafeErrorMessage(error) === "job_cancelled";
@@ -583,6 +661,9 @@ async function runOpenClawAgentIdempotent(input: {
             slotReleaseReason = message;
             if (decision.userActionRequired && !userActionFailure) {
               userActionFailure = { decision, error: message, route: redactedRoute };
+            }
+            if (requestReference && decision.providerRequestId) {
+              await recordProviderRequestId(decision.providerRequestId);
             }
             routeAttempts.push(routeAttemptPayload({
               route: redactedRoute,

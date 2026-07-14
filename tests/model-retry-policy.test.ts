@@ -142,10 +142,12 @@ test("worker error normalization preserves structured provider metadata", () => 
     failureSource: "provider_http",
     statusCode: 429,
     providerCode: "rate_limit_exceeded",
+    providerRequestId: "request-123",
     retryAfterMs: 3_000
   }));
   assert.equal(result.category, "rate_limited");
   assert.equal(result.providerCode, "rate_limit_exceeded");
+  assert.equal(result.providerRequestId, "request-123");
   assert.equal(result.retryAfterMs, 3_000);
 });
 

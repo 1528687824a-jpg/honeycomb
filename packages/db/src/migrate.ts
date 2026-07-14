@@ -467,6 +467,8 @@ const statements = [
     on agent.model_calls(job_id, created_at)`,
   `create index if not exists model_calls_stage_attempt_idx
     on agent.model_calls(stage_id, attempt_no, action_type)`,
+  `alter table agent.model_calls add column if not exists request_reference jsonb not null default '{}'`,
+  `alter table agent.model_calls add column if not exists reconciliation jsonb not null default '{}'`,
   `create index if not exists model_call_queue_active_idx
     on agent.model_call_queue(status, expires_at)`,
   `create index if not exists model_call_queue_provider_idx

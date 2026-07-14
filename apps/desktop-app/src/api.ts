@@ -10,6 +10,10 @@ import type {
   TaskExecutionPreflight,
   TaskOrchestrationPlan
 } from "../../../packages/shared/src/types";
+import type {
+  ModelCallReconciliationState,
+  ModelCallRequestReference
+} from "../../../packages/shared/src/model-reconciliation";
 
 const viteEnv = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env ?? {};
 const API_BASE = viteEnv.VITE_ORCHESTRATOR_URL ?? "http://127.0.0.1:3000";
@@ -1248,6 +1252,53 @@ export type JobRecord = {
   completedAt: string | null;
 };
 
+export type UnknownOutcomeModelCall = {
+  id: string;
+  jobId: string;
+  stageId: string | null;
+  actionType: string;
+  agentId: string;
+  status:
+    | "started"
+    | "retry_waiting"
+    | "succeeded"
+    | "failed"
+    | "failed_unknown_outcome"
+    | "cancelled";
+  requestReference: ModelCallRequestReference | null;
+  reconciliation: ModelCallReconciliationState | null;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type UnknownOutcomeModelCallsResponse = {
+  jobId: string;
+  count: number;
+  canResume: boolean;
+  modelCalls: UnknownOutcomeModelCall[];
+};
+
+export type ModelCallReconciliationAction =
+  | { action: "query_provider" }
+  | { action: "keep_waiting"; reason?: string }
+  | { action: "confirm_not_accepted"; reason: string }
+  | { action: "confirm_failed"; reason: string }
+  | { action: "confirm_succeeded"; recoveredText: string; reason?: string };
+
+export type ModelCallReconciliationResponse = {
+  ok: boolean;
+  canResume: boolean;
+  outcome?: {
+    status: ModelCallReconciliationState["status"];
+    providerStatus: string | null;
+    providerHttpStatus: number | null;
+    reason: string | null;
+    resultTextRecovered: boolean;
+  };
+  modelCall: UnknownOutcomeModelCall | null;
+};
+
 export type JobArtifactFile = {
   index: number;
   label: string;
@@ -1656,6 +1707,26 @@ export async function getJobTimeline(jobId: string, limit = 500, since?: string,
     params.set("cursor", cursor);
   }
   return request<JobTimeline>(`/jobs/${jobId}/timeline?${params.toString()}`);
+}
+
+export async function listJobUnknownOutcomes(jobId: string) {
+  return request<UnknownOutcomeModelCallsResponse>(
+    `/jobs/${encodeURIComponent(jobId)}/model-calls/unknown-outcomes`
+  );
+}
+
+export async function reconcileJobUnknownOutcome(
+  jobId: string,
+  modelCallId: string,
+  input: ModelCallReconciliationAction
+) {
+  return request<ModelCallReconciliationResponse>(
+    `/jobs/${encodeURIComponent(jobId)}/model-calls/${encodeURIComponent(modelCallId)}/reconcile`,
+    {
+      method: "POST",
+      body: JSON.stringify(input)
+    }
+  );
 }
 
 export async function getJobArtifacts(jobId: string) {

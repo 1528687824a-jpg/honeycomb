@@ -70,7 +70,8 @@ export type OpenClawTextSource =
   | "finalAssistantRawText"
   | "provider:chat"
   | "provider:image"
-  | "provider:video";
+  | "provider:video"
+  | "provider:reconciled";
 
 export class OpenClawOutputError extends Error {
   readonly failureSource = "output_invalid" as const;
@@ -277,7 +278,8 @@ export class ProviderDirectResponseError extends Error {
     readonly failureSource: ModelCallFailureSource,
     readonly providerCode: string | null = null,
     readonly networkCode: string | null = null,
-    readonly retryAfterMs: number | null = null
+    readonly retryAfterMs: number | null = null,
+    readonly providerRequestId: string | null = null
   ) {
     super(message);
     this.name = "ProviderDirectResponseError";
@@ -352,11 +354,14 @@ function createTimedAbortSignal(input: {
 async function providerResponseErrorDetails(response: Response) {
   let message = `${response.status} ${response.statusText}`.trim();
   let providerCode: string | null = null;
+  let providerRequestId = providerResponseRequestId(response);
   try {
     const body = await response.json() as {
-      error?: { message?: unknown; code?: unknown };
+      error?: { message?: unknown; code?: unknown; request_id?: unknown; requestId?: unknown };
       message?: unknown;
       code?: unknown;
+      request_id?: unknown;
+      requestId?: unknown;
     };
     const remoteMessage =
       typeof body.error?.message === "string"
@@ -371,14 +376,56 @@ async function providerResponseErrorDetails(response: Response) {
     if (typeof remoteCode === "string" || typeof remoteCode === "number") {
       providerCode = String(remoteCode).slice(0, 120);
     }
+    const remoteRequestId =
+      body.error?.request_id ??
+      body.error?.requestId ??
+      body.request_id ??
+      body.requestId;
+    if (!providerRequestId && (typeof remoteRequestId === "string" || typeof remoteRequestId === "number")) {
+      providerRequestId = String(remoteRequestId).slice(0, 500);
+    }
   } catch {
     // Keep the status-only message. Do not echo raw provider bodies.
   }
   return {
     message,
     providerCode,
-    retryAfterMs: parseRetryAfterMs(response.headers.get("retry-after"))
+    retryAfterMs: parseRetryAfterMs(response.headers.get("retry-after")),
+    providerRequestId: providerRequestId?.trim().slice(0, 500) || null
   };
+}
+
+function providerResponseRequestId(response: Response) {
+  return (
+    response.headers.get("x-request-id") ??
+    response.headers.get("request-id") ??
+    response.headers.get("x-amzn-requestid")
+  )?.trim().slice(0, 500) || null;
+}
+
+async function notifyProviderRequestId(
+  callback: ((providerRequestId: string) => Promise<void>) | undefined,
+  providerRequestId: string
+) {
+  if (!callback) {
+    return;
+  }
+  try {
+    await callback(providerRequestId);
+  } catch (error) {
+    if (isJobCancellationError(error)) {
+      throw new JobCancelledError();
+    }
+    throw new ProviderDirectResponseError(
+      "provider_request_reference_persist_failed",
+      null,
+      "provider_network",
+      null,
+      "REFERENCE_PERSIST_FAILED",
+      null,
+      providerRequestId
+    );
+  }
 }
 
 function nestedErrorCode(error: unknown) {
@@ -399,6 +446,7 @@ async function fetchProviderJson(input: {
   body: Record<string, unknown>;
   timeoutMs: number;
   signal?: AbortSignal;
+  onProviderRequestId?: (providerRequestId: string) => Promise<void>;
 }) {
   const abort = createTimedAbortSignal({
     signal: input.signal,
@@ -417,6 +465,11 @@ async function fetchProviderJson(input: {
       signal: abort.signal
     });
 
+    const responseRequestId = providerResponseRequestId(response);
+    if (responseRequestId) {
+      await notifyProviderRequestId(input.onProviderRequestId, responseRequestId);
+    }
+
     if (!response.ok) {
       const details = await providerResponseErrorDetails(response);
       throw new ProviderDirectResponseError(
@@ -425,7 +478,8 @@ async function fetchProviderJson(input: {
         "provider_http",
         details.providerCode,
         null,
-        details.retryAfterMs
+        details.retryAfterMs,
+        details.providerRequestId
       );
     }
 
@@ -890,6 +944,7 @@ async function runProviderDirectChat(input: {
   provider: OpenClawProviderRuntime & { baseUrl: string; model: string; apiKey: string };
   timeoutSeconds: number;
   signal?: AbortSignal;
+  onProviderRequestId?: (providerRequestId: string) => Promise<void>;
 }): Promise<OpenClawRunResult> {
   const maxTokens = numberValue(process.env.OPENCLAW_PROVIDER_DIRECT_MAX_TOKENS) ?? 1200;
   const raw = await fetchProviderJson({
@@ -898,6 +953,7 @@ async function runProviderDirectChat(input: {
     requestId: input.requestId,
     timeoutMs: providerTimeoutMs(input.timeoutSeconds),
     signal: input.signal,
+    onProviderRequestId: input.onProviderRequestId,
     body: {
       model: input.provider.model,
       messages: [
@@ -942,6 +998,7 @@ async function runProviderDirectImage(input: {
   provider: OpenClawProviderRuntime & { baseUrl: string; model: string; apiKey: string };
   timeoutSeconds: number;
   signal?: AbortSignal;
+  onProviderRequestId?: (providerRequestId: string) => Promise<void>;
 }): Promise<OpenClawRunResult> {
   const body: Record<string, unknown> = {
     model: input.provider.model,
@@ -962,6 +1019,7 @@ async function runProviderDirectImage(input: {
     requestId: input.requestId,
     timeoutMs: providerTimeoutMs(input.timeoutSeconds),
     signal: input.signal,
+    onProviderRequestId: input.onProviderRequestId,
     body
   });
   const artifacts = await persistMediaCandidates({
@@ -996,6 +1054,7 @@ async function runProviderDirectVideo(input: {
   provider: OpenClawProviderRuntime & { baseUrl: string; model: string; apiKey: string };
   timeoutSeconds: number;
   signal?: AbortSignal;
+  onProviderRequestId?: (providerRequestId: string) => Promise<void>;
 }): Promise<OpenClawRunResult> {
   const raw = await fetchProviderJson({
     url: videoTasksUrl(input.provider.baseUrl),
@@ -1003,6 +1062,7 @@ async function runProviderDirectVideo(input: {
     requestId: input.requestId,
     timeoutMs: providerTimeoutMs(input.timeoutSeconds),
     signal: input.signal,
+    onProviderRequestId: input.onProviderRequestId,
     body: {
       model: input.provider.model,
       content: [
@@ -1023,6 +1083,9 @@ async function runProviderDirectVideo(input: {
     stringValue(recordValue(raw)?.id) ??
     stringValue(recordValue(raw)?.task_id) ??
     stringValue(recordValue(raw)?.taskId);
+  if (taskId) {
+    await notifyProviderRequestId(input.onProviderRequestId, taskId.slice(0, 500));
+  }
   const text = [
     "Provider direct video generation task submitted.",
     taskId ? `Task ID: ${taskId}` : "",
@@ -1047,6 +1110,7 @@ async function runProviderDirectAgent(input: {
   outputDir?: string | null;
   timeoutSeconds: number;
   signal?: AbortSignal;
+  onProviderRequestId?: (providerRequestId: string) => Promise<void>;
 }) {
   const provider = sanitizeProviderForDirectRun(input.provider);
   const kind = selectProviderDirectKind(provider);
@@ -1178,6 +1242,7 @@ export async function runOpenClawAgent(input: {
   outputDir?: string | null;
   timeoutSeconds?: number;
   signal?: AbortSignal;
+  onProviderRequestId?: (providerRequestId: string) => Promise<void>;
 }): Promise<OpenClawRunResult | null> {
   throwIfJobCancelled(input.signal);
   if (!openClawRealMode()) {
@@ -1193,7 +1258,8 @@ export async function runOpenClawAgent(input: {
       provider: input.provider,
       outputDir: input.outputDir,
       timeoutSeconds,
-      signal: input.signal
+      signal: input.signal,
+      onProviderRequestId: input.onProviderRequestId
     });
   }
 

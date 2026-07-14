@@ -50,6 +50,7 @@ import {
   getJob,
   getJobArtifacts,
   getJobTimeline,
+  listJobUnknownOutcomes,
   getRuntimeDiagnostics,
   listExperiences,
   listAgentConfigs,
@@ -59,6 +60,7 @@ import {
   listToolApprovals,
   rejectExperience,
   rejectToolApproval,
+  reconcileJobUnknownOutcome,
   resumeJob,
   runRuntimeRepairAction,
   saveAgentModelConfig as saveBackendAgentModelConfig,
@@ -73,6 +75,8 @@ import {
   type JobStatus,
   type JobTimeline,
   type ListJobsResponse,
+  type ModelCallReconciliationAction,
+  type UnknownOutcomeModelCallsResponse,
   type RuntimeDiagnosticsResponse,
   type RuntimeRepairAction,
   type RuntimeRepairActionId,
@@ -2097,6 +2101,39 @@ function friendlyApiErrorMessage(error: unknown, language: Language = "en") {
         ? `\u4efb\u52a1\u4ecd\u672a\u5f00\u59cb\uff1a${detail}\u3002\u8bf7\u5148\u4fee\u6b63 Agent \u914d\u7f6e\uff0c\u518d\u70b9\u51fb\u201c\u6062\u590d\u4efb\u52a1\u201d\u3002`
         : `The task is still blocked: ${detail}. Fix the agent configuration, then resume the task again.`;
     }
+    if (parsed.error === "model_call_reconciliation_required") {
+      return language === "zh"
+        ? "这次模型调用的结果还不能确定。请先在任务页核对服务商状态，Honeycomb 不会直接重复发送。"
+        : "This model call has an unknown outcome. Reconcile it on the task page before resuming; Honeycomb will not replay it blindly.";
+    }
+    if (parsed.error === "provider_reconciliation_not_configured") {
+      return language === "zh"
+        ? "该服务商没有配置自动状态查询。请先在服务商控制台确认这次请求未执行，再使用人工确认。"
+        : "Automatic status lookup is not configured for this provider. Check the provider console before confirming manually.";
+    }
+    if (parsed.error === "provider_reconciliation_query_failed") {
+      return language === "zh"
+        ? "暂时无法从服务商取得请求状态。任务仍保持暂停，不会重复扣费；稍后可以再次核对。"
+        : "The provider status could not be retrieved. The task remains paused and will not be replayed; try again later.";
+    }
+    if (
+      parsed.error === "model_call_request_reference_missing" ||
+      parsed.error === "model_call_provider_missing"
+    ) {
+      return language === "zh"
+        ? "这次旧请求缺少可自动核对的信息。请在服务商控制台确认后再人工处理。"
+        : "This older request lacks enough data for automatic lookup. Check the provider console before resolving it manually.";
+    }
+    if (parsed.error === "provider_result_missing") {
+      return language === "zh"
+        ? "服务商显示请求已完成，但没有返回可恢复的结果内容。任务继续暂停，请到服务商控制台查看结果。"
+        : "The provider reports completion but returned no recoverable output. The task remains paused; inspect the provider console.";
+    }
+    if (parsed.error === "provider_media_artifact_missing") {
+      return language === "zh"
+        ? "服务商显示生成已完成，但没有取回可下载的图片或视频地址。任务会继续暂停，不能把只有“成功”文字的结果当成交付完成。"
+        : "The provider reports completion, but no downloadable image or video was recovered. The task remains paused rather than treating a text-only success as delivery.";
+    }
     if (typeof parsed.error === "string" && parsed.error.trim()) {
       return parsed.error.trim();
     }
@@ -2159,6 +2196,37 @@ function modelRetryFailureLabel(
   return labels[category][language];
 }
 
+function reconciliationStatusLabel(status: string | null | undefined, language: Language) {
+  const labels: Record<string, { zh: string; en: string }> = {
+    pending: { zh: "等待核对", en: "Awaiting review" },
+    provider_pending: { zh: "服务商仍在处理", en: "Provider still processing" },
+    query_failed: { zh: "自动核对未成功", en: "Automatic check failed" },
+    manual_review: { zh: "需要人工核对", en: "Manual review required" }
+  };
+  return (status && labels[status]?.[language]) || (language === "zh" ? "结果未知" : "Unknown outcome");
+}
+
+function reconciliationNoticeText(status: string | null | undefined, language: Language) {
+  if (status === "provider_pending") {
+    return language === "zh"
+      ? "服务商仍在处理这次请求。Honeycomb 会保持暂停，不会重复发送。"
+      : "The provider is still processing this request. Honeycomb will remain paused and will not replay it.";
+  }
+  if (status === "query_failed") {
+    return language === "zh"
+      ? "暂时没有查到可靠状态。任务仍保持暂停，稍后可再次核对。"
+      : "A reliable status could not be retrieved. The task remains paused; check again later.";
+  }
+  if (status === "manual_review") {
+    return language === "zh"
+      ? "自动核对无法得出结论，请到服务商控制台查看请求记录。"
+      : "Automatic reconciliation was inconclusive. Inspect the request in the provider console.";
+  }
+  return language === "zh"
+    ? "网络中断发生在请求发出之后，当前无法确定服务商是否已执行。"
+    : "The connection ended after dispatch, so it is not yet known whether the provider executed the request.";
+}
+
 function App() {
   const [language, setLanguage] = useState<Language>(getInitialLanguage);
   const [activeView, setActiveView] = useState<AppView>(getInitialView);
@@ -2177,6 +2245,10 @@ function App() {
   const [selectedJobId, setSelectedJobId] = useState("");
   const [selectedJob, setSelectedJob] = useState<JobRecord | null>(null);
   const [timeline, setTimeline] = useState<JobTimeline | null>(null);
+  const [unknownOutcomes, setUnknownOutcomes] = useState<UnknownOutcomeModelCallsResponse | null>(null);
+  const [reconciliationBusyId, setReconciliationBusyId] = useState("");
+  const [reconciliationMessage, setReconciliationMessage] = useState("");
+  const [reconciliationError, setReconciliationError] = useState("");
   const [experiences, setExperiences] = useState<ExperienceRecord[]>([]);
   const [experienceSummary, setExperienceSummary] = useState<ExperienceListResponse["summary"]>({
     candidate: 0,
@@ -2262,6 +2334,7 @@ function App() {
   const [runtimeRepairMessage, setRuntimeRepairMessage] = useState("");
   const [runtimeRepairError, setRuntimeRepairError] = useState("");
   const jobsRequestSeq = useRef(0);
+  const jobDetailRequestSeq = useRef(0);
   const notificationStartedAt = useRef(Date.now());
   const seenNotificationIds = useRef<Set<string>>(loadSeenNotificationIds());
   const desktopExportedJobIds = useRef<Set<string>>(loadDesktopExportedJobIds());
@@ -2278,6 +2351,10 @@ function App() {
     () => jobs.find((job) => job.id === selectedJobId) ?? selectedJob,
     [jobs, selectedJob, selectedJobId]
   );
+  const selectedUnknownOutcomes = unknownOutcomes?.jobId === selectedJobId
+    ? unknownOutcomes.modelCalls
+    : [];
+  const unknownOutcomesLoaded = unknownOutcomes?.jobId === selectedJobId;
 
   const activeStatusFilter = jobStatusFilters.find((filter) => filter.id === jobStatusFilter);
   const trimmedJobPromptFilter = jobPromptFilter.trim();
@@ -2600,9 +2677,11 @@ function App() {
   }
 
   async function refreshJob(targetJobId = selectedJobId) {
+    const requestSeq = ++jobDetailRequestSeq.current;
     if (!targetJobId) {
       setSelectedJob(null);
       setTimeline(null);
+      setUnknownOutcomes(null);
       return;
     }
 
@@ -2610,11 +2689,16 @@ function App() {
       timeline?.job.id === targetJobId && timeline.summary.nextCursor
         ? timeline.summary.nextCursor
         : undefined;
-    const [job, nextTimeline] = await Promise.all([
+    const [job, nextTimeline, nextUnknownOutcomes] = await Promise.all([
       getJob(targetJobId),
-      getJobTimeline(targetJobId, 500, undefined, timelineCursor)
+      getJobTimeline(targetJobId, 500, undefined, timelineCursor),
+      listJobUnknownOutcomes(targetJobId)
     ]);
+    if (requestSeq !== jobDetailRequestSeq.current) {
+      return;
+    }
     setSelectedJob(job);
+    setUnknownOutcomes(nextUnknownOutcomes);
     void maybeExportGeneratedMediaToDesktop(job);
     setTimeline((currentTimeline) => {
       if (!timelineCursor || currentTimeline?.job.id !== targetJobId) {
@@ -3243,6 +3327,63 @@ function App() {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function reconcileSelectedModelCall(
+    modelCallId: string,
+    action: ModelCallReconciliationAction
+  ) {
+    if (!selectedJobId || reconciliationBusyId) return;
+    setReconciliationBusyId(modelCallId);
+    setReconciliationMessage("");
+    setReconciliationError("");
+    setError(null);
+    try {
+      const result = await reconcileJobUnknownOutcome(selectedJobId, modelCallId, action);
+      if (result.canResume) {
+        setReconciliationMessage(
+          result.outcome?.status === "confirmed_succeeded"
+            ? language === "zh"
+              ? "已从服务商取回成功结果，现在可以安全恢复任务。"
+              : "The successful provider result was recovered. The task can now resume safely."
+            : language === "zh"
+              ? "已确认服务商没有成功执行这次请求，现在可以安全恢复任务。"
+              : "The provider did not complete this request. The task can now resume safely."
+        );
+      } else {
+        setReconciliationMessage(
+          result.outcome?.status === "provider_pending"
+            ? language === "zh"
+              ? "服务商仍在处理，任务会保持暂停；稍后再次核对即可。"
+              : "The provider is still processing. The task remains paused; check again later."
+            : language === "zh"
+              ? "结果仍需核对，任务会保持暂停且不会重复发送。"
+              : "The outcome still needs review. The task remains paused and will not be replayed."
+        );
+      }
+      await refreshAll(selectedJobId);
+    } catch (caught) {
+      await refreshJob(selectedJobId).catch(() => undefined);
+      setReconciliationError(friendlyApiErrorMessage(caught, language));
+    } finally {
+      setReconciliationBusyId("");
+    }
+  }
+
+  async function confirmModelCallWasNotAccepted(modelCallId: string) {
+    const reason = await requestTextInputDialog({
+      title: language === "zh" ? "确认服务商未执行" : "Confirm request was not executed",
+      label: language === "zh"
+        ? "请填写你在服务商控制台看到的依据。确认错误可能造成重复生成或重复扣费。"
+        : "Enter what you verified in the provider console. An incorrect confirmation can cause duplicate work or charges.",
+      placeholder: language === "zh" ? "例如：请求记录中未找到该编号" : "For example: request ID was not found",
+      confirmLabel: language === "zh" ? "确认可重试" : "Confirm safe to retry"
+    });
+    if (!reason?.trim()) return;
+    await reconcileSelectedModelCall(modelCallId, {
+      action: "confirm_not_accepted",
+      reason: reason.trim()
+    });
   }
 
   function scrollConversationToBottom(behavior: ScrollBehavior = "auto") {
@@ -3917,6 +4058,11 @@ function App() {
       window.clearInterval(interval);
     };
   }, [apiState, language, setupComplete]);
+
+  useEffect(() => {
+    setReconciliationMessage("");
+    setReconciliationError("");
+  }, [selectedJobId]);
 
   useEffect(() => {
     if (!selectedJobId || apiState !== "online") return;
@@ -5147,7 +5293,7 @@ function App() {
                 <p>{selectedFromList ? `${selectedFromList.id} / ${selectedFromList.ingressOrigin} / ${routingLabel(selectedFromList.routingMode)}` : "-"}</p>
               </div>
               <div className="detailActions">
-                {isResumable(selectedFromList) ? (
+                {isResumable(selectedFromList) && unknownOutcomesLoaded && selectedUnknownOutcomes.length === 0 ? (
                   <button
                     className="primaryButton"
                     type="button"
@@ -5228,6 +5374,66 @@ function App() {
                   <Settings size={14} aria-hidden="true" />
                   {language === "zh" ? "\u68c0\u67e5 Agent" : "Check agents"}
                 </button>
+              </section>
+            ) : null}
+
+            {selectedUnknownOutcomes.length > 0 ? (
+              <section className="jobReconciliationNotice" role="alert" aria-live="polite">
+                <AlertTriangle size={18} aria-hidden="true" />
+                <div className="jobReconciliationBody">
+                  <h3>{language === "zh" ? "模型调用结果需要核对" : "Model call outcome needs reconciliation"}</h3>
+                  <p>
+                    {language === "zh"
+                      ? "为避免重复生成和重复扣费，Honeycomb 已暂停任务。核对完成前不能直接恢复。"
+                      : "Honeycomb paused the task to prevent duplicate work or charges. It cannot resume until reconciliation is complete."}
+                  </p>
+                  <div className="jobReconciliationCalls">
+                    {selectedUnknownOutcomes.map((modelCall) => (
+                      <div className="jobReconciliationCall" key={modelCall.id}>
+                        <div className="jobReconciliationMeta">
+                          <strong>{modelCall.agentId}</strong>
+                          <span>
+                            {[
+                              modelCall.requestReference?.providerId,
+                              modelCall.requestReference?.model
+                            ].filter(Boolean).join(" / ") || (language === "zh" ? "旧请求信息不完整" : "Legacy request details unavailable")}
+                          </span>
+                          <span>{reconciliationStatusLabel(modelCall.reconciliation?.status, language)}</span>
+                          <small>{reconciliationNoticeText(modelCall.reconciliation?.status, language)}</small>
+                        </div>
+                        <div className="jobReconciliationActions">
+                          <button
+                            className="primaryButton compactButton"
+                            type="button"
+                            onClick={() => reconcileSelectedModelCall(modelCall.id, { action: "query_provider" })}
+                            disabled={Boolean(reconciliationBusyId)}
+                          >
+                            <RefreshCw size={14} aria-hidden="true" />
+                            {reconciliationBusyId === modelCall.id
+                              ? language === "zh" ? "正在核对" : "Checking"
+                              : language === "zh" ? "核对服务商" : "Check provider"}
+                          </button>
+                          <button
+                            className="secondaryButton compactButton"
+                            type="button"
+                            onClick={() => confirmModelCallWasNotAccepted(modelCall.id)}
+                            disabled={Boolean(reconciliationBusyId)}
+                          >
+                            <ShieldQuestion size={14} aria-hidden="true" />
+                            {language === "zh" ? "人工确认未执行" : "Confirm not executed"}
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  {reconciliationMessage ? <p className="jobReconciliationFeedback success">{reconciliationMessage}</p> : null}
+                  {reconciliationError ? <p className="jobReconciliationFeedback error">{reconciliationError}</p> : null}
+                </div>
+              </section>
+            ) : reconciliationMessage ? (
+              <section className="jobReconciliationResolved" role="status">
+                <CheckCircle2 size={18} aria-hidden="true" />
+                <p>{reconciliationMessage}</p>
               </section>
             ) : null}
 

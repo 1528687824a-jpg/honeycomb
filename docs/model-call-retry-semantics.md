@@ -60,9 +60,18 @@ A request that may have reached the provider is never retried or failed over
 automatically when Honeycomb cannot prove the outcome. The model call becomes
 `failed_unknown_outcome` and the job becomes `waiting_for_human`.
 
-Automated reconciliation of provider-side request IDs is a later Stage 2 slice.
-Until that exists, pausing is the only behavior that avoids accidental duplicate
-spend or duplicate media generation.
+Honeycomb now persists a local request reference before dispatch and captures a
+provider request ID from response headers or video task responses when one is
+available. Provider-specific, same-origin status lookup can confirm pending,
+not-accepted, failed, or succeeded outcomes. Provider lookup never sends a
+second model request.
+
+The normal resume route and the worker both reject unresolved unknown outcomes.
+Confirmed failed/not-accepted calls become safely retryable. Confirmed successful
+calls persist a reusable result; image/video success additionally requires a
+recoverable HTTP(S) artifact URL. Inconclusive or unsupported lookups stay
+paused. See
+[`model-call-unknown-outcome-reconciliation.md`](model-call-unknown-outcome-reconciliation.md).
 
 ## Configuration
 
