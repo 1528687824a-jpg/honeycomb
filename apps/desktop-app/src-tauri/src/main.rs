@@ -1,8 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
+use std::fs::OpenOptions;
 use std::io::Write;
 use std::net::{TcpListener, TcpStream};
 #[cfg(windows)]
@@ -57,6 +59,8 @@ struct DownloadToDesktopPayload {
     url: String,
     file_name: String,
     authorization: Option<String>,
+    expected_size_bytes: Option<u64>,
+    expected_checksum_sha256: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -64,6 +68,7 @@ struct DownloadToDesktopPayload {
 struct DownloadToDesktopResult {
     path: String,
     bytes: u64,
+    checksum_sha256: String,
 }
 
 #[derive(Deserialize)]
@@ -237,12 +242,41 @@ fn safe_desktop_file_name(input: &str) -> String {
             output.push(value);
         }
     }
-    let cleaned = output.trim().trim_matches('.').to_string();
+    let mut cleaned = output.trim().trim_matches('.').to_string();
     if cleaned.is_empty() {
-        "honeycomb-artifact".to_string()
-    } else {
-        cleaned.chars().take(120).collect()
+        cleaned = "honeycomb-artifact".to_string();
     }
+    let parsed = Path::new(&cleaned);
+    let stem = parsed
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("honeycomb-artifact");
+    let upper_stem = stem.to_ascii_uppercase();
+    if matches!(upper_stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (upper_stem.starts_with("COM") || upper_stem.starts_with("LPT"))
+            && upper_stem
+                .get(3..)
+                .and_then(|value| value.parse::<u8>().ok())
+                .is_some_and(|value| (1..=9).contains(&value))
+    {
+        cleaned.insert(0, '_');
+    }
+    if cleaned.chars().count() <= 120 {
+        return cleaned;
+    }
+
+    let parsed = Path::new(&cleaned);
+    let extension = parsed
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| format!(".{value}"))
+        .unwrap_or_default();
+    let stem = parsed
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("honeycomb-artifact");
+    let stem_limit = 120_usize.saturating_sub(extension.chars().count()).max(1);
+    format!("{}{}", stem.chars().take(stem_limit).collect::<String>(), extension)
 }
 
 fn unique_desktop_file_path(desktop_dir: &Path, file_name: &str) -> PathBuf {
@@ -271,6 +305,20 @@ fn unique_desktop_file_path(desktop_dir: &Path, file_name: &str) -> PathBuf {
     }
 
     desktop_dir.join(format!("{stem}-{}{}", timestamp_string(), extension))
+}
+
+fn cleanup_stale_delivery_parts(directory: &Path, target_name: &str) {
+    let prefix = format!(".{target_name}.");
+    let Ok(entries) = fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with(&prefix) && name.ends_with(".part") {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
 }
 
 fn agent_api_key_path(app: &AppHandle, agent_id: &str) -> Result<PathBuf, String> {
@@ -974,17 +1022,90 @@ async fn download_url_to_desktop(
         request = request.header(reqwest::header::AUTHORIZATION, authorization);
     }
 
-    let response = request.send().await.map_err(|error| error.to_string())?;
+    let mut response = request.send().await.map_err(|error| error.to_string())?;
     let status = response.status();
     if !status.is_success() {
         return Err(format!("download_http_{}", status.as_u16()));
     }
-    let bytes = response.bytes().await.map_err(|error| error.to_string())?;
-    fs::write(&target, bytes.as_ref()).map_err(|error| error.to_string())?;
 
+    let max_bytes = payload
+        .expected_size_bytes
+        .unwrap_or(500 * 1024 * 1024);
+    if let Some(content_length) = response.content_length() {
+        if content_length > max_bytes {
+            return Err("download_size_limit_exceeded".to_string());
+        }
+        if payload.expected_size_bytes.is_some() && content_length != max_bytes {
+            return Err("download_size_mismatch".to_string());
+        }
+    }
+
+    let target_name = target
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("honeycomb-artifact");
+    cleanup_stale_delivery_parts(&desktop_dir, target_name);
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let temporary = target.with_file_name(format!(
+        ".{target_name}.{}.{}.part",
+        std::process::id(),
+        nonce
+    ));
+    let mut output = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&temporary)
+        .map_err(|error| error.to_string())?;
+    let mut received = 0_u64;
+    let mut checksum = Sha256::new();
+    let transfer_result: Result<(), String> = async {
+        while let Some(chunk) = response.chunk().await.map_err(|error| error.to_string())? {
+            received = received.saturating_add(chunk.len() as u64);
+            if received > max_bytes {
+                return Err("download_size_limit_exceeded".to_string());
+            }
+            checksum.update(chunk.as_ref());
+            output
+                .write_all(chunk.as_ref())
+                .map_err(|error| error.to_string())?;
+        }
+        if let Some(expected) = payload.expected_size_bytes {
+            if received != expected {
+                return Err("download_size_mismatch".to_string());
+            }
+        }
+        output.sync_all().map_err(|error| error.to_string())?;
+        Ok(())
+    }
+    .await;
+    drop(output);
+    if let Err(error) = transfer_result {
+        let _ = fs::remove_file(&temporary);
+        return Err(error);
+    }
+    let checksum_sha256 = format!("{:x}", checksum.finalize());
+    if let Some(expected) = payload
+        .expected_checksum_sha256
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        if !checksum_sha256.eq_ignore_ascii_case(expected) {
+            let _ = fs::remove_file(&temporary);
+            return Err("download_checksum_mismatch".to_string());
+        }
+    }
+    if let Err(error) = fs::rename(&temporary, &target) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error.to_string());
+    }
     Ok(DownloadToDesktopResult {
         path: target.to_string_lossy().to_string(),
-        bytes: bytes.len() as u64,
+        bytes: received,
+        checksum_sha256,
     })
 }
 

@@ -138,6 +138,53 @@ const statements = [
     required_fixes jsonb not null default '[]',
     created_at timestamptz not null default now()
   )`,
+  `create table if not exists agent.artifact_files (
+    id text primary key,
+    artifact_id text not null references agent.artifacts(id) on delete cascade,
+    job_id text not null references agent.jobs(id) on delete cascade,
+    stage_id text references agent.job_stages(id),
+    kind text not null check (kind in ('image', 'video')),
+    status text not null check (status in ('available', 'remote_only', 'download_failed', 'missing')),
+    file_path text,
+    external_url text,
+    file_name text not null,
+    mime_type text,
+    format text,
+    size_bytes bigint check (size_bytes is null or size_bytes >= 0),
+    width int check (width is null or width > 0),
+    height int check (height is null or height > 0),
+    checksum_sha256 text,
+    source text,
+    error text,
+    metadata jsonb not null default '{}',
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now()
+  )`,
+  `create table if not exists agent.artifact_deliveries (
+    id text primary key,
+    job_id text not null references agent.jobs(id) on delete cascade,
+    artifact_file_id text not null references agent.artifact_files(id) on delete cascade,
+    deliverable_index int not null check (deliverable_index >= 0),
+    required boolean not null default true,
+    target text not null check (target in ('conversation', 'desktop', 'workspace', 'custom')),
+    target_path text,
+    requested_file_name text not null,
+    status text not null default 'pending' check (status in ('pending', 'delivering', 'succeeded', 'failed', 'cancelled')),
+    attempt_count int not null default 0 check (attempt_count >= 0),
+    claim_token text,
+    lease_expires_at timestamptz,
+    expected_size_bytes bigint check (expected_size_bytes is null or expected_size_bytes >= 0),
+    expected_checksum_sha256 text,
+    delivered_path text,
+    delivered_size_bytes bigint check (delivered_size_bytes is null or delivered_size_bytes >= 0),
+    delivered_checksum_sha256 text,
+    last_error text,
+    metadata jsonb not null default '{}',
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    completed_at timestamptz,
+    unique(job_id, deliverable_index)
+  )`,
   `create table if not exists agent.group_messages (
     id text primary key,
     job_id text not null references agent.jobs(id),
@@ -536,6 +583,15 @@ const statements = [
     where stalled_at is not null`,
   `create index if not exists artifacts_job_id_created_at_idx
     on agent.artifacts(job_id, created_at)`,
+  `create index if not exists artifact_files_job_id_created_at_idx
+    on agent.artifact_files(job_id, created_at)`,
+  `create index if not exists artifact_files_artifact_id_idx
+    on agent.artifact_files(artifact_id, created_at)`,
+  `create index if not exists artifact_deliveries_job_status_idx
+    on agent.artifact_deliveries(job_id, status, created_at)`,
+  `create index if not exists artifact_deliveries_lease_idx
+    on agent.artifact_deliveries(status, lease_expires_at)
+    where status = 'delivering'`,
   `create index if not exists job_stages_job_id_stage_index_idx
     on agent.job_stages(job_id, stage_index)`,
   `create index if not exists stage_attempts_stage_id_attempt_no_idx

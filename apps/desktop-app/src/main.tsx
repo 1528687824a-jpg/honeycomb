@@ -43,12 +43,17 @@ import {
   adoptExperience,
   approveToolApproval,
   cancelJob,
+  claimArtifactDelivery,
+  completeArtifactDelivery,
   createJob,
   deleteConversationProject as deleteBackendConversationProject,
   deleteConversationRecord as deleteBackendConversation,
   getHealth,
   getJob,
   getJobArtifacts,
+  getJobDeliveries,
+  failArtifactDelivery,
+  finalizeArtifactDeliveries,
   resolveArtifactDownloadRequest,
   getJobTimeline,
   listJobUnknownOutcomes,
@@ -73,6 +78,7 @@ import {
   type ExperienceStatus,
   type AgentConfigRecord,
   type JobRecord,
+  type JobDeliveriesResponse,
   type JobStatus,
   type JobTimeline,
   type ListJobsResponse,
@@ -1359,6 +1365,7 @@ const DESKTOP_EXPORT_STORAGE_KEY = "honeycomb.desktopExportedJobs";
 type DesktopDownloadResult = {
   path: string;
   bytes: number;
+  checksumSha256: string;
 };
 
 function loadDesktopExportedJobIds() {
@@ -2277,6 +2284,7 @@ function App() {
   const [maxCostUsdDraft, setMaxCostUsdDraft] = useState("");
   const [timeline, setTimeline] = useState<JobTimeline | null>(null);
   const [unknownOutcomes, setUnknownOutcomes] = useState<UnknownOutcomeModelCallsResponse | null>(null);
+  const [artifactDeliveries, setArtifactDeliveries] = useState<JobDeliveriesResponse | null>(null);
   const [reconciliationBusyId, setReconciliationBusyId] = useState("");
   const [reconciliationMessage, setReconciliationMessage] = useState("");
   const [reconciliationError, setReconciliationError] = useState("");
@@ -2369,6 +2377,7 @@ function App() {
   const notificationStartedAt = useRef(Date.now());
   const seenNotificationIds = useRef<Set<string>>(loadSeenNotificationIds());
   const desktopExportedJobIds = useRef<Set<string>>(loadDesktopExportedJobIds());
+  const deliveryProcessingJobIds = useRef<Set<string>>(new Set());
   const panelBackendConfigSyncKey = useRef("");
   const copy = translations[language];
 
@@ -2401,6 +2410,9 @@ function App() {
     ? unknownOutcomes.modelCalls
     : [];
   const unknownOutcomesLoaded = unknownOutcomes?.jobId === selectedJobId;
+  const selectedArtifactDeliveries = artifactDeliveries?.jobId === selectedJobId
+    ? artifactDeliveries
+    : null;
 
   const activeStatusFilter = jobStatusFilters.find((filter) => filter.id === jobStatusFilter);
   const trimmedJobPromptFilter = jobPromptFilter.trim();
@@ -2634,6 +2646,15 @@ function App() {
       ? preferredJobId
       : response.jobs[0]?.id || "";
     setSelectedJobId(nextSelectedId);
+    for (const job of response.jobs) {
+      if (
+        job.status === "waiting_for_human" &&
+        ["artifact_delivery_pending", "artifact_delivery_failed", "artifact_delivery_resume_failed"]
+          .includes(job.heartbeatNote ?? "")
+      ) {
+        void maybeExportGeneratedMediaToDesktop(job);
+      }
+    }
     return nextSelectedId;
   }
 
@@ -2671,6 +2692,90 @@ function App() {
   }
 
   async function maybeExportGeneratedMediaToDesktop(job: JobRecord) {
+    const durableDeliveryPending = job.status === "waiting_for_human" && [
+      "artifact_delivery_pending",
+      "artifact_delivery_failed",
+      "artifact_delivery_resume_failed"
+    ].includes(job.heartbeatNote ?? "");
+    if (durableDeliveryPending) {
+      if (!isTauriRuntime() || deliveryProcessingJobIds.current.has(job.id)) {
+        return;
+      }
+      deliveryProcessingJobIds.current.add(job.id);
+      try {
+        const summary = await getJobDeliveries(job.id);
+        const desktopDeliveries = summary.deliveries.filter(
+          (delivery) => delivery.required &&
+            delivery.target === "desktop" &&
+            delivery.status !== "succeeded" &&
+            delivery.status !== "cancelled"
+        );
+        for (const delivery of desktopDeliveries) {
+          let claim: Awaited<ReturnType<typeof claimArtifactDelivery>>;
+          try {
+            claim = await claimArtifactDelivery(job.id, delivery.id);
+          } catch {
+            continue;
+          }
+
+          try {
+            const file = claim.delivery.artifactFile;
+            if (!file?.downloadable) {
+              throw new Error("artifact_source_unavailable");
+            }
+            const download = await resolveArtifactDownloadRequest(file);
+            if (!download) {
+              throw new Error("artifact_download_url_missing");
+            }
+            const result = await invokeDesktopCommand<DesktopDownloadResult>("download_url_to_desktop", {
+              payload: {
+                url: download.url,
+                fileName: claim.delivery.requestedFileName,
+                authorization: download.authorization,
+                expectedSizeBytes: claim.delivery.expectedSizeBytes,
+                expectedChecksumSha256: claim.delivery.expectedChecksumSha256
+              }
+            });
+            if (result.error || !result.available || !result.value) {
+              throw result.error ?? new Error("desktop_export_unavailable");
+            }
+            if (
+              claim.delivery.expectedChecksumSha256 &&
+              result.value.checksumSha256.toLowerCase() !== claim.delivery.expectedChecksumSha256.toLowerCase()
+            ) {
+              throw new Error("download_checksum_mismatch");
+            }
+            await completeArtifactDelivery({
+              jobId: job.id,
+              deliveryId: claim.delivery.id,
+              claimToken: claim.claimToken,
+              deliveredPath: result.value.path,
+              deliveredSizeBytes: result.value.bytes,
+              deliveredChecksumSha256: result.value.checksumSha256
+            });
+          } catch (caught) {
+            const message = caught instanceof Error ? caught.message : String(caught);
+            await failArtifactDelivery({
+              jobId: job.id,
+              deliveryId: claim.delivery.id,
+              claimToken: claim.claimToken,
+              error: message
+            }).catch(() => undefined);
+          }
+        }
+
+        const latest = await getJobDeliveries(job.id);
+        if (latest.readyToFinalize) {
+          await finalizeArtifactDeliveries(job.id).catch(() => undefined);
+        }
+      } catch (caught) {
+        console.warn("Failed to deliver generated media", caught);
+      } finally {
+        deliveryProcessingJobIds.current.delete(job.id);
+      }
+      return;
+    }
+
     if (job.status !== "succeeded" || !shouldExportJobToDesktop(job) || desktopExportedJobIds.current.has(job.id)) {
       return;
     }
@@ -2708,7 +2813,9 @@ function App() {
           payload: {
             url: download.url,
             fileName,
-            authorization: download.authorization
+            authorization: download.authorization,
+            expectedSizeBytes: file.sizeBytes,
+            expectedChecksumSha256: null
           }
         });
         if (result.error || !result.available) {
@@ -2729,6 +2836,7 @@ function App() {
       setSelectedJob(null);
       setTimeline(null);
       setUnknownOutcomes(null);
+      setArtifactDeliveries(null);
       return;
     }
 
@@ -2736,16 +2844,18 @@ function App() {
       timeline?.job.id === targetJobId && timeline.summary.nextCursor
         ? timeline.summary.nextCursor
         : undefined;
-    const [job, nextTimeline, nextUnknownOutcomes] = await Promise.all([
+    const [job, nextTimeline, nextUnknownOutcomes, nextArtifactDeliveries] = await Promise.all([
       getJob(targetJobId),
       getJobTimeline(targetJobId, 500, undefined, timelineCursor),
-      listJobUnknownOutcomes(targetJobId)
+      listJobUnknownOutcomes(targetJobId),
+      getJobDeliveries(targetJobId)
     ]);
     if (requestSeq !== jobDetailRequestSeq.current) {
       return;
     }
     setSelectedJob(job);
     setUnknownOutcomes(nextUnknownOutcomes);
+    setArtifactDeliveries(nextArtifactDeliveries);
     void maybeExportGeneratedMediaToDesktop(job);
     setTimeline((currentTimeline) => {
       if (!timelineCursor || currentTimeline?.job.id !== targetJobId) {
@@ -5437,6 +5547,33 @@ function App() {
                       <span>USD</span>
                     </label>
                   ) : null}
+                </div>
+              </section>
+            ) : null}
+
+            {selectedArtifactDeliveries && selectedArtifactDeliveries.requiredCount > 0 ? (
+              <section className="jobPreflightNotice" role="status" aria-live="polite">
+                {selectedArtifactDeliveries.failedCount > 0 ? (
+                  <AlertTriangle size={18} aria-hidden="true" />
+                ) : selectedArtifactDeliveries.readyToFinalize ? (
+                  <CheckCircle2 size={18} aria-hidden="true" />
+                ) : (
+                  <RefreshCw size={18} aria-hidden="true" />
+                )}
+                <div>
+                  <h3>{language === "zh" ? "\u4ea7\u7269\u4ea4\u4ed8\u72b6\u6001" : "Artifact delivery"}</h3>
+                  <p>
+                    {language === "zh"
+                      ? `\u5df2\u786e\u8ba4 ${selectedArtifactDeliveries.succeededCount}/${selectedArtifactDeliveries.requiredCount}\uff0c\u4ea4\u4ed8\u4e2d ${selectedArtifactDeliveries.deliveringCount}\uff0c\u7b49\u5f85 ${selectedArtifactDeliveries.pendingCount}\uff0c\u5931\u8d25 ${selectedArtifactDeliveries.failedCount}\u3002`
+                      : `${selectedArtifactDeliveries.succeededCount}/${selectedArtifactDeliveries.requiredCount} confirmed, ${selectedArtifactDeliveries.deliveringCount} delivering, ${selectedArtifactDeliveries.pendingCount} pending, ${selectedArtifactDeliveries.failedCount} failed.`}
+                  </p>
+                  <div className="jobPreflightAgents">
+                    {selectedArtifactDeliveries.deliveries.map((delivery) => (
+                      <span key={delivery.id} title={delivery.deliveredPath ?? delivery.lastError ?? undefined}>
+                        {delivery.requestedFileName}: {delivery.status}
+                      </span>
+                    ))}
+                  </div>
                 </div>
               </section>
             ) : null}

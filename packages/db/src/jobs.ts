@@ -662,18 +662,36 @@ export async function setJobWorkflowId(jobId: string, workflowId: string) {
   await pool.query(
     `update agent.jobs
      set workflow_id = $2,
-         status = 'queued',
-         heartbeat_at = now(),
-         heartbeat_status = 'healthy',
-         heartbeat_source = 'job.workflow_started',
-         heartbeat_note = null,
-         stalled_at = null,
+         status = case
+           when status in ('created', 'waiting_for_human') then 'queued'
+           else status
+         end,
+         heartbeat_at = case
+           when status in ('created', 'waiting_for_human') then now()
+           else heartbeat_at
+         end,
+         heartbeat_status = case
+           when status in ('created', 'waiting_for_human') then 'healthy'
+           else heartbeat_status
+         end,
+         heartbeat_source = case
+           when status in ('created', 'waiting_for_human') then 'job.workflow_started'
+           else heartbeat_source
+         end,
+         heartbeat_note = case
+           when status in ('created', 'waiting_for_human') then null
+           else heartbeat_note
+         end,
+         stalled_at = case
+           when status in ('created', 'waiting_for_human') then null
+           else stalled_at
+         end,
          updated_at = now()
      where id = $1`,
     [jobId, workflowId]
   );
 
-  await appendJobEvent(jobId, "job.workflow_started", { workflowId });
+  await appendJobEvent(jobId, "job.workflow_started", { workflowId }).catch(() => undefined);
 }
 
 export async function setJobWorkdir(jobId: string, workdir: string) {

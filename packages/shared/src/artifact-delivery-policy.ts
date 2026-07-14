@@ -10,6 +10,7 @@ export type GeneratedMediaDeliveryCandidate = {
   width: number | null;
   height: number | null;
   localAvailable: boolean;
+  checksumSha256?: string | null;
 };
 
 export type RequiredMediaDeliveryIssue = {

@@ -189,7 +189,7 @@ artifact persistence, asynchronous media completion, and destination delivery.
 
 ### Windows Stage 3 Progress (2026-07-14)
 
-The first artifact-delivery guard is implemented:
+The media success gate and durable Windows desktop delivery loop are implemented:
 
 - Finalization now reads every required image/video deliverable from the
   persisted orchestration plan and matches it to a unique generated media file.
@@ -205,10 +205,33 @@ The first artifact-delivery guard is implemented:
 - Duplicate artifact references to the same local media path are exported once.
 - The task page explains that a media file, format, or dimensions failed the
   delivery gate.
+- Canonical `agent.artifact_files` records now persist source status, local and
+  external locations, detected format, dimensions, byte count, SHA-256 checksum,
+  source, and download error independently from model prose.
+- `agent.artifact_deliveries` persists one required destination operation per
+  deliverable. Its pending, leased/delivering, succeeded, failed, and cancelled
+  states survive API, desktop, and worker restarts.
+- A delivery claim has an expiring token and atomic database transition, so two
+  desktop refreshes cannot both own the same write. Failed and expired claims
+  can be safely retried.
+- The native Tauri downloader streams to a same-directory temporary file,
+  enforces the expected byte count, calculates SHA-256, flushes the file, and
+  atomically renames it. Partial files are removed on every failure path.
+- The desktop reports the destination path, byte count, and checksum through an
+  authenticated completion endpoint. The backend rejects mismatched receipts.
+- Jobs remain paused until every required destination confirms. The final
+  delivery acknowledgement atomically claims one short DBOS finalization run,
+  which skips completed model stages and only performs the final success step.
+- Late workflow-ID writes can no longer move a running or terminal job back to
+  queued. Task details expose each durable delivery and its current status.
+- `npm run smoke:artifact-delivery` covers the PostgreSQL claim, mismatch,
+  retry, finalization, and terminal-state concurrency invariants when the
+  backend database is running.
 
-This is not the full Stage 3 delivery protocol yet. Asynchronous video polling,
-durable delivery attempts/acknowledgements, workspace/custom targets, and a
-post-write success transition remain next.
+Stage 3 still needs asynchronous video polling and result download,
+workspace/custom target authorization, image conversion/resizing, and document
+artifact normalization. PostgreSQL and Docker Desktop remained stopped, so the
+new migration-backed smoke script has not yet been executed.
 
 ## Current Backend Status
 

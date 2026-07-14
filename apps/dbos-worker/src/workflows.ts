@@ -56,6 +56,13 @@ const isJobCancelled = DBOS.registerStep(activities.isJobCancelled, {
   name: "isJobCancelled",
   ...retryingStepConfig
 });
+const isArtifactDeliveryReadyForFinalization = DBOS.registerStep(
+  activities.isArtifactDeliveryReadyForFinalization,
+  {
+    name: "isArtifactDeliveryReadyForFinalization",
+    ...retryingStepConfig
+  }
+);
 const markJobWaitingForHuman = DBOS.registerStep(activities.markJobWaitingForHuman, {
   name: "markJobWaitingForHuman",
   ...retryingStepConfig
@@ -352,6 +359,15 @@ async function runJobPipelineWorkflow(input: JobWorkflowInput) {
     return {
       jobId: input.jobId,
       status: "cancelled"
+    };
+  }
+
+  if (await isArtifactDeliveryReadyForFinalization(input.jobId)) {
+    await markJobRunning(input.jobId);
+    const finalized = await finalizeJob(input.jobId);
+    return {
+      jobId: input.jobId,
+      status: finalized.status
     };
   }
 

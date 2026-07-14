@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import {
   __apiAuthTokenTestInternals,
+  completeArtifactDelivery,
   listJobs,
   resolveArtifactDownloadRequest
 } from "../apps/desktop-app/src/api";
@@ -134,5 +135,45 @@ test("desktop artifact delivery prefers the authenticated Honeycomb file endpoin
   assert.deepEqual(request, {
     url: "http://127.0.0.1:3000/jobs/JOB-1/artifacts/ART-1/files/2",
     authorization: "Bearer runtime-file-token"
+  });
+});
+
+test("desktop delivery completion reports the atomic file receipt with authentication", async () => {
+  const storage = new MemoryStorage();
+  installWindow(storage);
+  __apiAuthTokenTestInternals.setRuntimeTokenLoaderForTests(async () => "runtime-delivery-token");
+  let seenUrl = "";
+  let seenAuthorization = "";
+  let seenBody: unknown = null;
+  globalThis.fetch = async (url, init) => {
+    seenUrl = String(url);
+    seenAuthorization = new Headers(init?.headers).get("authorization") ?? "";
+    seenBody = JSON.parse(String(init?.body));
+    return new Response(JSON.stringify({
+      ok: true,
+      delivery: {},
+      finalization: { status: "started", workflowId: "delivery-workflow" }
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    });
+  };
+
+  await completeArtifactDelivery({
+    jobId: "JOB-1",
+    deliveryId: "DELIVERY-1",
+    claimToken: "a3d790d7-8338-47c1-a5e1-f99f007fcd3e",
+    deliveredPath: "C:\\Users\\Administrator\\Desktop\\poster.png",
+    deliveredSizeBytes: 128,
+    deliveredChecksumSha256: "a".repeat(64)
+  });
+
+  assert.equal(seenUrl, "http://127.0.0.1:3000/jobs/JOB-1/deliveries/DELIVERY-1/complete");
+  assert.equal(seenAuthorization, "Bearer runtime-delivery-token");
+  assert.deepEqual(seenBody, {
+    claimToken: "a3d790d7-8338-47c1-a5e1-f99f007fcd3e",
+    deliveredPath: "C:\\Users\\Administrator\\Desktop\\poster.png",
+    deliveredSizeBytes: 128,
+    deliveredChecksumSha256: "a".repeat(64)
   });
 });

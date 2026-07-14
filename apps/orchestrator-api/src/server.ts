@@ -83,6 +83,16 @@ import {
   listArtifactsForJob
 } from "../../../packages/db/src/pipeline";
 import {
+  claimArtifactDelivery,
+  claimJobArtifactDeliveryFinalization,
+  completeArtifactDelivery,
+  failArtifactDelivery,
+  getArtifactDeliverySummary,
+  getArtifactFileForJob,
+  listArtifactDeliveriesForJob,
+  listArtifactFilesForJob
+} from "../../../packages/db/src/artifact-deliveries";
+import {
   createPlanForJob,
   createPlanItem,
   getPlan,
@@ -184,6 +194,8 @@ import {
   TOOL_APPROVAL_STATUSES,
   TOOL_RISK_LEVELS,
   type AgentConfigRecord,
+  type ArtifactDeliveryRecord,
+  type ArtifactFileRecord,
   type ExperienceRecord,
   type ExperienceStatus,
   type ModelProviderRecord,
@@ -271,7 +283,7 @@ import {
   RUNTIME_REPAIR_ACTION_IDS,
   runRuntimeRepairAction
 } from "./runtime-repair";
-import { extractArtifactFileRefs } from "./artifact-files";
+import { extractArtifactFileRefs, resolveArtifactFilePath } from "./artifact-files";
 import {
   queryProviderUnknownOutcome,
   recoverProviderMediaArtifacts,
@@ -329,6 +341,19 @@ const runtimeUsageQuerySchema = z.object({
 });
 
 const artifactFileIndexSchema = z.coerce.number().int().min(0).max(10000);
+const artifactDeliveryClaimSchema = z.object({
+  leaseSeconds: z.number().int().min(30).max(1800).optional()
+});
+const artifactDeliveryCompleteSchema = z.object({
+  claimToken: z.string().uuid(),
+  deliveredPath: z.string().trim().min(1).max(2000),
+  deliveredSizeBytes: z.number().int().min(0).max(2_000_000_000),
+  deliveredChecksumSha256: z.string().regex(/^[a-f0-9]{64}$/i).nullable().optional()
+});
+const artifactDeliveryFailSchema = z.object({
+  claimToken: z.string().uuid(),
+  error: z.string().trim().min(1).max(1000)
+});
 
 const jobHeartbeatQuerySchema = z.object({
   timeoutSeconds: z.coerce.number().int().min(10).max(86400).optional(),
@@ -1979,6 +2004,60 @@ async function preflightAndStartJob(job: Awaited<ReturnType<typeof createJob>>) 
     workflowId: await startJobWorkflow(job.id),
     preflight
   };
+}
+
+function canonicalArtifactFileView(jobId: string, file: ArtifactFileRecord) {
+  return {
+    ...file,
+    downloadable: file.status === "available" && Boolean(file.filePath),
+    downloadUrl: file.status === "available" && file.filePath
+      ? `/jobs/${jobId}/artifact-files/${file.id}/content`
+      : null
+  };
+}
+
+function artifactDeliveryView(
+  jobId: string,
+  delivery: ArtifactDeliveryRecord,
+  file: ArtifactFileRecord | null
+) {
+  return {
+    ...delivery,
+    claimToken: undefined,
+    artifactFile: file ? canonicalArtifactFileView(jobId, file) : null
+  };
+}
+
+async function maybeStartArtifactDeliveryFinalization(jobId: string) {
+  const summary = await getArtifactDeliverySummary(jobId);
+  const publicSummary = {
+    requiredCount: summary.requiredCount,
+    succeededCount: summary.succeededCount,
+    failedCount: summary.failedCount,
+    pendingCount: summary.pendingCount,
+    deliveringCount: summary.deliveringCount,
+    readyToFinalize: summary.readyToFinalize
+  };
+  if (!summary.readyToFinalize) {
+    return { status: "not_ready" as const, workflowId: null, summary: publicSummary };
+  }
+  const claimed = await claimJobArtifactDeliveryFinalization(jobId);
+  if (!claimed) {
+    return { status: "not_claimed" as const, workflowId: null, summary: publicSummary };
+  }
+
+  const workflowId = `job-${jobId}-delivery-${randomUUID().slice(0, 12)}`;
+  try {
+    const startedWorkflowId = await startJobWorkflow(jobId, workflowId);
+    return { status: "started" as const, workflowId: startedWorkflowId, summary: publicSummary };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await setJobStatus(jobId, "waiting_for_human", {
+      reason: "artifact_delivery_resume_failed",
+      error: message
+    });
+    return { status: "failed" as const, workflowId: null, summary: publicSummary, error: message };
+  }
 }
 
 async function main() {
@@ -5179,6 +5258,9 @@ async function main() {
       }
 
       const artifacts = await listArtifactsForJob(request.params.jobId);
+      const canonicalFiles = await listArtifactFilesForJob(request.params.jobId);
+      const deliveries = await listArtifactDeliveriesForJob(request.params.jobId);
+      const canonicalFileById = new Map(canonicalFiles.map((file) => [file.id, file]));
       const artifactSummaries = await Promise.all(
         artifacts.map(async (artifact) => {
           const files = await Promise.all(
@@ -5229,8 +5311,183 @@ async function main() {
         jobId: job.id,
         artifactCount: artifactSummaries.length,
         fileCount: artifactSummaries.reduce((count, artifact) => count + artifact.files.length, 0),
-        artifacts: artifactSummaries
+        artifacts: artifactSummaries,
+        artifactFiles: canonicalFiles.map((file) => canonicalArtifactFileView(job.id, file)),
+        deliveries: deliveries.map((delivery) =>
+          artifactDeliveryView(job.id, delivery, canonicalFileById.get(delivery.artifactFileId) ?? null)
+        )
       });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/jobs/:jobId/artifact-files/:artifactFileId/content", async (request, response, next) => {
+    try {
+      const file = await getArtifactFileForJob(request.params.jobId, request.params.artifactFileId);
+      if (!file || file.status !== "available" || !file.filePath) {
+        response.status(404).json({ error: "artifact_file_not_found" });
+        return;
+      }
+
+      const safePath = resolveArtifactFilePath(file.filePath);
+      if (!safePath) {
+        response.status(404).json({ error: "artifact_file_not_found" });
+        return;
+      }
+      const fileStat = await stat(safePath).catch(() => null);
+      if (!fileStat?.isFile() || fileStat.size <= 0) {
+        response.status(404).json({ error: "artifact_file_not_found" });
+        return;
+      }
+
+      const fileName = path.basename(file.fileName);
+      response.setHeader("Content-Type", file.mimeType ?? "application/octet-stream");
+      response.setHeader("Content-Length", fileStat.size.toString());
+      response.setHeader(
+        "Content-Disposition",
+        `inline; filename="${fileName.replace(/["\\]/g, "_")}"; filename*=UTF-8''${encodeURIComponent(fileName)}`
+      );
+      response.sendFile(safePath);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/jobs/:jobId/deliveries", async (request, response, next) => {
+    try {
+      const job = await getJob(request.params.jobId);
+      if (!job) {
+        response.status(404).json({ error: "job_not_found" });
+        return;
+      }
+      const [summary, files] = await Promise.all([
+        getArtifactDeliverySummary(job.id),
+        listArtifactFilesForJob(job.id)
+      ]);
+      const fileById = new Map(files.map((file) => [file.id, file]));
+      response.json({
+        jobId: job.id,
+        requiredCount: summary.requiredCount,
+        succeededCount: summary.succeededCount,
+        failedCount: summary.failedCount,
+        pendingCount: summary.pendingCount,
+        deliveringCount: summary.deliveringCount,
+        readyToFinalize: summary.readyToFinalize,
+        deliveries: summary.deliveries.map((delivery) =>
+          artifactDeliveryView(job.id, delivery, fileById.get(delivery.artifactFileId) ?? null)
+        )
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/jobs/:jobId/deliveries/:deliveryId/claim", async (request, response, next) => {
+    try {
+      const input = artifactDeliveryClaimSchema.parse(request.body ?? {});
+      const result = await claimArtifactDelivery({
+        jobId: request.params.jobId,
+        deliveryId: request.params.deliveryId,
+        leaseSeconds: input.leaseSeconds
+      });
+      if (!result.delivery) {
+        response.status(404).json({ error: "artifact_delivery_not_found" });
+        return;
+      }
+      if (!result.claimed || !result.claimToken) {
+        response.status(409).json({
+          error: "artifact_delivery_not_claimable",
+          status: result.delivery.status,
+          leaseExpiresAt: result.delivery.leaseExpiresAt
+        });
+        return;
+      }
+      const file = await getArtifactFileForJob(request.params.jobId, result.delivery.artifactFileId);
+      if (!file || file.status !== "available" || !file.filePath) {
+        await failArtifactDelivery({
+          jobId: request.params.jobId,
+          deliveryId: result.delivery.id,
+          claimToken: result.claimToken,
+          error: "artifact_source_unavailable"
+        });
+        response.status(409).json({ error: "artifact_source_unavailable" });
+        return;
+      }
+      response.json({
+        ok: true,
+        claimToken: result.claimToken,
+        delivery: artifactDeliveryView(request.params.jobId, result.delivery, file)
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/jobs/:jobId/deliveries/:deliveryId/complete", async (request, response, next) => {
+    try {
+      const input = artifactDeliveryCompleteSchema.parse(request.body ?? {});
+      const result = await completeArtifactDelivery({
+        jobId: request.params.jobId,
+        deliveryId: request.params.deliveryId,
+        ...input
+      });
+      if (!result.delivery) {
+        response.status(404).json({ error: "artifact_delivery_not_found" });
+        return;
+      }
+      if (!result.completed) {
+        response.status(409).json({
+          error: "artifact_delivery_completion_rejected",
+          status: result.delivery.status,
+          expectedSizeBytes: result.delivery.expectedSizeBytes,
+          expectedChecksumSha256: result.delivery.expectedChecksumSha256
+        });
+        return;
+      }
+      const finalization = await maybeStartArtifactDeliveryFinalization(request.params.jobId);
+      response.json({ ok: true, delivery: result.delivery, finalization });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/jobs/:jobId/deliveries/:deliveryId/fail", async (request, response, next) => {
+    try {
+      const input = artifactDeliveryFailSchema.parse(request.body ?? {});
+      const result = await failArtifactDelivery({
+        jobId: request.params.jobId,
+        deliveryId: request.params.deliveryId,
+        ...input
+      });
+      if (!result.delivery) {
+        response.status(404).json({ error: "artifact_delivery_not_found" });
+        return;
+      }
+      if (!result.failed) {
+        response.status(409).json({ error: "artifact_delivery_failure_rejected", status: result.delivery.status });
+        return;
+      }
+      await setJobStatus(request.params.jobId, "waiting_for_human", {
+        reason: "artifact_delivery_failed",
+        deliveryId: result.delivery.id,
+        error: result.delivery.lastError
+      });
+      response.json({ ok: true, delivery: result.delivery });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/jobs/:jobId/deliveries/finalize", async (request, response, next) => {
+    try {
+      const job = await getJob(request.params.jobId);
+      if (!job) {
+        response.status(404).json({ error: "job_not_found" });
+        return;
+      }
+      const finalization = await maybeStartArtifactDeliveryFinalization(job.id);
+      response.status(finalization.status === "failed" ? 503 : 200).json({ ok: finalization.status !== "failed", finalization });
     } catch (error) {
       next(error);
     }

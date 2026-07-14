@@ -725,6 +725,71 @@ export type ArtifactRecord = {
   createdAt: string;
 };
 
+export const ARTIFACT_FILE_STATUSES = [
+  "available",
+  "remote_only",
+  "download_failed",
+  "missing"
+] as const;
+export type ArtifactFileStatus = (typeof ARTIFACT_FILE_STATUSES)[number];
+
+export type ArtifactFileRecord = {
+  id: string;
+  artifactId: string;
+  jobId: string;
+  stageId: string | null;
+  kind: "image" | "video";
+  status: ArtifactFileStatus;
+  filePath: string | null;
+  externalUrl: string | null;
+  fileName: string;
+  mimeType: string | null;
+  format: string | null;
+  sizeBytes: number | null;
+  width: number | null;
+  height: number | null;
+  checksumSha256: string | null;
+  source: string | null;
+  error: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export const ARTIFACT_DELIVERY_STATUSES = [
+  "pending",
+  "delivering",
+  "succeeded",
+  "failed",
+  "cancelled"
+] as const;
+export type ArtifactDeliveryStatus = (typeof ARTIFACT_DELIVERY_STATUSES)[number];
+
+export type ArtifactDeliveryRecord = {
+  id: string;
+  jobId: string;
+  artifactFileId: string;
+  deliverableIndex: number;
+  required: boolean;
+  target: TaskDeliveryTarget;
+  targetPath: string | null;
+  requestedFileName: string;
+  status: ArtifactDeliveryStatus;
+  attemptCount: number;
+  claimToken: string | null;
+  leaseExpiresAt: string | null;
+  expectedSizeBytes: number | null;
+  expectedChecksumSha256: string | null;
+  deliveredPath: string | null;
+  deliveredSizeBytes: number | null;
+  deliveredChecksumSha256: string | null;
+  lastError: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+};
+
 export type GroupMessageType =
   | "user_task"
   | "stage_output_to_test"

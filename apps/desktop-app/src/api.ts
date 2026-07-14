@@ -1359,11 +1359,74 @@ export type JobArtifactSummary = {
   files: JobArtifactFile[];
 };
 
+export type CanonicalArtifactFile = {
+  id: string;
+  artifactId: string;
+  jobId: string;
+  stageId: string | null;
+  kind: "image" | "video";
+  status: "available" | "remote_only" | "download_failed" | "missing";
+  filePath: string | null;
+  externalUrl: string | null;
+  fileName: string;
+  mimeType: string | null;
+  format: string | null;
+  sizeBytes: number | null;
+  width: number | null;
+  height: number | null;
+  checksumSha256: string | null;
+  source: string | null;
+  error: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+  downloadable: boolean;
+  downloadUrl: string | null;
+};
+
+export type ArtifactDelivery = {
+  id: string;
+  jobId: string;
+  artifactFileId: string;
+  deliverableIndex: number;
+  required: boolean;
+  target: "conversation" | "desktop" | "workspace" | "custom";
+  targetPath: string | null;
+  requestedFileName: string;
+  status: "pending" | "delivering" | "succeeded" | "failed" | "cancelled";
+  attemptCount: number;
+  leaseExpiresAt: string | null;
+  expectedSizeBytes: number | null;
+  expectedChecksumSha256: string | null;
+  deliveredPath: string | null;
+  deliveredSizeBytes: number | null;
+  deliveredChecksumSha256: string | null;
+  lastError: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+  artifactFile: CanonicalArtifactFile | null;
+};
+
+export type JobDeliveriesResponse = {
+  jobId: string;
+  requiredCount: number;
+  succeededCount: number;
+  failedCount: number;
+  pendingCount: number;
+  deliveringCount: number;
+  readyToFinalize: boolean;
+  deliveries: ArtifactDelivery[];
+};
+
 export type JobArtifactsResponse = {
   jobId: string;
   artifactCount: number;
   fileCount: number;
   artifacts: JobArtifactSummary[];
+  artifactFiles: CanonicalArtifactFile[];
+  deliveries: ArtifactDelivery[];
 };
 
 export type TimelineItem = {
@@ -1770,7 +1833,78 @@ export async function getJobArtifacts(jobId: string) {
   return request<JobArtifactsResponse>(`/jobs/${jobId}/artifacts`);
 }
 
-export async function resolveArtifactDownloadRequest(file: JobArtifactFile) {
+export async function getJobDeliveries(jobId: string) {
+  return request<JobDeliveriesResponse>(`/jobs/${jobId}/deliveries`);
+}
+
+export async function claimArtifactDelivery(jobId: string, deliveryId: string) {
+  return request<{
+    ok: boolean;
+    claimToken: string;
+    delivery: ArtifactDelivery;
+  }>(`/jobs/${jobId}/deliveries/${deliveryId}/claim`, {
+    method: "POST",
+    body: JSON.stringify({ leaseSeconds: 300 })
+  });
+}
+
+export async function completeArtifactDelivery(input: {
+  jobId: string;
+  deliveryId: string;
+  claimToken: string;
+  deliveredPath: string;
+  deliveredSizeBytes: number;
+  deliveredChecksumSha256: string | null;
+}) {
+  return request<{
+    ok: boolean;
+    delivery: ArtifactDelivery;
+    finalization: {
+      status: "not_ready" | "not_claimed" | "started" | "failed";
+      workflowId: string | null;
+    };
+  }>(`/jobs/${input.jobId}/deliveries/${input.deliveryId}/complete`, {
+    method: "POST",
+    body: JSON.stringify({
+      claimToken: input.claimToken,
+      deliveredPath: input.deliveredPath,
+      deliveredSizeBytes: input.deliveredSizeBytes,
+      deliveredChecksumSha256: input.deliveredChecksumSha256
+    })
+  });
+}
+
+export async function failArtifactDelivery(input: {
+  jobId: string;
+  deliveryId: string;
+  claimToken: string;
+  error: string;
+}) {
+  return request<{ ok: boolean; delivery: ArtifactDelivery }>(
+    `/jobs/${input.jobId}/deliveries/${input.deliveryId}/fail`,
+    {
+      method: "POST",
+      body: JSON.stringify({ claimToken: input.claimToken, error: input.error })
+    }
+  );
+}
+
+export async function finalizeArtifactDeliveries(jobId: string) {
+  return request<{
+    ok: boolean;
+    finalization: {
+      status: "not_ready" | "not_claimed" | "started" | "failed";
+      workflowId: string | null;
+    };
+  }>(`/jobs/${jobId}/deliveries/finalize`, {
+    method: "POST",
+    body: JSON.stringify({})
+  });
+}
+
+export async function resolveArtifactDownloadRequest(
+  file: Pick<JobArtifactFile, "downloadUrl" | "externalUrl">
+) {
   if (file.downloadUrl) {
     const token = await getApiAuthToken();
     return {

@@ -1,3 +1,4 @@
+import { createReadStream } from "node:fs";
 import { appendFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
@@ -50,6 +51,11 @@ import {
 } from "../../../packages/db/src/model-call-spend";
 import { getAgentEventsForJob } from "../../../packages/db/src/session";
 import { createExperienceCandidate } from "../../../packages/db/src/experience";
+import {
+  ensureArtifactDelivery,
+  getArtifactDeliverySummary,
+  upsertArtifactFile
+} from "../../../packages/db/src/artifact-deliveries";
 import type {
   AgentEventRecord,
   ArtifactRecord,
@@ -2725,6 +2731,8 @@ function extractGeneratedMediaArtifacts(parsed: Record<string, unknown> | null) 
     mimeType: string | null;
     sizeBytes: number | null;
     downloadError: string | null;
+    source: string | null;
+    note: string | null;
   }> = [];
   const seen = new Set<string>();
 
@@ -2746,7 +2754,9 @@ function extractGeneratedMediaArtifacts(parsed: Record<string, unknown> | null) 
       url,
       mimeType: asString(item.mimeType),
       sizeBytes: asNumber(item.sizeBytes),
-      downloadError: asString(item.downloadError)
+      downloadError: asString(item.downloadError),
+      source: asString(item.source),
+      note: asString(item.note)
     });
   }
 
@@ -2758,6 +2768,14 @@ function isInsideDirectory(root: string, candidate: string) {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
+async function sha256File(filePath: string) {
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(filePath)) {
+    hash.update(chunk as Buffer);
+  }
+  return hash.digest("hex");
+}
+
 async function mediaDeliveryCandidate(
   workdir: string,
   artifact: ReturnType<typeof extractGeneratedMediaArtifacts>[number]
@@ -2767,16 +2785,21 @@ async function mediaDeliveryCandidate(
   let width: number | null = null;
   let height: number | null = null;
   let detectedFormat: string | null | undefined = artifact.kind === "image" ? null : undefined;
+  let checksumSha256: string | null = null;
   if (artifact.filePath && isInsideDirectory(workdir, artifact.filePath)) {
     try {
       const fileStat = await stat(artifact.filePath);
       localAvailable = fileStat.isFile() && fileStat.size > 0;
       actualSize = fileStat.size;
       if (localAvailable && artifact.kind === "image") {
-        const inspection = inspectImageFile(await readFile(artifact.filePath));
+        const bytes = await readFile(artifact.filePath);
+        const inspection = inspectImageFile(bytes);
         detectedFormat = inspection?.format ?? null;
         width = inspection?.width ?? null;
         height = inspection?.height ?? null;
+        checksumSha256 = createHash("sha256").update(bytes).digest("hex");
+      } else if (localAvailable) {
+        checksumSha256 = await sha256File(artifact.filePath);
       }
     } catch {
       localAvailable = false;
@@ -2790,8 +2813,64 @@ async function mediaDeliveryCandidate(
     sizeBytes: actualSize,
     width,
     height,
-    localAvailable
+    localAvailable,
+    checksumSha256
   };
+}
+
+function normalizedMediaFormat(value: string | null | undefined) {
+  const normalized = value?.trim().toLowerCase().replace(/^\./, "") ?? "";
+  return normalized === "jpg" ? "jpeg" : normalized || null;
+}
+
+function mediaArtifactFormat(
+  artifact: ReturnType<typeof extractGeneratedMediaArtifacts>[number],
+  candidate: GeneratedMediaDeliveryCandidate
+) {
+  if (candidate.detectedFormat !== undefined) {
+    return normalizedMediaFormat(candidate.detectedFormat);
+  }
+  const mime = artifact.mimeType?.split(";")[0]?.trim().toLowerCase() ?? "";
+  if (mime.startsWith("video/") || mime.startsWith("image/")) {
+    return normalizedMediaFormat(mime.split("/")[1]);
+  }
+  return normalizedMediaFormat(artifact.filePath ? path.extname(artifact.filePath) : null);
+}
+
+function mediaArtifactFileName(
+  artifact: ReturnType<typeof extractGeneratedMediaArtifacts>[number],
+  fallback: string
+) {
+  if (artifact.filePath) return path.basename(artifact.filePath) || fallback;
+  if (artifact.url) {
+    try {
+      return path.basename(new URL(artifact.url).pathname) || fallback;
+    } catch {
+      return fallback;
+    }
+  }
+  return fallback;
+}
+
+function requestedDeliveryFileName(input: {
+  job: JobRecord;
+  deliverableIndex: number;
+  format: string | null;
+  kind: "image" | "video";
+}) {
+  const baseName = input.job.displayTitle?.trim() || input.job.orchestrationPlan?.title?.trim() || "Honeycomb 产物";
+  const requiredMedia = (input.job.orchestrationPlan?.deliverables ?? []).filter(
+    (deliverable) => deliverable.required && (deliverable.kind === "image" || deliverable.kind === "video")
+  );
+  const suffix = requiredMedia.length > 1 ? `-${input.deliverableIndex + 1}` : "";
+  const extension = input.format === "jpeg"
+    ? "jpg"
+    : input.format ?? (input.kind === "video" ? "mp4" : "png");
+  return `${baseName}${suffix}.${extension}`;
+}
+
+export async function isArtifactDeliveryReadyForFinalization(jobId: string) {
+  return (await getArtifactDeliverySummary(jobId)).readyToFinalize;
 }
 
 async function getArtifactOrNull(artifactId: string | null) {
@@ -3159,17 +3238,66 @@ export async function finalizeJob(jobId: string) {
         stage,
         summary: (asString(parsed?.summary) ?? parseArtifactSummary(outputArtifact)) || "No summary recorded.",
         artifactPath: asString(parsed?.artifact_path) ?? outputArtifact?.uri ?? null,
-        generatedArtifacts: extractGeneratedMediaArtifacts(parsed)
+        generatedArtifacts: extractGeneratedMediaArtifacts(parsed).map((generated, generatedIndex) => ({
+          ...generated,
+          artifactId: outputArtifact?.id ?? null,
+          stageId: stage.id,
+          generatedIndex
+        }))
       };
     })
   );
   const workdir = job.workdir ?? path.resolve(process.env.JOB_DATA_DIR ?? "data/jobs", jobId);
   const generatedMedia = stageSummaries.flatMap((stage) => stage.generatedArtifacts);
+  const inspectedMedia = await Promise.all(
+    generatedMedia.map(async (artifact) => ({
+      artifact,
+      candidate: await mediaDeliveryCandidate(workdir, artifact)
+    }))
+  );
+  const artifactFiles = await Promise.all(
+    inspectedMedia.map(async ({ artifact, candidate }) => {
+      if (!artifact.artifactId) return null;
+      const format = mediaArtifactFormat(artifact, candidate);
+      const fileId = `${artifact.artifactId}-FILE-${(artifact.generatedIndex + 1)
+        .toString()
+        .padStart(2, "0")}`;
+      return upsertArtifactFile({
+        id: fileId,
+        artifactId: artifact.artifactId,
+        jobId,
+        stageId: artifact.stageId,
+        kind: artifact.kind,
+        status: candidate.localAvailable
+          ? "available"
+          : artifact.downloadError
+            ? "download_failed"
+            : artifact.filePath
+              ? "missing"
+              : "remote_only",
+        filePath: artifact.filePath,
+        externalUrl: artifact.url,
+        fileName: mediaArtifactFileName(artifact, `${artifact.kind}-${artifact.generatedIndex + 1}`),
+        mimeType: candidate.detectedFormat
+          ? `image/${candidate.detectedFormat}`
+          : artifact.mimeType,
+        format,
+        sizeBytes: candidate.sizeBytes,
+        width: candidate.width,
+        height: candidate.height,
+        checksumSha256: candidate.checksumSha256,
+        source: artifact.source,
+        error: artifact.downloadError,
+        metadata: {
+          note: artifact.note,
+          generatedIndex: artifact.generatedIndex
+        }
+      });
+    })
+  );
   const mediaAssessment = assessRequiredMediaDeliverables({
     deliverables: job.orchestrationPlan?.deliverables ?? [],
-    candidates: await Promise.all(
-      generatedMedia.map((artifact) => mediaDeliveryCandidate(workdir, artifact))
-    )
+    candidates: inspectedMedia.map((entry) => entry.candidate)
   });
   if (!mediaAssessment.ok) {
     await setJobStatus(jobId, "waiting_for_human", {
@@ -3194,6 +3322,76 @@ export async function finalizeJob(jobId: string) {
       finalArtifactId: null,
       finalPath: null
     };
+  }
+  for (const match of mediaAssessment.matches) {
+    const deliverable = job.orchestrationPlan?.deliverables[match.deliverableIndex];
+    const artifactFile = artifactFiles[match.candidateIndex];
+    if (!deliverable || !artifactFile || (deliverable.kind !== "image" && deliverable.kind !== "video")) {
+      throw new Error(`Artifact delivery match is incomplete for deliverable ${match.deliverableIndex}`);
+    }
+    const requestedFileName = requestedDeliveryFileName({
+      job,
+      deliverableIndex: match.deliverableIndex,
+      format: normalizedMediaFormat(deliverable.format) ?? artifactFile.format,
+      kind: deliverable.kind
+    });
+    await ensureArtifactDelivery({
+      id: `${jobId}-DELIVERY-${(match.deliverableIndex + 1).toString().padStart(2, "0")}`,
+      jobId,
+      artifactFileId: artifactFile.id,
+      deliverableIndex: match.deliverableIndex,
+      required: deliverable.required,
+      target: deliverable.target,
+      targetPath: deliverable.targetPath,
+      requestedFileName,
+      initialStatus: deliverable.target === "conversation" ? "succeeded" : "pending",
+      expectedSizeBytes: artifactFile.sizeBytes,
+      expectedChecksumSha256: artifactFile.checksumSha256,
+      deliveredPath: deliverable.target === "conversation"
+        ? `/jobs/${jobId}/artifact-files/${artifactFile.id}/content`
+        : null,
+      metadata: {
+        kind: deliverable.kind,
+        description: deliverable.description,
+        format: deliverable.format,
+        width: deliverable.width,
+        height: deliverable.height
+      }
+    });
+  }
+  if (mediaAssessment.matches.length > 0) {
+    const deliverySummary = await getArtifactDeliverySummary(jobId);
+    if (!deliverySummary.readyToFinalize) {
+      const reason = deliverySummary.failedCount > 0
+        ? "artifact_delivery_failed"
+        : "artifact_delivery_pending";
+      await setJobStatus(jobId, "waiting_for_human", {
+        reason,
+        requiredCount: deliverySummary.requiredCount,
+        succeededCount: deliverySummary.succeededCount,
+        failedCount: deliverySummary.failedCount,
+        pendingCount: deliverySummary.pendingCount,
+        deliveringCount: deliverySummary.deliveringCount
+      });
+      await appendJobEvent(jobId, "final.delivery_pending", {
+        reason,
+        deliveries: deliverySummary.deliveries.map((delivery) => ({
+          deliveryId: delivery.id,
+          artifactFileId: delivery.artifactFileId,
+          target: delivery.target,
+          targetPath: delivery.targetPath,
+          status: delivery.status,
+          attemptCount: delivery.attemptCount,
+          lastError: delivery.lastError
+        }))
+      });
+      return {
+        status: "waiting_for_human" as const,
+        finalOutput: "",
+        finalArtifactId: null,
+        finalPath: null
+      };
+    }
   }
   const finalPath = path.join(workdir, "final", "final-answer.md");
   const discussionSynthesis =
